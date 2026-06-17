@@ -7,8 +7,8 @@
 // AI personalities, and unit roster within a side. See `src/sides.js`.
 
 import { Phase } from './game.js';
-import { EntityType, SurvivorAbility, createHero, createWitch, createSurvivor, createZombie, createMinion, createWoodGolem, createIronGolem, createRogue, createCaptain, createNecromancer, createBrute, isLeaderType } from './entities.js';
-import { ResourceType, BuildingType, rollLoot, hasBuilding, isRiver } from './tiles.js';
+import { EntityType, SurvivorAbility, createHero, createWitch, createSurvivor, createZombie, createMinion, createWoodGolem, createIronGolem, createRogue, createCaptain, createNecromancer, createBrute, isLeaderType, getItemCountOf, totalItemCount } from './entities.js';
+import { ResourceType, BuildingType, rollLoot, hasBuilding, isRiver, isBuildingTile, isFortWall, tileCapacityRemaining } from './tiles.js';
 import { hexKey, getNeighbors } from './hex.js';
 import { AI_HERO_NAMES, AI_WITCH_NAMES } from './ai-names.js';
 import { Side, getOpposingSide as _opposingSide } from './sides.js';
@@ -195,7 +195,7 @@ export class Faction {
 
   /** Does this entity currently have a horse equipped? */
   hasHorse(entity) {
-    return this.canEquipHorse() && (entity.items?.['horse'] || 0) > 0;
+    return this.canEquipHorse() && (entity.items?.['horse']?.count ?? 0) > 0;
   }
 
   /** Can this entity perform the explore action? */
@@ -346,6 +346,12 @@ export class Faction {
       if (!e.abilities.includes(id)) e.abilities.push(id);
     }
     if (this.innateLeaderWeapon) e.equipWeapon(this.innateLeaderWeapon);
+    // A horn-trained leader (sound_horn) is issued a Horn — the reusable key
+    // item the Sound Horn action gates on (see getValidActions /
+    // executeSoundHorn). Factions that strip sound_horn (e.g. Rogue) get none.
+    // In campaigns this innate horn is replaced by the carried backpack at
+    // mission start (applyCarriedHeroLoadout), so the hero re-finds it in Ch1 M4.
+    if (e.hasAbility('sound_horn') && !e.hasItem('horn')) e.addItem('horn');
     return e;
   }
 
@@ -451,11 +457,13 @@ export class HeroFaction extends Faction {
     for (const obj of state.witchObjectives) {
       const freeHex = () => {
         for (const clusterHex of obj.hexes) {
-          const n = getNeighbors(clusterHex.col, clusterHex.row).find(nb => {
-            const t = state.tiles.get(hexKey(nb.col, nb.row));
-            return t && !isRiver(t) &&
-              !state.entities.some(e => e.alive && e.col === nb.col && e.row === nb.row);
-          });
+          // A node-spawned survivor must land on passable terrain (never a
+          // building wall, river, or fort) that is also completely empty so
+          // the survivor doesn't crowd onto an existing unit.
+          const n = getNeighbors(clusterHex.col, clusterHex.row).find(nb =>
+            isPlaceableTile(state, nb.col, nb.row, 'hero') &&
+            !state.entities.some(e => e.alive && e.col === nb.col && e.row === nb.row)
+          );
           if (n) return n;
         }
         return null;
@@ -472,9 +480,9 @@ export class HeroFaction extends Faction {
               const spawnLevel = 1;
               const s = createSurvivor(hex.col, hex.row, hero.ownerId, state, null, spawnLevel);
               s.owner = 'hero';
-              if (Math.random() < 0.5) s.items['horse'] = 1;
+              if (Math.random() < 0.5) s.addItem('horse');
               state.entities.push(s);
-              const horseNote = s.items['horse'] ? ' (arrives on horseback!)' : '';
+              const horseNote = s.hasItem('horse') ? ' (arrives on horseback!)' : '';
               state.addLog(`✨ The node calls to the living — a survivor emerges!${horseNote}`, 'hero', state.playerColorFor(hero));
               state.nodeSpawnedSurvivors.push({
                 id: s.id,
@@ -486,7 +494,14 @@ export class HeroFaction extends Faction {
                 level: s.level || 1,
                 abilityLabel: s.abilityLabel,
                 color: s.color,
+                // Faction tag — the round-summary wrap-up filters node spawns by
+                // viewer faction so the opposing player doesn't see this leak.
+                faction: 'hero',
               });
+            } else {
+              // No passable, unoccupied hex around the node — fail loudly
+              // rather than place a survivor on impassable terrain.
+              state.addLog(`✨ The node calls to the living… but there is no safe ground for one to emerge.`, 'hero', state.playerColorFor(hero));
             }
           } else {
             state.addLog(`✨ The node pulses faintly… no one answers the call tonight.`, 'hero');
@@ -548,9 +563,10 @@ export class HeroFaction extends Faction {
   getUnitTypes() { return [EntityType.SURVIVOR]; }
   _buildLeader(col, row, ownerId, state = null) { return createHero(col, row, ownerId, state); }
 
-  // Phase 5: day-side leaders carry sound_horn innately. The action-type
-  // gate at src/actions.js no longer checks isLeaderType + owner — it
-  // reads actor.hasAbility('sound_horn').
+  // Day-side leaders are horn-trained (sound_horn). The ability marks who is
+  // trained to wield a horn — and so who Faction.createLeader issues the Horn
+  // key item to — but the Sound Horn action itself gates on holding the item
+  // (getValidActions / executeSoundHorn read actor.hasItem('horn')).
   get innateLeaderAbilities() { return ['sound_horn']; }
 
   // The Paladin starts with a sword (melee, +2 ATK over base 2).
@@ -623,10 +639,11 @@ export class WitchFaction extends Faction {
     const enemyAt = (col, row) => state.entities.some(
       e => e.alive && e.owner !== this.id && e.col === col && e.row === row
     );
+    // The graveyard ENTRANCE itself is the intended exit — a zombie climbs out
+    // of it — so it is allowed even though it is a building tile.
     if (!enemyAt(tile.col, tile.row)) return { col: tile.col, row: tile.row };
     for (const n of getNeighbors(tile.col, tile.row)) {
-      const nt = state.tiles.get(hexKey(n.col, n.row));
-      if (!nt || isRiver(nt) || nt.buildingFootprintOf || hasBuilding(nt)) continue;
+      if (!isPlaceableTile(state, n.col, n.row, this.id)) continue;
       if (!enemyAt(n.col, n.row)) return { col: n.col, row: n.row };
     }
     return null;
@@ -650,9 +667,9 @@ export class WitchFaction extends Faction {
   isBlockedByWalls() { return true; }
 
   getSummonOptions(inventory) {
-    const metal = inventory[ResourceType.METAL] || 0;
-    const wood  = inventory[ResourceType.WOOD]  || 0;
-    const total = Object.values(inventory).reduce((s, v) => s + (v || 0), 0);
+    const metal = getItemCountOf(inventory, ResourceType.METAL);
+    const wood  = getItemCountOf(inventory, ResourceType.WOOD);
+    const total = totalItemCount(inventory);
     if (total < 2) return [];
     return [
       { summonType: EntityType.IRON_GOLEM, affordable: metal >= 2 },
@@ -875,7 +892,7 @@ export class BruteFaction extends WitchFaction {
   getMinionCost() { return 1; }
 
   getSummonOptions(inventory) {
-    const total = Object.values(inventory).reduce((s, v) => s + (v || 0), 0);
+    const total = totalItemCount(inventory);
     if (total < this.getMinionCost()) return [];
     return [{ summonType: EntityType.MINION, affordable: true }];
   }
@@ -952,6 +969,35 @@ export function getFaction(id) {
  */
 export function findFaction(id) {
   return FACTIONS[id] ?? null;
+}
+
+// ── Unit placement validity ─────────────────────────────────────────────────
+// Single source of truth for "can a freshly-spawned unit stand on this hex?".
+// Every spawn seam that picks a NEW hex for a unit — node-survivor spawning,
+// graveyard zombies, battle-mode respawn fallback — routes through this so a
+// unit can never materialise on impassable terrain or a hex with no free slot.
+//
+// Rejects: off-map, river (a bridge is passable — `isRiver` is false for it),
+// any building tile (its impassable footprint AND its passable entrance — a
+// body on a building threshold reads as "inside", which the graveyard spawner
+// already avoided), a fort wall the owner's faction can't cross, and a tile
+// with no remaining capacity.
+//
+// Stricter than the movement-destination rules (which let a unit step onto a
+// building entrance) — fresh spawns keep clear of buildings entirely. `owner`
+// is the spawning unit's faction id; it only gates the fort-wall check
+// (witch-side factions are blocked by level-2+ walls, hero-side are not).
+export function isPlaceableTile(state, col, row, owner = null) {
+  const t = state.tiles.get(hexKey(col, row));
+  if (!t) return false;                                   // off-map
+  if (isRiver(t)) return false;                           // impassable water
+  if (isBuildingTile(t)) return false;                    // entrance or footprint
+  if (isFortWall(t) && findFaction(owner)?.isBlockedByWalls()) return false;
+  const units = state.entities.filter(
+    e => e.alive && e.col === col && e.row === row
+  ).length;
+  if (tileCapacityRemaining(t, units) <= 0) return false; // no free slot
+  return true;
 }
 
 /** Return all registered factions. */

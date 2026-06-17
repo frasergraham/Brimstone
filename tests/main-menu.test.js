@@ -58,15 +58,16 @@ describe('main menu — deleted cards and buttons', () => {
   });
 });
 
-describe('main menu — flattened layout on the welcome card', () => {
+describe('main menu — two-column layout on the welcome card', () => {
   const mode = cardBlock(html, 'setup-step-mode');
 
-  test('Active Games section is present at the top of the card', () => {
+  test('Active Games section is present in the active-games column', () => {
     assert.ok(mode.includes('id="mm-games-section"'), 'Active Games section present');
-    // Active Games appears before the mode buttons.
+    // The active-games column (left) is rendered before the menus column, so
+    // Active Games appears before the mode buttons in DOM order.
     assert.ok(
       mode.indexOf('id="mm-games-section"') < mode.indexOf('id="btn-ng-campaign"'),
-      'Active Games sits above the mode buttons',
+      'Active Games sits in the column ahead of the mode buttons',
     );
   });
 
@@ -79,12 +80,63 @@ describe('main menu — flattened layout on the welcome card', () => {
     assert.deepEqual(order, [...order].sort((a, b) => a - b), 'mode buttons keep submenu order');
   });
 
-  test('Replays section is present below the mode buttons', () => {
+  test('Replays section lives in the active-games column, below Active Games', () => {
     assert.ok(mode.includes('id="mm-replays-list"'), 'replays list present on main card');
+    // Replays is grouped with Active Games in the left column — it sits below
+    // the active-games list and ahead of the (right-column) mode buttons.
     assert.ok(
-      mode.indexOf('id="btn-ng-online"') < mode.indexOf('id="mm-replays-list"'),
-      'Replays sits below the mode buttons',
+      mode.indexOf('id="mm-games-section"') < mode.indexOf('id="mm-replays-section"'),
+      'Replays sits below Active Games in the same column',
     );
+    assert.ok(
+      mode.indexOf('id="mm-replays-section"') < mode.indexOf('id="btn-ng-campaign"'),
+      'the whole active-games column precedes the menus column',
+    );
+  });
+
+  test('two columns wrap active games (left) and menus (right)', () => {
+    assert.ok(mode.includes('class="mm-columns"'), 'columns container present');
+    assert.ok(mode.includes('mm-col-games'), 'active-games column present');
+    assert.ok(mode.includes('mm-col-menus'), 'menus column present');
+    // mm-games-section + replays live inside the games column; mode buttons
+    // live inside the menus column → games column markup precedes menus column.
+    assert.ok(
+      mode.indexOf('mm-col-games') < mode.indexOf('mm-col-menus'),
+      'games column is rendered before the menus column',
+    );
+  });
+});
+
+describe('main menu — mobile column slide toggle', () => {
+  const mode = cardBlock(html, 'setup-step-mode');
+
+  test('toggle markup with left (games) / right (menus) arrows is present', () => {
+    assert.ok(mode.includes('class="mm-col-toggle"'), 'toggle bar present');
+    assert.match(mode, /class="mm-col-arrow"[^>]*data-col="games"/, 'left arrow → games');
+    assert.match(mode, /data-col="menus"[^>]*>Menus/, 'right arrow → menus');
+    assert.ok(mode.includes('mm-col-dot'), 'progress dots present');
+  });
+
+  test('title swaps between Caleb\'s Hollow (menus) and Active Games (games)', () => {
+    assert.ok(mode.includes('mm-title-menus'), 'menus title span present');
+    assert.ok(mode.includes('mm-title-games'), 'games title span present');
+    assert.ok(mode.includes("CALEB'S HOLLOW"), 'menus title text preserved');
+    assert.match(mode, /mm-title-games">ACTIVE GAMES/, 'games title text present');
+  });
+
+  test('card defaults to the menus column', () => {
+    assert.match(html, /id="setup-step-mode"[^>]*class="[^"]*mm-show-menus/, 'defaults to menus view');
+  });
+
+  test('toggle handler is wired and drives the show-games / show-menus classes', () => {
+    assert.match(mainJs, /function _setMmColumn\(col\)/, 'handler defined');
+    assert.match(mainJs, /classList\.toggle\('mm-show-games'/, 'toggles games class');
+    assert.match(mainJs, /classList\.toggle\('mm-show-menus'/, 'toggles menus class');
+    assert.match(mainJs, /\.mm-col-arrow, \.mm-col-dot[\s\S]{0,120}?_setMmColumn\(/, 'arrows/dots wired to handler');
+  });
+
+  test('entering the mode screen resets to the menus column', () => {
+    assert.match(mainJs, /step === 'mode'[\s\S]{0,200}?_setMmColumn\?\.\('menus'\)/, 'showStep resets to menus');
   });
 });
 

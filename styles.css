@@ -138,6 +138,32 @@ input, textarea, select, [contenteditable], [contenteditable] * {
 .setup-btn.primary     { border-color: var(--day); color: var(--day); }
 .setup-btn.primary:hover { background: #1e1a10; }
 
+/* ── Unified menu back button ────────────────────────────────────────────────
+   Every menu screen places its "Back" control in the SAME top-left corner with
+   the same styling. It is absolutely positioned against its .setup-card so it
+   lands in an identical spot regardless of where it sits in the card's markup
+   (this also lets cards with two mutually-exclusive sub-views — e.g. the
+   campaign mission-list vs. briefing — share the corner: whichever parent is
+   display:none simply hides its button). Offsets respect the iOS safe-area
+   insets so the button never tucks under the notch. Keeps the .setup-btn class
+   for its base theme (background / border / colour / hover). */
+.menu-back-btn {
+  position: absolute;
+  top: max(0.85rem, env(safe-area-inset-top, 0px));
+  left: max(0.95rem, env(safe-area-inset-left, 0px));
+  z-index: 5;
+  margin: 0;
+  padding: 0.4rem 0.95rem;
+  font-size: 0.85rem;
+  width: auto;
+}
+/* Reserve top padding inside any card that carries a back button so the
+   absolutely-positioned button never overlaps the centred title — even when a
+   long title wraps on a narrow phone. */
+.setup-card:has(.menu-back-btn) {
+  padding-top: 3.4rem;
+}
+
 .ng-section-label {
   text-align: center;
   font-size: 0.78rem;
@@ -734,6 +760,12 @@ input, textarea, select, [contenteditable], [contenteditable] * {
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  /* Sit above the replay-timeline overlay (z-index: 24) so a long, scrolling
+     turn card's earlier rows pass under the header instead of clipping
+     abruptly on the timeline-up (mobile/iOS) layout where the timeline rides
+     just under the header. */
+  position: relative;
+  z-index: 30;
 }
 
 #turn-info {
@@ -3884,6 +3916,96 @@ body.renderer-3d.debug-counters #cam-counter { display: block; }
   padding: 0.4rem 0;
 }
 
+/* ── Main menu two-column layout (active games | menus) ──────────────────────
+   Desktop: two columns side by side (active games left, menus right).
+   Mobile: one column at a time with a left/right slide toggle that mirrors the
+   Campaign Progress pane toggle (.campaign-progress-toggle / show-party). */
+.mm-mode-card {
+  width: min(820px, 96vw);
+}
+.mm-columns {
+  display: flex;
+  gap: 1.75rem;
+  align-items: flex-start;
+  justify-content: center;
+  text-align: center;
+}
+.mm-col {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+/* The boxes stretch to fill their column on desktop (drop the 360px cap). */
+.mm-col-games #mm-games-section,
+.mm-col-games .mm-games-box {
+  max-width: 100%;
+}
+
+/* Mobile column toggle — hidden on desktop (both columns show side by side). */
+.mm-col-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.mm-col-arrow {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--clr-dim, #aaa);
+  border-radius: 5px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+  font-family: var(--font-serif);
+  cursor: pointer;
+}
+.mm-col-arrow.active {
+  color: var(--clr-gold, #d4a72c);
+  border-color: rgba(212, 167, 44, 0.4);
+  background: rgba(212, 167, 44, 0.1);
+}
+.mm-col-dots { display: flex; gap: 0.35rem; }
+.mm-col-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: rgba(255, 255, 255, 0.18);
+}
+.mm-col-dot.active { background: var(--clr-gold, #d4a72c); }
+
+/* Title swap spans — desktop always shows the "Caleb's Hollow" title. */
+.mm-title-text  { display: inline; }
+.mm-title-games { display: none; }
+
+@media (max-width: 760px) {
+  .mm-mode-card { width: min(440px, 92vw); }
+  .mm-col-toggle { display: flex; }
+  .mm-columns { flex-direction: column; gap: 0; }
+  .mm-col { flex: 1 1 100%; width: 100%; }
+
+  /* Show only the active column. */
+  .mm-mode-card.mm-show-menus .mm-col-games { display: none; }
+  .mm-mode-card.mm-show-games .mm-col-menus { display: none; }
+
+  /* Slide-in entrance for the incoming column. */
+  .mm-mode-card.mm-show-games .mm-col-games { animation: mmColSlideL 0.25s ease; }
+  .mm-mode-card.mm-show-menus .mm-col-menus { animation: mmColSlideR 0.25s ease; }
+
+  /* Title swaps with the active column. */
+  .mm-mode-card.mm-show-menus .mm-title-games { display: none; }
+  .mm-mode-card.mm-show-menus .mm-title-menus { display: inline; }
+  .mm-mode-card.mm-show-games .mm-title-menus { display: none; }
+  .mm-mode-card.mm-show-games .mm-title-games { display: inline; }
+}
+@keyframes mmColSlideL {
+  from { opacity: 0; transform: translateX(-18px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes mmColSlideR {
+  from { opacity: 0; transform: translateX(18px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
 /* Multiplayer badge on main menu button */
 .mp-badge {
   position: absolute; top: -6px; right: -6px;
@@ -4814,6 +4936,22 @@ img.plan-step-avatar {
   to   { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
+/* Confirmation toast on the Campaign Progress card (e.g. "hints reset"). */
+.campaign-progress-toast {
+  margin: 0.6rem auto 0;
+  max-width: 22rem;
+  background: rgba(60, 30, 10, 0.94);
+  color: #f0d090;
+  border: 1px solid rgba(200, 140, 40, 0.5);
+  padding: 0.4rem 1rem;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  text-align: center;
+  opacity: 1;
+  transition: opacity 0.6s;
+}
+.campaign-progress-toast.campaign-progress-toast-out { opacity: 0; }
+
 /* ── Plan food row ────────────────────────────────────────────────────── */
 .plan-food-row {
   display: flex;
@@ -5273,7 +5411,43 @@ img.plan-step-avatar {
   border-radius: 10px;
   opacity: 0;                                     /* hidden outside the 3-card window */
   transition: opacity 0.3s ease, border-color 0.3s ease;
+  /* Long turn cards (busy resolution steps in big games) are scrollable: the
+     player can wheel/swipe; ui.js auto-scrolls the active action into the
+     upper third (`scroll-padding-top`) as resolution advances, unless the
+     player has just scrolled manually. `scroll-behavior: smooth` softens both
+     auto-scroll and user-initiated keyboard scrolls. */
+  max-height: calc(100vh - 110px);
+  overflow-y: auto;
+  scroll-behavior: smooth;
+  scroll-padding-top: 0.5rem;
+  /* Mask gradient is CONDITIONAL on overflow — see .has-fade-top / .has-fade-bottom
+     rules below. Cards that fit on screen get no mask (no dimmed readable text);
+     a fade appears only on the side where content is actually clipped. */
+  pointer-events: auto;                          /* re-enable inside #replay-timeline (parent disables it) */
 }
+/* Conditional fade: ui.js sets `.has-fade-top` / `.has-fade-bottom` on each card
+   when content is clipped above / below the viewport. The four combinations
+   produce: no mask (fits on screen), top-only, bottom-only, or both. */
+.replay-step-col.has-fade-top.has-fade-bottom {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+          mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+}
+.replay-step-col.has-fade-top:not(.has-fade-bottom) {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 100%);
+          mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 100%);
+}
+.replay-step-col:not(.has-fade-top).has-fade-bottom {
+  -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 18px), transparent 100%);
+          mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 18px), transparent 100%);
+}
+/* Active row sits in the upper portion of the card after auto-scroll: the
+   `scroll-margin-top` is the gap reserved above it inside the scroll viewport
+   when `scrollIntoView({block: 'start'})` lands it — keeps the active row off
+   the very top edge while staying well above the screen middle. */
+.replay-step-entry { scroll-margin-top: 1.2rem; }
+.replay-step-col::-webkit-scrollbar { width: 6px; }
+.replay-step-col::-webkit-scrollbar-thumb { background: rgba(170, 130, 255, 0.35); border-radius: 3px; }
+.replay-step-col::-webkit-scrollbar-track { background: transparent; }
 .replay-step-col.is-current {
   opacity: 1;                                     /* opaque active card (left of screen) */
   border-color: rgba(200, 160, 255, 0.7);
@@ -5585,6 +5759,23 @@ img.plan-step-avatar {
    SKIP/REPLAY footer button (wired by ui.setConversationCardState). */
 .replay-step-col.replay-conv-col { border-color: rgba(201, 162, 39, 0.55); }
 .replay-step-col.replay-conv-col.is-current { border-color: rgba(232, 197, 88, 0.85); }
+
+/* Compacted turn card: N consecutive quiet move/guard turns folded into one
+   timeline card. Header reads "Turns N–M" with an ×N badge — visually marked
+   as a slightly muted edge so the player parses it as a synopsis card. */
+.replay-step-col.replay-compact-col { border-color: rgba(160, 160, 180, 0.35); }
+.replay-step-col.replay-compact-col.is-current { border-color: rgba(200, 200, 220, 0.7); }
+.replay-compact-badge {
+  display: inline-block;
+  margin-left: 0.45rem;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid rgba(160, 160, 180, 0.45);
+  border-radius: 0.6rem;
+  font-size: 0.7rem;
+  line-height: 1;
+  color: var(--text-dim, #cfc6b4);
+  vertical-align: middle;
+}
 
 /* Mission-logic STORY BEAT card (✦ title + text), inserted at the turn it fires. */
 .replay-step-col.replay-beat-col { border-color: rgba(201, 162, 39, 0.45); }

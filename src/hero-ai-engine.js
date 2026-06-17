@@ -13,7 +13,7 @@ import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, nearestBuilding
 import { EnginePlanSimState, BaseAIEngine, allocateBudget, assemblePlan, clamp01, updateAllyClaimedNodes, personalityName } from './ai-engine.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
-import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf, SurvivorAbility } from './entities.js';
+import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf, rangeOf, getEquippedWeaponIdOf, SurvivorAbility, getItemCountOf, removeItemInItems } from './entities.js';
 import { ResourceType, hasBuilding, isRiver, isBuildingFootprint } from './tiles.js';
 import { ITEMS } from './items.js';
 import { concreteFactionOf } from './factions.js';
@@ -199,24 +199,26 @@ export function assessHeroBoard(sim) {
   const witchScore = sim.nodeScore?.witch ?? 0;
 
   const heroItems = hero?.items ? { ...hero.items } : {};
-  const herbCount = sim.inventory?.hero?.[ResourceType.HERBS] || 0;
-  const foodCount = sim.inventory?.hero?.[ResourceType.FOOD] || 0;
+  const herbCount = getItemCountOf(sim.inventory?.hero, ResourceType.HERBS);
+  const foodCount = getItemCountOf(sim.inventory?.hero, ResourceType.FOOD);
 
   // Only list weapons the hero's concrete faction allows — RogueFaction
   // refuses melee, so a stray sword in a rogue's pack must NOT queue an
   // EQUIP_WEAPON that executeUseItem will reject (burns a planning slot
   // and disagrees with the ghost preview).
   const heroFaction = hero ? concreteFactionOf(hero) : null;
+  const heroEquippedId = hero?.items ? getEquippedWeaponIdOf(hero.items) : null;
   const heroWeapons = hero?.items
     ? Object.keys(hero.items).filter(k =>
         ITEMS[k]?.kind === 'weapon' &&
-        hero.items[k] > 0 &&
+        (hero.items[k]?.count ?? 0) > 0 &&
+        k !== heroEquippedId &&
         (!heroFaction || heroFaction.canEquipWeaponItem(k)))
     : [];
 
   const shared = sim.inventory?.hero || {};
-  const woodCount = shared[ResourceType.WOOD] || 0;
-  const metalCount = shared[ResourceType.METAL] || 0;
+  const woodCount = getItemCountOf(shared, ResourceType.WOOD);
+  const metalCount = getItemCountOf(shared, ResourceType.METAL);
   const sharedInventory = { ...shared };
 
   const unexploredBuildings = [];
@@ -376,7 +378,7 @@ export function estimateHeroCombat(attacker, defender, board) {
   // no attacker gang-up, no defender ally-defence. Mirrors the witch's
   // estimateCombat (src/ai-engine.js) and matches executeBattle's actual
   // dice math so the rogue's combat estimate isn't off-by-gang-up.
-  const attackerRange = attacker.range ?? 1;
+  const attackerRange = rangeOf(attacker);
   const isRanged = attackerRange > 1;
 
   const allies = isRanged ? [] : [board.hero, ...board.survivors].filter(e =>
@@ -459,7 +461,7 @@ export function genProtectHero(sim, board, budget, config = null) {
   if (!heroEntity) return actions;
 
   // Heal: use herbs if hero injured (costs 1 action, from shared supply)
-  let herbs = sim.inventory?.hero?.[ResourceType.HERBS] || 0;
+  let herbs = getItemCountOf(sim.inventory?.hero, ResourceType.HERBS);
   if (herbs > 0 && board.heroHpRatio < 1.0 && remaining > 0) {
     actions.push({
       type: PlanActionType.HEAL, entityId: board.hero.id,
@@ -486,7 +488,7 @@ export function genProtectHero(sim, board, budget, config = null) {
   }
 
   // Free action: equip best unequipped weapon
-  if (board.heroWeapons.length > 0 && !heroEntity.weapon) {
+  if (board.heroWeapons.length > 0 && !getEquippedWeaponIdOf(heroEntity.items)) {
     actions.push({
       type: PlanActionType.EQUIP_WEAPON, entityId: board.hero.id,
       weapon: board.heroWeapons[0], _priority: 0, _goal: HeroGoal.PROTECT_HERO,
@@ -588,7 +590,7 @@ export function genExplore(sim, board, budget, config = null) {
   if (!heroEntity) return actions;
 
   // Always use herbs when injured — too valuable to skip (from shared supply)
-  const herbs = sim.inventory?.hero?.[ResourceType.HERBS] || 0;
+  const herbs = getItemCountOf(sim.inventory?.hero, ResourceType.HERBS);
   if (herbs > 0 && board.heroHpRatio < 0.8 && remaining > 0) {
     actions.push({
       type: PlanActionType.HEAL, entityId: board.hero.id,
@@ -694,16 +696,16 @@ export function genExplore(sim, board, budget, config = null) {
     if (heroTile && !isRiver(heroTile) && (hasBuilding(heroTile) || onNode)) {
       const ledger = sim.resourceLedger;
       while (remaining > 0 && (heroTile.fortifyLevel || 0) < fortifyCap) {
-        const hasWood = (ledger[ResourceType.WOOD] || 0) > 0;
-        const hasMetal = (ledger[ResourceType.METAL] || 0) > 0;
+        const hasWood = getItemCountOf(ledger, ResourceType.WOOD) > 0;
+        const hasMetal = getItemCountOf(ledger, ResourceType.METAL) > 0;
         if (!hasWood && !hasMetal) break;
 
         actions.push({
           type: PlanActionType.FORTIFY, entityId: board.hero.id,
           _priority: 5, _goal: HeroGoal.EXPLORE,
         });
-        if (hasMetal) ledger[ResourceType.METAL]--;
-        else ledger[ResourceType.WOOD]--;
+        if (hasMetal) removeItemInItems(ledger, ResourceType.METAL, 1);
+        else removeItemInItems(ledger, ResourceType.WOOD, 1);
         heroTile.fortifyLevel = (heroTile.fortifyLevel || 0) + 1;
         sim.actionsLeft--;
         remaining--;
@@ -813,15 +815,15 @@ export function genControlNodes(sim, board, budget, config = null) {
           if (nodeTile && !isRiver(nodeTile)) {
             const ledger = sim.resourceLedger;
             while (remaining > 0 && (nodeTile.fortifyLevel || 0) < fortifyCap) {
-              const hasWood = (ledger[ResourceType.WOOD] || 0) > 0;
-              const hasMetal = (ledger[ResourceType.METAL] || 0) > 0;
+              const hasWood = getItemCountOf(ledger, ResourceType.WOOD) > 0;
+              const hasMetal = getItemCountOf(ledger, ResourceType.METAL) > 0;
               if (!hasWood && !hasMetal) break;
               actions.push({
                 type: PlanActionType.FORTIFY, entityId: simUnit.id,
                 _priority: 4, _goal: HeroGoal.CONTROL_NODES,
               });
-              if (hasMetal) ledger[ResourceType.METAL]--;
-              else ledger[ResourceType.WOOD]--;
+              if (hasMetal) removeItemInItems(ledger, ResourceType.METAL, 1);
+              else removeItemInItems(ledger, ResourceType.WOOD, 1);
               nodeTile.fortifyLevel = (nodeTile.fortifyLevel || 0) + 1;
               sim.actionsLeft--;
               remaining--;
@@ -918,7 +920,7 @@ export function genHuntWitch(sim, board, budget) {
   // For ranged leaders (rogue, range 3) "in range" extends to the unit's
   // actual attack range so we don't drop priority targets the rogue can
   // already shoot.
-  const heroAttackRange = heroEntity.range ?? 1;
+  const heroAttackRange = rangeOf(heroEntity);
   const targets = [];
 
   // Kill in-range minions first — clear gang-up before engaging witch
@@ -957,7 +959,7 @@ export function genHuntWitch(sim, board, budget) {
     const dist = hexDistance(simUnit.col, simUnit.row, target.entity.col, target.entity.row);
     // Per-unit attack range — ranged hero leaders (rogue, range 3) can
     // strike from further than 1 hex without closing.
-    const unitRange = simUnit.range ?? 1;
+    const unitRange = rangeOf(simUnit);
 
     // In range — attack immediately
     if (dist <= unitRange) {

@@ -55,7 +55,7 @@ test('MirrorState entities preserve numeric stats through method calls', () => {
   // Weapon stats are no longer baked into base attack/defense — getAttack()/
   // getDefense() compose the equipped weapon's statMods at call time. The hero
   // leader starts with a sword, so the composed stat = base + weapon mod.
-  const wmods = ITEMS[hero.weapon]?.statMods ?? {};
+  const wmods = ITEMS[hero.getEquippedWeaponId()]?.statMods ?? {};
   assert.equal(hero.getAttack(),  hero.attack  + (wmods.attack  ?? 0));
   assert.equal(hero.getDefense(), hero.defense + (wmods.defense ?? 0));
 });

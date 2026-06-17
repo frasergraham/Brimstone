@@ -788,6 +788,50 @@ export function generateRiverEW(rand) {
   return path;
 }
 
+// ── Bridge invariant ─────────────────────────────────────────────────────────
+//
+// Hard post-gen invariant: every BRIDGE tile connects EXACTLY two road
+// entry/exit faces (neighbours linked via `roadDirs`). The 3D bridge model
+// (`bridgeRotationY` in renderer-3d.js) orients its plank from `roadDirs` and
+// renders a broken/floating span for any other count, so 1, 3 or 4 links is a
+// hard failure. Returns an array of `{ col, row, reason }` violations (empty
+// when the map is clean). Pure — usable from both runtime and tests.
+export function findBridgeInvariantViolations(tiles) {
+  const out = [];
+  for (const t of tiles.values()) {
+    if (!isBridge(t)) continue;
+    const links = [...t.roadDirs];
+    if (links.length !== 2) {
+      out.push({ col: t.col, row: t.row, reason: `${links.length} road links (must be 2)` });
+      continue;
+    }
+    const bridgeKey = hexKey(t.col, t.row);
+    for (const nk of links) {
+      const [nc, nr] = nk.split(',').map(Number);
+      if (hexDistance(t.col, t.row, nc, nr) !== 1) {
+        out.push({ col: t.col, row: t.row, reason: `road link ${nk} is not a neighbour` });
+        continue;
+      }
+      const nt = tiles.get(nk);
+      if (!nt || !nt.roadDirs.has(bridgeKey)) {
+        out.push({ col: t.col, row: t.row, reason: `road link ${nk} is not reciprocated` });
+      }
+    }
+  }
+  return out;
+}
+
+// Throwing wrapper around findBridgeInvariantViolations — used by tests (and
+// any caller that wants the invariant enforced) so regressions blow up loudly.
+export function assertMapInvariants(tiles) {
+  const v = findBridgeInvariantViolations(tiles);
+  if (v.length) {
+    const detail = v.map(x => `(${x.col},${x.row}): ${x.reason}`).join('; ');
+    throw new Error(`Map invariant violation — ${v.length} bad bridge(s): ${detail}`);
+  }
+  return true;
+}
+
 export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOverride = null) {
   const cfg = MAP_SIZES[mapSize] ?? MAP_SIZES.standard;
   setMapDimensions(cfg.cols, cfg.rows);
@@ -1035,11 +1079,18 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   }
 
   // 5b. Bridge audit & stub-road cleanup.
-  // Iteratively (a) prune ROAD tiles that became dead-ends (degree ≤ 1 and
-  // not adjacent to a building), and (b) revert BRIDGE tiles to RIVER if
-  // their roadDirs no longer reach both river banks.  Both steps can cascade
-  // — pruning a stub may orphan a bridge, and reverting a bridge may orphan
-  // more stubs — so we loop until stable.
+  // A BRIDGE MUST connect exactly two road entry/exit faces — the 3D bridge
+  // model (`bridgeRotationY`) orients its plank from `roadDirs` and renders a
+  // broken span for any other count. Multiple MST edges can route through the
+  // same single river crossing, so a bridge can accumulate 3–4 road links.
+  // Iterate until stable over three steps that can cascade into one another:
+  //   (a) prune ROAD tiles that became dead-ends (degree ≤ 1, not next to a
+  //       building);
+  //   (b) normalise any BRIDGE with >2 road links down to a single
+  //       opposite-bank span (keep one left + one right, drop the extras —
+  //       the dropped approach roads then prune as stubs);
+  //   (c) revert BRIDGE tiles to RIVER if their roadDirs no longer reach both
+  //       river banks (covers degree 0/1 and one-sided bridges).
   const isAdjacentToBuilding = (col, row) => {
     for (const n of getNeighbors(col, row)) {
       const nt = tiles.get(hexKey(n.col, n.row));
@@ -1070,6 +1121,37 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
       changed = true;
     }
 
+    // Normalise over-connected bridges to a single opposite-bank span. When a
+    // bridge has >2 road links we keep exactly one per bank — preferring the
+    // crossing's originally-designated banks — and drop the rest. Deterministic
+    // (sorted tiebreak) so same-seed maps stay reproducible. Dropped approaches
+    // become stubs and prune on the next pass.
+    for (const c of crossings) {
+      const t = tiles.get(hexKey(c.col, c.row));
+      if (!t || !isBridge(t) || t.roadDirs.size <= 2) continue;
+      const bridgeKey = hexKey(c.col, c.row);
+      const leftLinks = [], rightLinks = [];
+      for (const nk of t.roadDirs) {
+        const [nc, nr] = nk.split(',').map(Number);
+        (riverSide(nc, nr, riverMap, riverEW) === 'left' ? leftLinks : rightLinks).push(nk);
+      }
+      leftLinks.sort();
+      rightLinks.sort();
+      const desiredLeft  = hexKey(c.leftBank.col, c.leftBank.row);
+      const desiredRight = hexKey(c.rightBank.col, c.rightBank.row);
+      const keepLeft  = leftLinks.includes(desiredLeft)   ? desiredLeft  : leftLinks[0];
+      const keepRight = rightLinks.includes(desiredRight) ? desiredRight : rightLinks[0];
+      // No genuine opposite-bank pair to keep — leave it for step (c) to revert.
+      if (keepLeft === undefined || keepRight === undefined) continue;
+      const keep = new Set([keepLeft, keepRight]);
+      for (const nk of [...t.roadDirs]) {
+        if (keep.has(nk)) continue;
+        t.roadDirs.delete(nk);
+        tiles.get(nk)?.roadDirs.delete(bridgeKey);
+        changed = true;
+      }
+    }
+
     // Revert one-sided or unreached bridges back to river.
     for (const c of crossings) {
       const t = tiles.get(hexKey(c.col, c.row));
@@ -1090,6 +1172,17 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
       changed = true;
     }
   }
+
+  // Hard post-gen invariant: every surviving bridge now has exactly two
+  // reciprocal road links on opposite river banks. The 3D bridge model's
+  // plank orientation is derived from `roadDirs`, so any other count renders
+  // a broken / floating span — there's no graceful degrade for a wrong
+  // count. The cleanup pass above is supposed to guarantee this. If a
+  // future change reintroduces a hole, fail LOUDLY here rather than ship a
+  // broken-looking map; the regression suite (`tests/bridge-invariants.test.js`,
+  // `tests/map-bridges.test.js`) sweeps the seed range to keep this assert
+  // from ever firing in practice.
+  assertMapInvariants(tiles);
 
   // 5b. Derive sub-hex blocked slots now that forests, bridges, and the road
   //     network are final. Forest trees avoid the road faces; bridges block all

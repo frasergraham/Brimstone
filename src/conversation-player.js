@@ -12,15 +12,76 @@
 // flags, so NEXT naturally advances dialog lines while the step loop is
 // blocked awaiting us).
 
-import { playback, playbackDelay } from './playback.js';
+import { playback } from './playback.js';
 import { AppMode, setMode } from './app-mode.js';
 import { buildConversationDigest } from './replay-timeline.js';
 import { runScriptedActions } from './campaign/scripted-actions.js';
 import { playVoiceClip, stopVoice, loadVoiceManifest, hasVoiceClip, hasConversationVoice } from './voiceover.js';
 
-/** Auto-advance hold for one dialog line — long enough to read, capped. */
+/**
+ * Auto-advance hold for one dialog line — long enough to read, capped.
+ *
+ * Per-char read time governs long lines (~40ms/char ≈ 25 chars/s ≈ a brisk
+ * skim), with a small base intercept for "settle the bubble". The 400ms floor
+ * keeps very short beats ("Run!", "Hi.") snappy under autoplay — the previous
+ * 1600ms floor produced ~1s of dead air after the narration clip ended.
+ * Spoken narration is still played out in full: `awaitConversationLineEnd`
+ * holds for max(this floor, clip end), so longer voice clips are never cut.
+ */
 export function conversationReadingMs(text) {
-  return Math.max(1600, Math.min(6000, 400 + String(text ?? '').length * 40));
+  return Math.max(400, Math.min(6000, 200 + String(text ?? '').length * 40));
+}
+
+/**
+ * Safety ceiling for a single line's voice-aware auto-advance. Even a clip that
+ * never reports `ended` (stalled download, autoplay-blocked before the first
+ * gesture) can't hold the conversation open longer than this. Lines are short,
+ * so real narration finishes well under it; operator-tunable.
+ */
+export const CONVERSATION_HOLD_CEILING_MS = 30000;
+
+/**
+ * Auto-advance hold for ONE conversation line that respects spoken narration.
+ *
+ * Advances at max(reading-time floor, clip end): a long clip is never cut off
+ * mid-sentence, while a fast / short / missing / failed / muted clip still falls
+ * back to the reading floor (so a quick clip can't beat the reader). Bounded by
+ * a ceiling so a clip that never reports `ended` can't hang the auto-advance.
+ * The skip flag (card SKIP / replay NEXT / jump-to-end) collapses it at once.
+ *
+ * @param {HTMLAudioElement|null} audio  clip handle from playVoiceClip (null when muted/headless/no clip)
+ * @param {string} text                  the line text (drives the reading floor)
+ * @param {object} [o]
+ *   o.shouldStop — () => boolean : collapse the hold now (default: never)
+ *   o.sleep      — async (ms)    : poll tick (test seam; default real timer)
+ *   o.floorMs    — number        : reading-floor override (test seam / speed-scaled floor)
+ *   o.ceilingMs  — number        : safety-ceiling override (test seam)
+ * @returns {Promise<void>}
+ */
+export async function awaitConversationLineEnd(audio, text, o = {}) {
+  const shouldStop = o.shouldStop ?? (() => false);
+  const sleep      = o.sleep ?? _sleep;
+  const floorMs    = o.floorMs ?? conversationReadingMs(text);
+  const ceilingMs  = o.ceilingMs ?? CONVERSATION_HOLD_CEILING_MS;
+
+  // With no audio (muted / headless / clip absent) the reading floor alone
+  // governs. A clip's `ended` is the natural gate; its `error` (missing/broken
+  // file) means "no narration to wait for" — also fall back to the floor.
+  let clipDone = !audio;
+  if (audio) {
+    if (audio.ended) clipDone = true;
+    audio.addEventListener?.('ended', () => { clipDone = true; });
+    audio.addEventListener?.('error', () => { clipDone = true; });
+  }
+
+  // Advance only once BOTH the reading floor has elapsed AND the clip has
+  // finished — i.e. max(floor, clip length) — bounded by the ceiling.
+  let waited = 0;
+  while (!shouldStop()) {
+    if ((waited >= floorMs && clipDone) || waited >= ceilingMs) break;
+    await sleep(50);
+    waited += 50;
+  }
 }
 
 /**
@@ -151,6 +212,15 @@ export async function playConversation(opts) {
   // bubble stays fully visible and close enough to read even if the camera
   // drifts between lines — unless the player has taken FIXED camera control.
 
+  // ── Snapshot prior facings so we can restore them when the card dismisses.
+  // Conversation orientation is a *presentation pose* — once the player
+  // continues, units that aren't acting this round should NOT stay frozen
+  // mid-look across the map. A subsequent move/lunge re-asserts facing on its
+  // own; this snapshot covers the units that don't act. Captured BEFORE the
+  // first line orients so the saved yaws are pre-conversation. No-op when the
+  // renderer doesn't expose captureFacings (e.g. headless tests, 2D editor). */
+  const priorFacings = renderer?.captureFacings?.(participantIds) ?? null;
+
   // ── Dialog lines ───────────────────────────────────────────────────────────
   let presenting = true;
   try {
@@ -221,6 +291,15 @@ export async function playConversation(opts) {
     playback.stepRequested = prevStepRequested;
   }
 
+  // ── Restore prior facings ─────────────────────────────────────────────────
+  // Conversation pose is dismissed: any participant that isn't about to MOVE
+  // or attack would otherwise stay frozen staring at its conversation partner
+  // (a real bug for units that don't act this round). The onComplete walk-off
+  // below issues its own facing through addMoveAnim, so this is harmless for
+  // units that DO act — it gets stomped by their move's _faceModelInstant.
+  // No-op when capture was a no-op (no renderer hook, or no models loaded). */
+  if (priorFacings) renderer?.restoreFacings?.(priorFacings);
+
   // ── onComplete scripted actions (e.g. the NPC walks away) ─────────────────
   // AFTER the CONTINUE gate and card teardown: the conversation card should
   // only do the conversation — while it holds on REPLAY/CONTINUE the
@@ -282,6 +361,15 @@ async function _presentLines(lineRecords, { state, renderer, ui, skipFlag, autoO
         await ui?.showStoryModal?.(line.name, line.text);
         continue;
       }
+      // Turn the active speaker to face the rest of the group and the listeners
+      // to face the speaker — a short interpolated pivot so the scene reads as
+      // people looking at one another rather than staring past each other. Pure
+      // render side-effect, fire-and-forget so the bubble/camera don't wait on
+      // it. No-ops for a lone participant ("the world" / narration beat), a line
+      // with no bound entity, or a model that hasn't loaded yet.
+      if (line.entityId != null) {
+        renderer.orientConversation?.(line.entityId, participantIds);
+      }
       // Re-assert the camera frame for THIS line before the bubble appears, so a
       // camera drift since the last line can't leave the bubble off-screen.
       await _frameConversationStep(line, { renderer, ui, participantIds, centroid });
@@ -289,9 +377,13 @@ async function _presentLines(lineRecords, { state, renderer, ui, skipFlag, autoO
       bubble = _showLine(line, { state, renderer });
       // Start this speaker's narration in step with the bubble. playVoiceClip
       // self-gates on the shared VO mute and stops the previous line's clip.
-      playVoiceClip(line.clipUrl);
+      // The handle drives the voice-aware auto-advance below (null when muted /
+      // headless / no clip).
+      const clip = playVoiceClip(line.clipUrl);
       if (autoOnly) {
-        await _autoHold(conversationReadingMs(line.text), skipFlag);
+        // REPLAY re-run: timed hold that waits out the narration, not just the
+        // reading estimate, so a long clip isn't cut off mid-sentence.
+        await awaitConversationLineEnd(clip, line.text, { shouldStop: skipFlag });
         continue;
       }
       if (playback.paused) {
@@ -303,8 +395,16 @@ async function _presentLines(lineRecords, { state, renderer, ui, skipFlag, autoO
         ui?.setReplayNextReady?.(false);
         playback.stepRequested = false;
       } else {
-        // Auto-play: hold long enough to read; NEXT collapses the hold.
-        await playbackDelay(conversationReadingMs(line.text));
+        // Auto-play: hold for max(reading time, narration length) so a long clip
+        // is never cut off; NEXT / SKIP / jump collapse the hold. The reading
+        // floor honors the replay speed multiplier (audio can't be sped up, so
+        // the clip's end stays a hard gate).
+        const floorMs = conversationReadingMs(line.text);
+        await awaitConversationLineEnd(clip, line.text, {
+          floorMs: playback.speedMult > 0 ? floorMs / playback.speedMult : floorMs,
+          shouldStop: () => skipFlag() || playback.stepRequested
+                            || playback.restart || playback.replayStep,
+        });
         playback.stepRequested = false;
       }
     }
@@ -321,13 +421,4 @@ function _showLine(line, { state, renderer }) {
   const anchor = live ? line.entityId : { col: line.col, row: line.row };
   if (!live && line.col == null) return null;
   return renderer.showSpeechBubble(anchor, line.name, line.text);
-}
-
-/** Plain timed hold that still honors the skip flag (REPLAY re-runs). */
-async function _autoHold(ms, skipFlag) {
-  let remaining = ms;
-  while (remaining > 0 && !skipFlag()) {
-    await _sleep(Math.min(50, remaining));
-    remaining -= 50;
-  }
 }

@@ -550,14 +550,14 @@ describe('combat-tester — attack mode', () => {
     assert.equal(fires, 0, 'idempotent set should not fire onChange');
   });
 
-  test('ranged mode forces attacker.range so executeBattle routes through ranged branch', () => {
+  test('ranged mode forces attacker range so executeBattle routes through ranged branch', () => {
     const t = createCombatTester();
     t.setAttacker('paladin'); // paladin is range=1 (melee)
     t.setDefender('zombie');
     t.setAttackMode('ranged');
-    // Force-set range carried by the live entity
-    assert.equal(t.layout.attackerEntity.range, RANGED_ATTACK_RANGE,
-      'attacker.range must be forced so executeBattle treats the strike as ranged');
+    // Ranged mode equips a bow, so the weapon-derived range is now RANGED.
+    assert.equal(t.layout.attackerEntity.getRange(), RANGED_ATTACK_RANGE,
+      'attacker range must be forced (via the bow) so executeBattle treats the strike as ranged');
     const out = t.runBattle();
     assert.equal(out.result.ranged, true,
       'executeBattle result must be flagged as a ranged attack');

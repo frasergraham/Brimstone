@@ -27,6 +27,8 @@ import {
   createZombie, createMinion, createSurvivor,
   createWoodGolem, createIronGolem,
   nextDie, ADVANTAGE_CAP, isLeaderType, abilityStatMod, rollDamage, awardXP,
+  getEquippedWeaponIdOf,
+  getItemCountOf, totalItemCount, addItemInItems, removeItemInItems,
 } from './entities.js';
 import { Phase } from './game.js';
 import { getFaction, concreteFactionOf, sightRangeForEntity } from './factions.js';
@@ -46,6 +48,9 @@ export const ActionType = Object.freeze({
   USE_ABILITY:  'use_ability',
   GUARD:        'guard',
   SOUND_HORN:   'sound_horn',
+  // Multiplayer-only free action: a leader hands one of their survivors over
+  // to another leader on the same faction.
+  SENT_TO:      'sent_to',
 });
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -487,8 +492,8 @@ export function getValidActions(state, actor) {
   // Always included when contextually valid; affordable=false when no resources.
   if (t && !isRiver(t) && !isBuildingFootprint(t) && t.fortifyLevel < MAX_FORTIFY_LEVEL && faction.canFortify()) {
     const inv        = faction.getInventory(state);
-    const woodCount  = (inv[ResourceType.WOOD]  || 0);
-    const metalCount = (inv[ResourceType.METAL] || 0);
+    const woodCount  = getItemCountOf(inv, ResourceType.WOOD);
+    const metalCount = getItemCountOf(inv, ResourceType.METAL);
     const affordable = woodCount > 0 || metalCount > 0;
     actions.push({ type: ActionType.FORTIFY, targets: [{ col: actor.col, row: actor.row }], affordable });
   }
@@ -510,10 +515,13 @@ export function getValidActions(state, actor) {
   // Guard — any unit can take a guard stance (stacks: each use adds 1 charge)
   actions.push({ type: ActionType.GUARD, currentCharges: actor.guarding || 0 });
 
-  // Sound Horn — Phase 5 gate: any unit whose innate abilities include
-  // 'sound_horn'. Pushed onto day-side leaders by Faction.createLeader().
-  if (actor.hasAbility('sound_horn')) {
-    const food = (faction.getInventory(state)['food'] || 0);
+  // Sound Horn — gated on holding the Horn key item (reusable; never
+  // consumed). Horn-trained leaders are issued one at creation; campaign
+  // heroes find theirs at the Ch1 M4 church. The old 'sound_horn' ability
+  // marks who's trained to wield a horn and so who gets issued one, but the
+  // action itself surfaces strictly on possession of the item.
+  if (actor.hasItem('horn')) {
+    const food = getItemCountOf(faction.getInventory(state), 'food');
     actions.push({ type: ActionType.SOUND_HORN, affordable: food >= 1 });
   }
 
@@ -521,7 +529,7 @@ export function getValidActions(state, actor) {
   // so players know herbs exist; disabled at full HP during execution)
   {
     const healInv = faction.getInventory(state);
-    if ((healInv[ResourceType.HERBS] || 0) > 0) {
+    if (getItemCountOf(healInv, ResourceType.HERBS) > 0) {
       actions.push({ type: ActionType.HEAL, atFullHp: actor.hp >= actor.maxHp });
     }
   }
@@ -533,21 +541,24 @@ export function getValidActions(state, actor) {
     const myItems = actor.items || {};
 
     // Shared resources
-    if ((shared[ResourceType.FOOD] || 0) > 0)
+    if (getItemCountOf(shared, ResourceType.FOOD) > 0)
       usable.push({ item: ResourceType.FOOD, label: '🍞 Food (+1 action)', source: 'shared' });
-    if ((shared[ResourceType.SILVER] || 0) > 0)
+    if (getItemCountOf(shared, ResourceType.SILVER) > 0)
       usable.push({ item: ResourceType.SILVER, label: '🪙 Silver (+1 ATK)', source: 'shared' });
-    if ((shared[ResourceType.SCRIPTURE] || 0) > 0 && battleTargets.length)
+    if (getItemCountOf(shared, ResourceType.SCRIPTURE) > 0 && battleTargets.length)
       usable.push({ item: ResourceType.SCRIPTURE, label: '📜 Scripture (ward)', source: 'shared' });
 
     if (usable.length) actions.push({ type: ActionType.USE_ITEM, usable });
 
     // Equip weapon from actor's personal items. Filter by per-item gate
     // so factions with category restrictions (e.g. rogue: ranged-only)
-    // don't surface a forbidden weapon in the equip menu.
+    // don't surface a forbidden weapon in the equip menu. The currently
+    // equipped weapon is excluded (re-equipping it is a no-op).
     const concrete = concreteFactionOf(actor);
+    const equippedId = getEquippedWeaponIdOf(myItems);
     const weapons = Object.keys(myItems)
-      .filter(k => isWeaponId(k) && (myItems[k] || 0) > 0 && concrete.canEquipWeaponItem(k));
+      .filter(k => isWeaponId(k) && (myItems[k]?.count ?? 0) > 0
+        && k !== equippedId && concrete.canEquipWeaponItem(k));
     if (weapons.length) {
       actions.push({
         type: ActionType.EQUIP_WEAPON,
@@ -564,6 +575,16 @@ export function getValidActions(state, actor) {
         actions.push(abilityAction);
       }
     }
+  }
+
+  // Send To — multiplayer free action: this survivor can be handed off to
+  // another leader on the same faction. Surfaced only on SURVIVOR units
+  // whose owning leader has at least one OTHER live leader on the faction
+  // (canUseSentTo). `destinations` is pre-resolved so the UI doesn't have
+  // to recompute it when rendering the radial destination picker.
+  if (canUseSentTo(state, actor)) {
+    const destinations = getSentToDestinations(state, actor);
+    actions.push({ type: ActionType.SENT_TO, destinations });
   }
 
   return actions;
@@ -584,8 +605,8 @@ function _buildAbilityActions(state, actor) {
 }
 
 function pickSummonType(inv) {
-  if ((inv[ResourceType.METAL] || 0) >= 2) return EntityType.IRON_GOLEM;
-  if ((inv[ResourceType.WOOD]  || 0) >= 2) return EntityType.WOOD_GOLEM;
+  if (getItemCountOf(inv, ResourceType.METAL) >= 2) return EntityType.IRON_GOLEM;
+  if (getItemCountOf(inv, ResourceType.WOOD)  >= 2) return EntityType.WOOD_GOLEM;
   return EntityType.MINION;
 }
 
@@ -812,7 +833,7 @@ export function executeExplore(state, actor) {
 
   if (isHerbalist && getFaction(actor.owner).canDiscoverNPCs()) {
     const herbInv = getFaction(actor.owner).getInventory(state);
-    herbInv[ResourceType.HERBS] = (herbInv[ResourceType.HERBS] || 0) + 1;
+    addItemInItems(herbInv, ResourceType.HERBS, 1);
     log.push(`${actor.displayName}'s keen eye also finds Herbs!`);
     lootItems.push('+🌿');
   }
@@ -857,10 +878,19 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
 
   if (lootType === 'horse') {
     if (faction.canEquipHorse()) {
-      actor.items['horse'] = 1;
+      if (!actor.hasItem('horse')) actor.addItem('horse');
       log.push(`Found a horse! ${actor.displayName}'s movement range increases to 2.`);
       lootItems?.push('+🐴');
     }
+    return;
+  }
+
+  if (lootType === 'horn') {
+    // Reusable key item — lives in the finder's personal pack and unlocks the
+    // Sound Horn action. Idempotent: re-exploring the same tile won't stack it.
+    if (!actor.hasItem('horn')) actor.addItem('horn');
+    log.push(`Found a horn! ${actor.displayName} can sound it to call out across the land.`);
+    lootItems?.push('+📯');
     return;
   }
 
@@ -868,12 +898,12 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
     const concrete = concreteFactionOf(actor);
     if (concrete.canEquipWeaponItem(lootType)) {
       const label = WEAPON_LABEL[lootType] || lootType;
-      if (!actor.weapon) {
+      if (!actor.getEquippedWeaponId()) {
         actor.equipWeapon(lootType);
         log.push(`Found a ${label}! ${actor.displayName} equips it immediately.`);
         lootItems?.push('+⚔');
       } else {
-        actor.items[lootType] = (actor.items[lootType] || 0) + 1;
+        actor.addItem(lootType);
         log.push(`Found a ${label}! Added to ${actor.displayName}'s pack.`);
         lootItems?.push('+⚔');
       }
@@ -891,7 +921,7 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
   if (lootType === ResourceType.HERBS) {
     // Herbs go to faction shared inventory — any allied unit can use them
     const inv = faction.getInventory(state);
-    inv[lootType] = (inv[lootType] || 0) + 1;
+    addItemInItems(inv, lootType, 1);
     log.push(`${actor.displayName} found Herbs! Added to supplies.`);
     lootItems?.push('+🌿');
     return;
@@ -902,7 +932,7 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
   const RES_ICON = { wood: '🪵', metal: '⚙', food: '🍞', silver: '🥈', scripture: '📜' };
   const resIcon = RES_ICON[lootType] || `+${resLabel}`;
   const inv = faction.getInventory(state);
-  inv[lootType] = (inv[lootType] || 0) + 1;
+  addItemInItems(inv, lootType, 1);
   log.push(faction.getResourceFoundLog(actor, lootType));
   lootItems?.push(`+${resIcon}`);
 }
@@ -1226,7 +1256,7 @@ export function executeBattle(state, actor, target, opts = {}) {
 
   if (hit) {
     const tier    = isGreatCrush ? 3 : isCrush ? 2 : 1;
-    dmgRoll       = rollDamage(getWeaponDamage(actor.weapon), s => state.nextDie(s));
+    dmgRoll       = rollDamage(getWeaponDamage(getEquippedWeaponIdOf(actor.items)), s => state.nextDie(s));
     dmgTier       = tier;
     const baseDmg = dmgRoll * tier;
 
@@ -1333,7 +1363,7 @@ export function executeBattle(state, actor, target, opts = {}) {
       // A counter lands as one ordinary (1×) hit with the defender's weapon —
       // matching the pre-dice rule where a counter dealt the same as a hit.
       counterDmg = actor.applyIncomingDamage(
-        rollDamage(getWeaponDamage(target.weapon), s => state.nextDie(s)),
+        rollDamage(getWeaponDamage(getEquippedWeaponIdOf(target.items)), s => state.nextDie(s)),
         (sd) => state.nextDie(sd),
       );
       const counterKilled = actor.takeDamage(counterDmg);
@@ -1397,13 +1427,15 @@ export function executeBattle(state, actor, target, opts = {}) {
   // attackOf(actor) + actor.attackBonus, which is exactly what
   // Entity.resolveCombat folds into attackRoll. Same for defender. Tests
   // assert picked + Σ(all flat breakdown bonuses) ≡ attackRoll/defenseRoll.
+  const atkWeaponId    = getEquippedWeaponIdOf(actor.items);
+  const defWeaponId    = getEquippedWeaponIdOf(target.items);
   const atkBaseStat    = actor.attack || 0;
-  const atkWeaponMod   = actor.weapon ? (ITEMS[actor.weapon]?.statMods?.attack ?? 0) : 0;
+  const atkWeaponMod   = atkWeaponId ? (ITEMS[atkWeaponId]?.statMods?.attack ?? 0) : 0;
   const atkAbilityMod  = abilityStatMod(actor.abilities, 'attack');
   const atkEffectMod   = effectStatMod(actor, 'attack');
   const atkAttackBonus = actor.attackBonus || 0;
   const defBaseStat     = target.defense || 0;
-  const defWeaponMod    = target.weapon ? (ITEMS[target.weapon]?.statMods?.defense ?? 0) : 0;
+  const defWeaponMod    = defWeaponId ? (ITEMS[defWeaponId]?.statMods?.defense ?? 0) : 0;
   const defAbilityMod   = abilityStatMod(target.abilities, 'defense');
   const defEffectMod    = effectStatMod(target, 'defense');
   const defDefenseBonus = target.defenseBonus || 0;
@@ -1423,7 +1455,7 @@ export function executeBattle(state, actor, target, opts = {}) {
       atkStaffBonus,
       // Weapon damage roll → explains the damage in the breakdown popup:
       // final damage = dmgRoll × dmgTier (+ wounded surcharge if any).
-      atkWeapon: actor.weapon ?? null, dmgRoll, dmgTier,
+      atkWeapon: atkWeaponId ?? null, dmgRoll, dmgTier,
       phaseBonus, fortBonus, atkFortAtkBonus, fatiguePenalty,
       atkGangupFlat, defGangupFlat,
       atkAdvantageDice, defAdvantageDice, atkDisadvantageDice,
@@ -1432,8 +1464,8 @@ export function executeBattle(state, actor, target, opts = {}) {
       defBaseStat, defWeaponMod, defAbilityMod, defEffectMod, defDefenseBonus,
       // Weapon ids so the roll-breakdown tooltip can name the weapon behind
       // each side's modifier ("sword +2" rather than an opaque stat sum).
-      atkWeaponId: actor.weapon ?? null,
-      defWeaponId: target.weapon ?? null,
+      atkWeaponId: atkWeaponId ?? null,
+      defWeaponId: defWeaponId ?? null,
       ranged: isRanged, closeRanged: isCloseRanged,
       atkAllyNames: isRanged ? [] : atkAllies.map(e => e.displayName),
       defAllyNames: isRanged ? [] : defAllies.map(e => e.displayName),
@@ -1551,15 +1583,15 @@ export function executeFortify(state, actor) {
   if (!t || isRiver(t) || isBuildingFootprint(t)) return { success: false, log: ['Cannot fortify here.'] };
   if (t.fortifyLevel >= MAX_FORTIFY_LEVEL) return { success: false, log: ['Cannot fortify further.'] };
   const shared     = state.inventory.hero;
-  const metalCount = (shared[ResourceType.METAL] || 0);
-  const woodCount  = (shared[ResourceType.WOOD]  || 0);
+  const metalCount = getItemCountOf(shared, ResourceType.METAL);
+  const woodCount  = getItemCountOf(shared, ResourceType.WOOD);
 
   // FORTIFY_DOUBLE: this survivor's ability makes wood give +2
   const hasDoubler = actor.type === EntityType.SURVIVOR &&
     actor.hasAbility(SurvivorAbility.FORTIFY_DOUBLE);
 
   if (metalCount > 0) {
-    shared[ResourceType.METAL]--;
+    removeItemInItems(shared, ResourceType.METAL, 1);
     const prev = t.fortifyLevel;
     t.fortifyLevel = Math.min(MAX_FORTIFY_LEVEL, prev + 2);
     const defGain = t.fortifyLevel - prev;
@@ -1568,7 +1600,7 @@ export function executeFortify(state, actor) {
     grantXp(xpAwards, actor, XP_PER_FORTIFY_BASE + XP_PER_FORTIFY_LEVEL_BONUS * t.fortifyLevel, state, 'fortify');
     return { success: true, log: [`${actor.displayName} reinforces with metal! (fort level ${t.fortifyLevel})`], cost: 1, defGain, ...(xpAwards.length ? { xpAwards } : {}) };
   } else if (woodCount > 0) {
-    shared[ResourceType.WOOD]--;
+    removeItemInItems(shared, ResourceType.WOOD, 1);
     const gain = hasDoubler ? 2 : 1;
     const prev = t.fortifyLevel;
     t.fortifyLevel = Math.min(MAX_FORTIFY_LEVEL, prev + gain);
@@ -1598,9 +1630,9 @@ export function executeSummon(state, actor, requestedType = null) {
   const ownerId = actor.ownerId;
   let summonedUnit, res, unitName;
 
-  const metal = inv[ResourceType.METAL] || 0;
-  const wood  = inv[ResourceType.WOOD]  || 0;
-  const total = Object.values(inv).reduce((s, v) => s + (v || 0), 0);
+  const metal = getItemCountOf(inv, ResourceType.METAL);
+  const wood  = getItemCountOf(inv, ResourceType.WOOD);
+  const total = totalItemCount(inv);
 
   // Per-faction minion cost — witch pays 2 of any, brute pays 1.
   const minionCost = concreteFaction.getMinionCost();
@@ -1628,20 +1660,22 @@ export function executeSummon(state, actor, requestedType = null) {
   }
 
   if (resolvedType === EntityType.IRON_GOLEM) {
-    res = ResourceType.METAL; inv[res] -= 2;
+    res = ResourceType.METAL; removeItemInItems(inv, res, 2);
     summonedUnit = createIronGolem(actor.col, actor.row, ownerId, state);
     unitName = 'Iron Golem';
   } else if (resolvedType === EntityType.WOOD_GOLEM) {
-    res = ResourceType.WOOD; inv[res] -= 2;
+    res = ResourceType.WOOD; removeItemInItems(inv, res, 2);
     summonedUnit = createWoodGolem(actor.col, actor.row, ownerId, state);
     unitName = 'Wood Golem';
   } else {
     // Minion: spend `minionCost` from any resources, largest stacks first
-    const keys = Object.keys(inv).filter(k => inv[k] > 0).sort((a, b) => inv[b] - inv[a]);
+    const keys = Object.keys(inv).filter(k => getItemCountOf(inv, k) > 0)
+      .sort((a, b) => getItemCountOf(inv, b) - getItemCountOf(inv, a));
     let remaining = minionCost;
     const spentMap = {};
     for (const k of keys) {
-      const spend = Math.min(inv[k], remaining); inv[k] -= spend; remaining -= spend;
+      const spend = Math.min(getItemCountOf(inv, k), remaining);
+      removeItemInItems(inv, k, spend); remaining -= spend;
       spentMap[k] = (spentMap[k] || 0) + spend;
       if (remaining === 0) break;
     }
@@ -1666,11 +1700,11 @@ export function executeSummon(state, actor, requestedType = null) {
 
 export function executeHeal(state, actor) {
   const inv = getFaction(actor.owner).getInventory(state);
-  if ((inv[ResourceType.HERBS] || 0) < 1)
+  if (getItemCountOf(inv, ResourceType.HERBS) < 1)
     return { success: false, log: ['No herbs.'] };
   if (actor.hp >= actor.maxHp)
     return { success: false, log: [`${actor.displayName} is already at full health.`] };
-  inv[ResourceType.HERBS]--;
+  removeItemInItems(inv, ResourceType.HERBS, 1);
   // Herbs heal 2D10 — rolled through state.nextDie so tests can force the dice.
   const healed = state.nextDie(10) + state.nextDie(10);
   actor.heal(healed);
@@ -1690,13 +1724,11 @@ export function executeUseItem(state, actor, item) {
       return { success: false, log: [`${actor.displayName} already equipped a weapon this round.`] };
     }
     const myItems = actor.items || {};
-    if ((myItems[item] || 0) < 1) return { success: false, log: ['Item not available.'] };
-    // Preserve the outgoing weapon: swapping should bank the old weapon back
-    // into carried items rather than destroying it. equipWeapon() overwrites
-    // the slot, so the swap-bookkeeping is the caller's concern.
-    const prev = actor.weapon;
-    myItems[item]--;
-    if (prev && prev !== item) myItems[prev] = (myItems[prev] || 0) + 1;
+    if ((myItems[item]?.count ?? 0) < 1) return { success: false, log: ['Item not available.'] };
+    // Equipping is just a tag flip now: the weapon already sits in `items`, so
+    // equipWeapon() flags it and clears the flag from the previously-equipped
+    // entry (which stays in the backpack at its existing count). No swap
+    // bookkeeping — both weapons remain held, only the equipped tag moves.
     actor.equipWeapon(item);
     actor.equippedThisRound = true;
     const label = WEAPON_LABEL[item] || item;
@@ -1705,8 +1737,8 @@ export function executeUseItem(state, actor, item) {
 
   // Shared resources
   const shared = state.inventory.hero;
-  if ((shared[item] || 0) < 1) return { success: false, log: ['Item not available.'] };
-  shared[item]--;
+  if (getItemCountOf(shared, item) < 1) return { success: false, log: ['Item not available.'] };
+  removeItemInItems(shared, item, 1);
   const log = [];
 
   switch (item) {
@@ -1725,6 +1757,151 @@ export function executeUseItem(state, actor, item) {
       break;
   }
   return { success: true, log, cost: 0 };
+}
+
+// ── Sent To ─────────────────────────────────────────────────────────────────
+// Multiplayer free action: a leader transfers control of one of their
+// survivors to another leader on the same faction. Used in N-player games
+// (e.g. 2v2 hero side with two human heroes) so survivors can be reassigned
+// when a leader's contingent grows unwieldy or another leader is better
+// positioned to fight with them next round. Costs 0 action points.
+//
+// Gate (authoritative):
+//  - The faction must have more than one leader (i.e. more than one player
+//    with a live leader on this side). This implicitly requires MP — in solo
+//    or 1v1 the faction has at most one leader, so the action is impossible.
+//  - The actor must be a leader (only leaders command survivors).
+//  - The destination must be ANOTHER leader (not the actor) on the SAME
+//    faction with a live leader entity.
+//  - The target must be a SURVIVOR currently owned by the actor.
+
+/**
+ * List the survivors a LEADER currently controls. Kept for callers that
+ * still want to enumerate a leader's roster (the live action now lives on
+ * the survivor side, so this is no longer used by getValidActions).
+ * @returns {Entity[]}
+ */
+export function getOwnedSurvivors(state, leader) {
+  if (!leader?.ownerId) return [];
+  return state.entities.filter(e =>
+    e.alive &&
+    e.type === EntityType.SURVIVOR &&
+    e.ownerId === leader.ownerId
+  );
+}
+
+/**
+ * Find the live leader entity that currently owns `survivor` — the
+ * SURVIVOR_RECEIVED fan-out source, and the destination-picker exclusion.
+ * @returns {Entity|null}
+ */
+export function getOwningLeader(state, survivor) {
+  if (!survivor?.ownerId) return null;
+  return state.entities.find(e =>
+    e.alive && isLeaderType(e.type) && e.ownerId === survivor.ownerId
+  ) ?? null;
+}
+
+/**
+ * List other live leaders on the same faction as `survivor` (potential
+ * "Send To" destinations). Excludes the survivor's current owning leader.
+ * Faction is derived from the owning leader (survivor.owner may be null
+ * until a leader claims them, so we don't trust it here).
+ * Returns array of { ownerId, leader: Entity, name: string }.
+ */
+export function getSentToDestinations(state, survivor) {
+  if (!survivor || !state.players) return [];
+  const owningLeader = getOwningLeader(state, survivor);
+  if (!owningLeader) return [];
+  const faction = owningLeader.owner;
+  const out = [];
+  for (const p of state.players) {
+    if (p.faction !== faction) continue;
+    // Exclude the survivor's current owner (no self-send).
+    if (p.id === survivor.ownerId) continue;
+    const leader = state.entities.find(e => e.id === p.leaderId && e.alive);
+    if (!leader) continue;
+    out.push({ ownerId: p.id, leader, name: p.name ?? leader.displayName });
+  }
+  return out;
+}
+
+/**
+ * True iff `survivor` may be Sent To another leader (it IS a survivor, has
+ * a live owning leader on its faction, and that faction has at least one
+ * OTHER live leader).
+ */
+export function canUseSentTo(state, survivor) {
+  if (!survivor || !survivor.ownerId) return false;
+  if (survivor.type !== EntityType.SURVIVOR) return false;
+  if (!getOwningLeader(state, survivor)) return false;
+  if (getSentToDestinations(state, survivor).length === 0) return false;
+  return true;
+}
+
+/**
+ * Transfer control of `survivor` from its current owner-leader to the
+ * leader identified by `destOwnerId`. The action lives on the SURVIVOR;
+ * the sender leader is derived live from `survivor.ownerId` so the rule
+ * still holds if other plan steps mutated the world before this one.
+ *
+ * @param {object} state
+ * @param {Entity} survivor    The survivor being transferred.
+ * @param {string} destOwnerId Owner id (playerId) of the destination leader.
+ * @returns {{success, log, cost}}
+ */
+export function executeSentTo(state, survivor, destOwnerId) {
+  if (!survivor || survivor.type !== EntityType.SURVIVOR) {
+    return { success: false, log: ['Only survivors can be transferred.'] };
+  }
+  if (!survivor.alive) {
+    return { success: false, log: ['Survivor not found.'] };
+  }
+  if (!destOwnerId) {
+    return { success: false, log: ['No destination leader specified.'] };
+  }
+  // Re-derive the sender leader from the survivor's current owner — the
+  // action lives on the survivor and may resolve after other plan steps
+  // have changed the live state.
+  const fromLeader = getOwningLeader(state, survivor);
+  if (!fromLeader) {
+    return { success: false, log: ['No leader currently controls that survivor.'] };
+  }
+  if (destOwnerId === fromLeader.ownerId) {
+    return { success: false, log: ['Cannot send a survivor to yourself.'] };
+  }
+  // Destination must be another live leader on the same faction.
+  const destPlayer = (state.players || []).find(p => p.id === destOwnerId);
+  if (!destPlayer || destPlayer.faction !== fromLeader.owner) {
+    return { success: false, log: ['Destination leader is not on your faction.'] };
+  }
+  const destLeader = state.entities.find(e => e.id === destPlayer.leaderId && e.alive);
+  if (!destLeader) {
+    return { success: false, log: ['Destination leader is no longer alive.'] };
+  }
+
+  const fromName = fromLeader.displayName;
+  const toName   = destPlayer.name ?? destLeader.displayName;
+  const fromOwnerId = fromLeader.ownerId;
+  survivor.ownerId = destOwnerId;
+
+  return {
+    success: true,
+    log: [`${fromName} sends ${survivor.displayName} to ${toName}.`],
+    cost: 0,
+    // Surface fields the replay/UI may want to consume on BOTH sender and
+    // recipient sides. The online event serializer's `result` allowlist must
+    // list each field that crosses the wire — see _serializeEvents in
+    // server/lobby.js (which keys off ev.type for the SENT_TO / SURVIVOR_RECEIVED
+    // additions). The resolver also reads these to fan out a paired
+    // SURVIVOR_RECEIVED event into the destination owner's bucket.
+    survivorId:    survivor.id,
+    survivorName:  survivor.displayName,
+    fromOwnerId,
+    fromOwnerName: fromName,
+    destOwnerId,
+    destOwnerName: toName,
+  };
 }
 
 // Thin dispatcher — heavy lifting for each ability lives in
@@ -1757,18 +1934,19 @@ export function executeGuard(state, actor) {
 
 export function executeSoundHorn(state, actor) {
   const log = [];
-  if (!actor.hasAbility('sound_horn')) {
-    return { success: false, log: ['Only a day-side leader can sound the horn.'] };
+  // Gated on the Horn key item (reusable — never consumed below).
+  if (!actor.hasItem('horn')) {
+    return { success: false, log: ['You need a horn to sound the call.'] };
   }
 
   const inv = getFaction('hero').getInventory(state);
-  const food = inv['food'] || 0;
+  const food = getItemCountOf(inv, 'food');
   if (food < 1) {
     return { success: false, log: ['Not enough food (need 1).'] };
   }
 
   // Deduct 1 food
-  inv['food'] -= 1;
+  removeItemInItems(inv, 'food', 1);
 
   // Reveal hero to all opponents for the rest of this round
   state.heroRevealedByHorn = true;

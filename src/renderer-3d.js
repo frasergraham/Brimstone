@@ -47,7 +47,10 @@ export const FOREST_TREES_MIN     = _FOREST_TREES_MIN;
 export const FOREST_TREES_MAX     = _FOREST_TREES_MAX;
 export const FOREST_DENSITY_SCALE = _FOREST_DENSITY_SCALE;
 export const scaledForestTreeCount = _scaledForestTreeCount;
-import { EntityType, isLeaderType, ADVANTAGE_CAP } from './entities.js';
+import {
+  EntityType, isLeaderType, ADVANTAGE_CAP,
+  factionHasMultipleLeaders, leaderColorFor,
+} from './entities.js';
 import {
   buildingRenderHex,
   buildingFacingYaw,
@@ -74,6 +77,11 @@ export {
 };
 import { Renderer } from './renderer.js';
 import { BLOCK_WORD_VARIANTS, pickBlockWord } from './combat-words.js';
+import {
+  FACE_TURN_MS, FACING_EPSILON,
+  bearingTo, shortestYawDelta, isWithinFacingEpsilon,
+  planConversationOrientation,
+} from './facing-math.js';
 export { BLOCK_WORD_VARIANTS };   // re-exported for existing importers (main.js)
 import { getFactionTheme } from './theme.js';
 import { hexKey, hexDistance, getNeighbors, hexRange } from './hex.js';
@@ -757,16 +765,20 @@ export function findBoneByName(skeleton, re) {
   return null;
 }
 
-/** Does this entity have a weapon equipped? Mirrors Entity.weapon (a truthy
- *  item-id string like 'sword'). Pure; exported for tests. */
+/** Does this entity have a weapon equipped? The equipped weapon is the `items`
+ *  entry tagged `{ equipped: true }` (only weapons ever carry that flag, so a
+ *  bare flag scan is sufficient — no ITEMS lookup). Pure; exported for tests. */
 export function entityHasWeapon(entity) {
-  return !!(entity && typeof entity.weapon === 'string' && entity.weapon.length > 0);
+  const items = entity?.items;
+  if (!items) return false;
+  for (const k in items) if (items[k]?.equipped) return true;
+  return false;
 }
 
 /** Is this entity mounted? Mirrors Entity.getMoveRange()'s horse check —
- *  `items['horse'] > 0`. Pure; exported for tests. */
+ *  `items['horse'].count > 0`. Pure; exported for tests. */
 export function entityIsMounted(entity) {
-  return !!(entity && entity.items && (entity.items[HORSE_ITEM_KEY] || 0) > 0);
+  return (entity?.items?.[HORSE_ITEM_KEY]?.count ?? 0) > 0;
 }
 
 /** Local transform for the weapon stand-in relative to its hand bone. A
@@ -1969,6 +1981,23 @@ export function computeLungeTarget(current, target, fraction = LUNGE_FRACTION, m
     dz *= s;
   }
   return { x: current.x + dx, z: current.z + dz };
+}
+
+/** Pure math: the yaw (radians, Babylon Y-axis) a unit at hex (fromCol,fromRow)
+ *  must adopt to face the centre of hex (toCol,toRow). Matches the project's
+ *  convention used by `_faceModelInstant` and the lunge slide:
+ *  `yaw = atan2(toX - fromX, toZ - fromZ)`.
+ *
+ *  Render-only — game state is never touched. Returns NaN if the two hexes
+ *  resolve to the same world point (caller should treat that as "no turn").
+ *  Visible for tests. */
+export function computeFacingYaw(fromCol, fromRow, toCol, toRow) {
+  const from = hexToWorld(fromCol, fromRow);
+  const to   = hexToWorld(toCol,   toRow);
+  const dx = to.x - from.x;
+  const dz = to.z - from.z;
+  if (dx === 0 && dz === 0) return NaN;
+  return Math.atan2(dx, dz);
 }
 
 /** Set `receiveShadows = true` on every (non-null) mesh in the iterable.
@@ -10088,8 +10117,9 @@ export class Renderer3D {
           outline.thick.isVisible = true;
         }
       } else {
-        // Recolour if the entity's owner colour changed (e.g. side-flip).
-        const ownerKey = unitHexOutlineColor(e);
+        // Recolour if the entity's owner colour changed (e.g. side-flip OR a
+        // leader joined/died and the MP multi-leader predicate flipped).
+        const ownerKey = unitHexOutlineColor(e, this.state.entities);
         if (outline.ownerKey !== ownerKey) {
           outline.thin.material  = this._thinOutlineMaterialFor(ownerKey);
           outline.thick.material = this._thickOutlineMaterialFor(ownerKey);
@@ -10129,7 +10159,7 @@ export class Renderer3D {
     const path    = unitHexOutlineRingPath().map(
       p => new BABYLON.Vector3(p.x, p.y, p.z),
     );
-    const ownerKey = unitHexOutlineColor(entity);
+    const ownerKey = unitHexOutlineColor(entity, this.state?.entities ?? null);
 
     const thin = BABYLON.MeshBuilder.CreateTube(`unitOutlineThin_${entity.id}`, {
       path,
@@ -10596,6 +10626,143 @@ export class Renderer3D {
     return null;
   }
 
+  /** Average world anchor of a set of entity ids (skips ids with no resolvable
+   *  position). Returns null when none resolve. Used to point a speaker at the
+   *  centroid of the rest of a conversation group. */
+  _centroidWorld(ids) {
+    if (!Array.isArray(ids) || ids.length === 0) return null;
+    let sx = 0, sz = 0, n = 0;
+    for (const id of ids) {
+      const p = this._entityWorldPos(id);
+      if (p) { sx += p.x; sz += p.z; n++; }
+    }
+    return n > 0 ? { x: sx / n, z: sz / n } : null;
+  }
+
+  /** Set a model's yaw instantly, cancelling any in-flight facing tween first
+   *  so a move/lunge re-assert wins cleanly over a presentation-time turn.
+   *  Cone-only tokens (no clone) are rotationally symmetric — nothing to do. */
+  _faceModelInstant(standee, yaw) {
+    const mesh = standee?.paladinClone?.mesh;
+    if (!mesh) return;
+    this._scene?.stopAnimation(mesh);
+    mesh.rotation.y = yaw;
+  }
+
+  /** Smoothly yaw an entity's model to face a world-XZ point over a short
+   *  interpolation (FACE_TURN_MS, scaled by playback speed). Render-only — never
+   *  touches game state. Resolves to `false` (no animation played) when:
+   *    • Babylon isn't ready, the entity has no live standee, or its model
+   *      hasn't loaded yet (still summoning / cone-only token) — safe no-op;
+   *    • the target coincides with the model's own position (degenerate dir);
+   *    • the model already faces within FACING_EPSILON of the target.
+   *  Otherwise returns the tracked turn Promise (resolves `true` on settle).
+   *  Cancels any prior facing tween on the same model so successive turns and
+   *  move/lunge instant-yaws don't fight. */
+  faceEntityTowardPoint(entityId, targetX, targetZ, durMs = FACE_TURN_MS) {
+    if (!this._scene || !this._babylon) return Promise.resolve(false);
+    const standee = this._entityStandees?.get(entityId);
+    const mesh = standee?.paladinClone?.mesh;
+    const pos = standee?.plane?.position;
+    if (!mesh || !pos) return Promise.resolve(false);
+    const desired = bearingTo(pos.x, pos.z, targetX, targetZ);
+    if (desired === null) return Promise.resolve(false);   // degenerate dir
+    const from = mesh.rotation.y;
+    // Shortest signed turn into (-π, π] so a wrap-around never spins the long way.
+    const delta = shortestYawDelta(from, desired);
+    if (isWithinFacingEpsilon(delta)) return Promise.resolve(false);
+    const BABYLON = this._babylon;
+    this._scene.stopAnimation(mesh);
+    const speedMul = this._playbackSpeedMul ?? 1.0;
+    const FRAMES = Math.max(1, Math.round(durMs * speedMul * 60 / 1000));
+    const ease = new BABYLON.CubicEase();
+    ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
+    const anim = new BABYLON.Animation('faceY', 'rotation.y', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    anim.setKeys([{ frame: 0, value: from }, { frame: FRAMES, value: from + delta }]);
+    anim.setEasingFunction(ease);
+    const promise = new Promise(resolve => {
+      this._scene.beginDirectAnimation(mesh, [anim], 0, FRAMES, false, 1, () => resolve(true));
+    });
+    return this._trackAnim(promise);
+  }
+
+  /** Smoothly turn `entityId`'s model to face another entity's current anchor.
+   *  No-op (resolved `false`) when the target has no resolvable position. */
+  faceEntityTowardEntity(entityId, targetId, durMs = FACE_TURN_MS) {
+    const t = this._entityWorldPos(targetId);
+    if (!t) return Promise.resolve(false);
+    return this.faceEntityTowardPoint(entityId, t.x, t.z, durMs);
+  }
+
+  /** Conversation choreography: turn the active speaker to face the rest of the
+   *  group and every listener to face the speaker, with short interpolated
+   *  turns. No-op for a lone participant (a "character vs the world" / narration
+   *  beat) or when the speaker can't be resolved. Returns a Promise that settles
+   *  once every turn completes. Render-only. */
+  orientConversation(speakerId, participantIds, durMs = FACE_TURN_MS) {
+    if (speakerId == null || !Array.isArray(participantIds)) return Promise.resolve();
+    const others = participantIds.filter(id => id != null && id !== speakerId);
+    if (others.length === 0) return Promise.resolve();   // single-speaker / "the world" beat
+    const turns = [];
+    const c = this._centroidWorld(others);
+    if (c) turns.push(this.faceEntityTowardPoint(speakerId, c.x, c.z, durMs));
+    for (const id of others) turns.push(this.faceEntityTowardEntity(id, speakerId, durMs));
+    return Promise.all(turns);
+  }
+
+  /** Snapshot the current model yaw of each given entity, so a presentation
+   *  pass (a conversation, a cinematic pose) can RESTORE the prior facing
+   *  afterward via `restoreFacings`. Skips ids whose model isn't loaded —
+   *  they had no observable facing to restore. Returns a plain object so
+   *  the caller can stash it in a local variable. Render-only. */
+  captureFacings(entityIds) {
+    const out = {};
+    if (!Array.isArray(entityIds)) return out;
+    for (const id of entityIds) {
+      if (id == null) continue;
+      const standee = this._entityStandees?.get(id);
+      const mesh = standee?.paladinClone?.mesh;
+      if (mesh) out[id] = mesh.rotation.y;
+    }
+    return out;
+  }
+
+  /** Smoothly turn each entity back to the yaw recorded by an earlier
+   *  `captureFacings` call. Used to clear a conversation's pose so the units
+   *  don't keep staring at each other across the map after the card dismisses
+   *  (a subsequent move/lunge would override anyway, but a unit that doesn't
+   *  act would stay frozen mid-look). No-op for entries whose model isn't
+   *  loaded or whose yaw is already within FACING_EPSILON of the recorded
+   *  value. Returns a Promise that settles once every turn completes. */
+  restoreFacings(snapshot, durMs = FACE_TURN_MS) {
+    if (!snapshot || typeof snapshot !== 'object') return Promise.resolve();
+    const turns = [];
+    for (const [rawId, yaw] of Object.entries(snapshot)) {
+      if (!Number.isFinite(yaw)) continue;
+      // Try id as-stored, then coerced — entity ids in this codebase are
+      // sometimes strings ('e1') and sometimes numbers depending on map type.
+      let standee = this._entityStandees?.get(rawId);
+      let key = rawId;
+      if (!standee) {
+        const num = Number(rawId);
+        if (Number.isFinite(num)) {
+          standee = this._entityStandees?.get(num);
+          key = num;
+        }
+      }
+      const mesh = standee?.paladinClone?.mesh;
+      const pos = standee?.plane?.position;
+      if (!mesh || !pos) continue;
+      // Project a unit vector at the recorded yaw and ride
+      // `faceEntityTowardPoint` so we reuse its tween-cancel + epsilon-skip.
+      const tx = pos.x + Math.sin(yaw);
+      const tz = pos.z + Math.cos(yaw);
+      turns.push(this.faceEntityTowardPoint(key, tx, tz, durMs));
+    }
+    return Promise.all(turns).then(() => {});
+  }
+
   /** Ease the camera to FRAME one or more entities — fit their collective
    *  bounds to the viewport at the HIGHEST allowed zoom-in (closest the camera
    *  is permitted to get, i.e. `lowerRadiusLimit`). A single entity frames at
@@ -10771,6 +10938,9 @@ export class Renderer3D {
     if (this._scene) {
       for (const standee of this._entityStandees.values()) {
         this._scene.stopAnimation(standee.plane);
+        // Also halt any in-flight facing tween (lives on the clone mesh, not the
+        // plane) so a turn-to-face can't bleed into the next planning cycle.
+        if (standee.paladinClone?.mesh) this._scene.stopAnimation(standee.paladinClone.mesh);
       }
     }
     this._activeMoveIds.clear();
@@ -10852,7 +11022,7 @@ export class Renderer3D {
     // sideways/backwards. Witch/zombie cone tokens are rotationally
     // symmetric, so we only yaw the paladin clone (when present).
     if (standee.paladinClone?.mesh && (toX !== fromX || toZ !== fromZ)) {
-      standee.paladinClone.mesh.rotation.y = Math.atan2(toX - fromX, toZ - fromZ);
+      this._faceModelInstant(standee, Math.atan2(toX - fromX, toZ - fromZ));
     }
 
     // Total polyline length in world units — for a 1-hex hop this is
@@ -10992,7 +11162,7 @@ export class Renderer3D {
     // Face the blocker for the WHOLE trip — the model keeps facing the obstacle
     // and retreats backward, instead of spinning around to walk home.
     if (standee.paladinClone?.mesh && (edgeX !== startX || edgeZ !== startZ)) {
-      standee.paladinClone.mesh.rotation.y = Math.atan2(edgeX - startX, edgeZ - startZ);
+      this._faceModelInstant(standee, Math.atan2(edgeX - startX, edgeZ - startZ));
     }
 
     // Match the walk clip's stride to ground speed (mirror addMoveAnim) so feet
@@ -11125,7 +11295,7 @@ export class Renderer3D {
     // Face the lunge direction (same model-yaw logic as MOVE) — yaw toward
     // the actual motion vector (current → lunge end), not the hex centres.
     if (standee.paladinClone?.mesh && (lungeX !== startX || lungeZ !== startZ)) {
-      standee.paladinClone.mesh.rotation.y = Math.atan2(lungeX - startX, lungeZ - startZ);
+      this._faceModelInstant(standee, Math.atan2(lungeX - startX, lungeZ - startZ));
     }
 
     // Throw the punch clip on top of the slide so the strike reads as a strike,
@@ -11199,8 +11369,8 @@ export class Renderer3D {
       ? (standee.moveDest ?? null) : null;
     this._scene.stopAnimation(standee.plane);
     this._activeLungeIds.add(entityId);
-    if (standee.paladinClone?.mesh) {
-      standee.paladinClone.mesh.rotation.y = Math.atan2(toX - startX, toZ - startZ);
+    if (standee.paladinClone?.mesh && (toX !== startX || toZ !== startZ)) {
+      this._faceModelInstant(standee, Math.atan2(toX - startX, toZ - startZ));
     }
     const speedMul = this._playbackSpeedMul ?? 1.0;
     const FRAMES = Math.max(1, Math.round(durMs * speedMul * 60 / 1000));
@@ -11236,7 +11406,15 @@ export class Renderer3D {
    *  All standee homes are stashed so `returnAllLungeAnims()` slides everyone
    *  back to their starting hex. Used by BOTH cinematic and fast/vfast — the
    *  readout/floater presentation differs by speed; the spatial choreography
-   *  is identical, with `durMs` compressed in the faster modes. */
+   *  is identical, with `durMs` compressed in the faster modes.
+   *
+   *  G2 facing — after positioning kicks off, every combatant pivots to face
+   *  the battle: defender→attacker, attack-side allies→defender, defense-side
+   *  allies→attacker. The `_animateStandeeTo` slide INSTANT-yaws each ally
+   *  toward its slide destination (edge midpoint), so without this follow-up
+   *  the allies would freeze facing the edge they walk to rather than the
+   *  combatant they're ganging up on. The tween is fire-and-forget and
+   *  cancels the instant-yaw cleanly via `_faceModelTween`'s stopAnimation. */
   applyCombatPositioning({ defender, attacker = null, attackAllies = [], defenseAllies = [] } = {}, opts = {}) {
     if (!this._scene || !this._babylon || !defender) return;
     const durMs = Number.isFinite(opts.durMs) ? opts.durMs : LUNGE_ANIM_MS;
@@ -11247,6 +11425,26 @@ export class Renderer3D {
     }
     for (const a of plan.defenderAllies) {
       if (a.moves) this._animateStandeeTo(a.id, a.toX, a.toZ, durMs);
+    }
+    // Facing pass — render-only, never touches game state. Skipped silently
+    // when the helper isn't available (mocked / partial test instance).
+    if (typeof this.faceEntityTowardEntity !== 'function') return;
+    if (attacker?.id != null) {
+      // Defender faces the attacker so the strike reads as eye-contact, not
+      // a stab in the back. `_animateStandeeTo` skips the slide+instant-yaw
+      // when the defender is already at its hex centre, so this tween is the
+      // ONLY source of facing for the common "defender already centred" path.
+      this.faceEntityTowardEntity(defender.id, attacker.id);
+    }
+    for (const a of plan.attackerAllies) {
+      if (!a.moves) continue;
+      this.faceEntityTowardEntity(a.id, defender.id);
+    }
+    if (attacker?.id != null) {
+      for (const a of plan.defenderAllies) {
+        if (!a.moves) continue;
+        this.faceEntityTowardEntity(a.id, attacker.id);
+      }
     }
   }
 
@@ -11473,15 +11671,28 @@ export class Renderer3D {
   addFlash(col, row, text, _color, durationMs = 900, fontScale = 0.85, textColor = null) {
     if (!this._scene || !this._babylon) return;
     if (!text) return; // 2D used empty-text flashes for hex tints; tint goes through addAttackAnim now
-    this._spawnFloatingText(col, row, String(text), textColor ?? '#ffe0a0', durationMs, fontScale);
+    // `register: true` makes this floater clearable by clearFlashes() — loot,
+    // fortify, and ability flashes are wiped before each explore step so
+    // successive explores in a round don't pile their loot labels on screen.
+    // (The 2D renderer cleared `this._flashes`; the 3D path tracks live ones.)
+    this._spawnFloatingText(col, row, String(text), textColor ?? '#ffe0a0', durationMs, fontScale, { register: true });
   }
 
   clearFlashes() {
-    if (!this._scene) return;
-    // Floating-text meshes manage their own lifecycle through Babylon
-    // animations; if anyone wants to brute-force clear them mid-round, they
-    // can iterate the scene's transient floater group. For now, no-op — the
-    // floaters expire on their own ~700ms after spawn and they're cosmetic.
+    // Dispose every live "flash" floater (loot / fortify / ability — anything
+    // spawned via addFlash) immediately. Combat HP-delta and death floaters
+    // (addHpChangeFlash, variant 'damage') and node-discovery labels are NOT
+    // registered, so they ride out their own rise/fade untouched.
+    //
+    // Called before each explore step (main.js) so successive explores in a
+    // round don't stack their loot labels — and between rounds via
+    // clearAnimations(). This used to be a no-op here, which is why the
+    // 2D-only duplicate-floater fix (commit fca7c0f) never took effect in the
+    // shipping 3D renderer (t-4e9b1bf0).
+    if (!this._flashFloaters || this._flashFloaters.size === 0) return;
+    // Snapshot — each cleanup() deletes itself from the set as it runs.
+    for (const cleanup of [...this._flashFloaters]) cleanup(true);
+    this._flashFloaters.clear();
   }
 
   _spawnFloatingText(col, row, text, hexColor = '#ffe0a0', durationMs = 700, fontScale = 1, opts = {}) {
@@ -11572,28 +11783,41 @@ export class Renderer3D {
       if (protectedStandee) protectedStandee._pendingDespawn = true;
     }
 
-    const promise = new Promise(resolve => {
-      this._scene.beginDirectAnimation(plane, [animPos, animFade], 0, FRAMES_FLOAT, false, 1, () => {
-        releaseFloaterSlot(slotsByHex, slotKey, stackSlot);
-        plane.dispose();
-        mat.dispose();
-        tex.dispose();
-        if (protectedStandee) {
-          protectedStandee._pendingDespawn = false;
-          // If the entity is no longer alive (or no longer in state), dispose
-          // the standee now — _syncEntityStandees deferred its cleanup while
-          // the floater rose. Mirrors the dispose path in _syncEntityStandees.
-          const stillAlive = this.state?.entities?.some(e => e.id === protectEntityId && e.alive);
-          if (!stillAlive && this._entityStandees.get(protectEntityId) === protectedStandee) {
-            this._clearXrayGhostFor?.(protectEntityId, protectedStandee);
-            this._disposePaladinClone?.(protectedStandee);
-            protectedStandee.plane?.dispose?.();
-            this._entityStandees.delete(protectEntityId);
-          }
+    // Dispose this floater's resources exactly once — fired either by the rise
+    // animation finishing naturally (`cleanup(false)`) or by clearFlashes()
+    // yanking a registered flash early (`cleanup(true)` stops the still-running
+    // animation first so a disposed plane is never animated). The `_disposed`
+    // guard makes the two paths idempotent if both happen to fire.
+    const register = opts.register === true;
+    let _disposed = false;
+    let _resolve;
+    const promise = new Promise(r => { _resolve = r; });
+    const cleanup = (early) => {
+      if (_disposed) return;
+      _disposed = true;
+      if (register) this._flashFloaters?.delete(cleanup);
+      if (early) this._scene?.stopAnimation?.(plane);
+      releaseFloaterSlot(slotsByHex, slotKey, stackSlot);
+      plane.dispose();
+      mat.dispose();
+      tex.dispose();
+      if (protectedStandee) {
+        protectedStandee._pendingDespawn = false;
+        // If the entity is no longer alive (or no longer in state), dispose
+        // the standee now — _syncEntityStandees deferred its cleanup while
+        // the floater rose. Mirrors the dispose path in _syncEntityStandees.
+        const stillAlive = this.state?.entities?.some(e => e.id === protectEntityId && e.alive);
+        if (!stillAlive && this._entityStandees.get(protectEntityId) === protectedStandee) {
+          this._clearXrayGhostFor?.(protectEntityId, protectedStandee);
+          this._disposePaladinClone?.(protectedStandee);
+          protectedStandee.plane?.dispose?.();
+          this._entityStandees.delete(protectEntityId);
         }
-        resolve();
-      });
-    });
+      }
+      _resolve();
+    };
+    if (register) (this._flashFloaters ??= new Set()).add(cleanup);
+    this._scene.beginDirectAnimation(plane, [animPos, animFade], 0, FRAMES_FLOAT, false, 1, () => cleanup(false));
     return this._trackAnim(promise);
   }
 
@@ -11797,6 +12021,7 @@ export class Renderer3D {
         portraitRect: portraitSource.hasPortrait ? portraitSource.rect : null,
         hp:    live?.hp ?? 0,
         maxHp: live?.maxHp ?? 1,
+        ownerColor: unitIconOwnerColor(live ?? entity, this.state?.entities ?? null),
       });
     };
     const repaintIcon = (value, color) => {
@@ -12027,6 +12252,7 @@ export class Renderer3D {
       portraitImg:  portraitSource.hasPortrait ? portraitSource.img  : null,
       portraitRect: portraitSource.hasPortrait ? portraitSource.rect : null,
       hp, maxHp,
+      ownerColor: unitIconOwnerColor(entity, this.state?.entities ?? null),
     });
     paintIconCombatReadout(iconEntry.tex.getContext(), {
       size:  UNIT_ICON_TEX_SIZE,
@@ -12598,19 +12824,27 @@ export class Renderer3D {
       const infoSig = info
         ? `${info.hitPct ?? ''}|${info.crushPct ?? ''}|${info.attackCount ?? 0}`
         : '';
+      // MP multi-leader colour propagation: only paints a rim + tints the
+      // portrait background when the faction has > 1 live leader (in solo /
+      // single-leader play this returns null and the legacy look is byte-
+      // identical). Mid-game leader joins/deaths flip the predicate and the
+      // signature change forces a repaint.
+      const ownerColor = unitIconOwnerColor(e, this.state.entities);
       if (entry.lastHp === e.hp
           && entry.lastMax === e.maxHp
           && entry.lastAssetId === assetId
           && entry.lastHadPortrait === portraitSource.hasPortrait
-          && entry.lastInfoSig === infoSig) {
+          && entry.lastInfoSig === infoSig
+          && entry.lastOwnerColor === ownerColor) {
         continue;
       }
-      this._repaintUnitIconBadge(entry, e, portraitSource, info);
+      this._repaintUnitIconBadge(entry, e, portraitSource, info, ownerColor);
       entry.lastHp           = e.hp;
       entry.lastMax          = e.maxHp;
       entry.lastAssetId      = assetId;
       entry.lastHadPortrait  = portraitSource.hasPortrait;
       entry.lastInfoSig      = infoSig;
+      entry.lastOwnerColor   = ownerColor;
     }
     // Dispose badges for entities that no longer exist or just died.
     // G1 v2: skip entities mid-combat-readout — the readout drives the icon
@@ -12682,6 +12916,11 @@ export class Renderer3D {
       plane, mat, tex,
       leader: !!standee.leader,
       lastHp: -1, lastMax: -1, lastAssetId: '__pending__', lastInfoSig: '__pending__',
+      // Tracks the last owner-rim colour painted so the diff in
+      // _syncEntityIconBillboards repaints when a leader joins/dies and the
+      // MP multi-leader predicate flips. '__pending__' guarantees the first
+      // tick repaints regardless of solo vs MP.
+      lastOwnerColor: '__pending__',
       // Track whether the last paint actually drew the portrait sprite. The
       // race we're guarding against: badge created before `loadImages()`
       // resolves → first paint goes out with `hasPortrait=false` (gray
@@ -12695,7 +12934,7 @@ export class Renderer3D {
     return entry;
   }
 
-  _repaintUnitIconBadge(entry, entity, portraitSource, info = null) {
+  _repaintUnitIconBadge(entry, entity, portraitSource, info = null, ownerColor = null) {
     const ctx = entry.tex.getContext();
     paintUnitIconBadge(ctx, {
       size:  UNIT_ICON_TEX_SIZE,
@@ -12705,6 +12944,7 @@ export class Renderer3D {
       hp: entity.hp,
       maxHp: entity.maxHp,
       info,
+      ownerColor,
     });
     entry.tex.update();
   }
@@ -13103,7 +13343,7 @@ export class Renderer3D {
       const glow = !!ov.style?.glow;
       let rgb, alpha;
       if (entity) {
-        rgb = cssHexToRgb01(unitHexOutlineColor(entity));
+        rgb = cssHexToRgb01(unitHexOutlineColor(entity, this.state?.entities ?? null));
         alpha = 1;
       } else {
         const css = ov.style?.color || (glow ? '#f5c842' : 'rgba(255,255,255,0.3)');
@@ -13239,7 +13479,7 @@ export class Renderer3D {
       if (!step.arrow) continue;
       const { entityId, fromCol, fromRow, toCol, toRow } = step.arrow;
       const ent = this.state?.entities?.find?.(e => e.id === entityId);
-      const ownerColor = entityBaseColor(ent ?? {});
+      const ownerColor = entityBaseColor(ent ?? {}, this.state?.entities ?? null);
       const stepNumber = step.stepNumber ?? 0;
       const id = `plan-move-${entityId}-${stepNumber}`;
       this.setOverlay(id, makeOverlay({
@@ -15566,9 +15806,24 @@ export function entityStandeeWorldPosition(col, row, radius = HEX_RADIUS_WORLD) 
 }
 
 /** Choose the base disc colour for an entity. Mirrors `_ownerColorFor` so it
- *  can be unit-tested without instantiating the renderer. */
-export function entityBaseColor(entity) {
+ *  can be unit-tested without instantiating the renderer.
+ *
+ *  Multiplayer / multi-leader propagation: when `entityList` is passed AND the
+ *  entity's faction has more than one live leader, every unit owned by a given
+ *  leader (via `entity.ownerId`) takes its OWNING LEADER's per-player colour
+ *  rather than the faction primary — so allied survivors / minions / golems
+ *  are distinguishable by player at a glance. In solo / single-leader play the
+ *  predicate is false and behaviour is byte-identical to the legacy lookup.
+ *
+ *  `entity.color` set on the entity itself (the leader's own per-player tint)
+ *  still wins outright — that branch is hit before the propagation lookup. */
+export function entityBaseColor(entity, entityList = null) {
   if (entity?.color) return entity.color;
+  if (entityList && entity?.owner && entity?.ownerId
+      && factionHasMultipleLeaders(entityList, entity.owner)) {
+    const leaderColor = leaderColorFor(entityList, entity.ownerId);
+    if (leaderColor) return leaderColor;
+  }
   if (entity?.owner) {
     const theme = getFactionTheme(entity.owner);
     if (theme?.primary) return theme.primary;
@@ -15650,9 +15905,26 @@ export function unitHexOutlineRingPath(
 
 /** Resolve the owner colour for a unit's hex outline. Pure delegation to
  *  `entityBaseColor` so the outline and standee token are guaranteed to use
- *  the same tint — exported so tests can lock the linkage in place. */
-export function unitHexOutlineColor(entity) {
-  return entityBaseColor(entity);
+ *  the same tint — exported so tests can lock the linkage in place. The
+ *  optional `entityList` enables the MP multi-leader colour propagation
+ *  (see `entityBaseColor`); omitting it preserves the legacy lookup. */
+export function unitHexOutlineColor(entity, entityList = null) {
+  return entityBaseColor(entity, entityList);
+}
+
+/** Resolve the owning-leader colour for the floating unit-icon billboard
+ *  outer rim + portrait background. Returns the owning leader's colour ONLY
+ *  in the qualifying MP scenario (faction has > 1 live leader) — in solo /
+ *  single-leader play returns `null` so the badge stays in its legacy look
+ *  (no rim, neutral cream portrait background). Pure / DOM-free / exported
+ *  for tests. */
+export function unitIconOwnerColor(entity, entityList) {
+  if (!entity || !entity.owner) return null;
+  if (!Array.isArray(entityList) || entityList.length === 0) return null;
+  if (!factionHasMultipleLeaders(entityList, entity.owner)) return null;
+  // Leader takes its own colour; non-leaders walk to their owning leader.
+  if (isLeaderType(entity.type) && entity.color) return entity.color;
+  return leaderColorFor(entityList, entity.ownerId);
 }
 
 /** Derive a darker / desaturated variant of a player colour for dead-unit
@@ -17719,6 +17991,12 @@ export const RUN_HEX_MS = 750;
  *  and is kept short so the attack reads as a quick snap, not a glide. */
 export const LUNGE_ANIM_MS = 400;
 
+// Facing constants + pure helpers live in `./facing-math.js` so unit tests can
+// verify the rotation math without dragging Babylon (a heavy WebGL/UMD dep)
+// into the Node test process. Re-exported here so existing import paths
+// (which read these as renderer-3d exports) keep working.
+export { FACE_TURN_MS, FACING_EPSILON };
+
 /** Real-time the punch clip is compressed to play across (ms) when it
  *  accompanies a lunge. Picked a touch longer than LUNGE_ANIM_MS=400 so the
  *  strike's contact frame lands near the end of the fast approach (~75% of
@@ -18050,6 +18328,13 @@ export const UNIT_ICON_TEX_SIZE   = 256;
  *  to read as a clean line at the icon edge without crowding the portrait.
  *  Halved from the old 0.14 per operator request for a thinner HP border. */
 export const UNIT_ICON_RING_THICKNESS_FRAC = 0.07;
+/** Owning-leader colour rim thickness (fraction of icon texture half-size).
+ *  Drawn just inside the plane edge so the badge reads as an owner-tinted
+ *  rim around the HP ring. Slightly thicker than the HP ring so it carries
+ *  the colour at zoom-out distances where the HP arc reads as a thin hairline.
+ *  Painted only when `paintUnitIconBadge` is called with an `ownerColor`
+ *  (MP multi-leader propagation only — see `entityBaseColor`). */
+export const UNIT_ICON_OWNER_RIM_THICKNESS_FRAC = 0.09;
 /** Plane material alpha — fully opaque. Transparency was tried at 0.8 but
  *  reads as washed-out on the bright icon textures. */
 export const UNIT_ICON_PLANE_ALPHA = 1.0;
@@ -19079,6 +19364,11 @@ export function paintUnitIconBadge(ctx, opts) {
     portraitRect = null, // { x, y, size } when drawing from a tilemap
     hp,
     maxHp,
+    // Optional owning-leader colour for the MP multi-leader propagation:
+    // when set, an outer rim ring is drawn just inside the plane edge AND
+    // the portrait disc's background fills with `ownerColor` instead of the
+    // neutral cream. Null / undefined preserves the legacy single-leader look.
+    ownerColor = null,
     // Per-unit planning info (unit info card). All optional:
     //   hitPct / crushPct — attack-odds percentages (0–100) drawn
     //     right-justified in the left margin; crush omitted when 0/null.
@@ -19091,12 +19381,32 @@ export function paintUnitIconBadge(ctx, opts) {
   const cx = W / 2;
   const cy = H / 2;
   const ringThickness = Math.max(2, Math.round(size * UNIT_ICON_RING_THICKNESS_FRAC));
-  // Outer ring radius is just inside the plane edge; inner radius is the
-  // icon disc radius. The icon image is clipped to the inner disc.
-  const outerR = (size / 2) - 2;
+  // Owner rim sits just inside the plane edge when present; the HP ring
+  // shifts inward by (ownerRimThickness + small gap) so the two read as
+  // nested bands rather than overlapping.
+  const hasOwnerRim = !!ownerColor;
+  const ownerRimThickness = hasOwnerRim
+    ? Math.max(2, Math.round(size * UNIT_ICON_OWNER_RIM_THICKNESS_FRAC))
+    : 0;
+  const ownerRimGap = hasOwnerRim ? Math.max(1, Math.round(size * 0.012)) : 0;
+  // Outer ring radius (HP arc) sits inside the plane edge minus the owner
+  // rim; inner radius is the icon disc radius. The icon image is clipped to
+  // the inner disc.
+  const outerR = (size / 2) - 2 - ownerRimThickness - ownerRimGap;
   const innerR = outerR - ringThickness;
 
   ctx.clearRect(0, 0, W, H);
+
+  // Outer owner-colour rim (only in qualifying MP scenarios).
+  if (hasOwnerRim) {
+    const rimRadius = (size / 2) - 2 - ownerRimThickness / 2;
+    ctx.lineWidth = ownerRimThickness;
+    ctx.strokeStyle = ownerColor;
+    ctx.lineCap = 'butt';
+    ctx.beginPath();
+    ctx.arc(cx, cy, rimRadius, 0, Math.PI * 2);
+    ctx.stroke();
+  }
 
   // Dark track behind the arc — so a low-HP unit still shows a full ring
   // outline against the bright terrain.
@@ -19119,15 +19429,16 @@ export function paintUnitIconBadge(ctx, opts) {
     ctx.stroke();
   }
 
-  // Icon disc: portrait clipped to a circle. Neutral pale fill behind the
-  // image so the disc reads as a solid sticker even before the portrait
-  // pixels paint (and as a fallback when no portrait is available).
+  // Icon disc: portrait clipped to a circle. Background fills with the owning
+  // leader's colour in MP multi-leader play (so the disc reads as the player's
+  // colour before/behind the portrait image), and falls back to the legacy
+  // neutral cream in solo / single-leader play.
   ctx.save();
   ctx.beginPath();
   ctx.arc(cx, cy, innerR, 0, Math.PI * 2);
   ctx.closePath();
   ctx.clip();
-  ctx.fillStyle = 'rgba(225,220,210,1)';
+  ctx.fillStyle = hasOwnerRim ? ownerColor : 'rgba(225,220,210,1)';
   ctx.fillRect(0, 0, W, H);
   if (portraitImg && portraitRect) {
     ctx.drawImage(
@@ -19543,7 +19854,7 @@ export function planArrowsSignature(steps, entities) {
     const ids = [...seenIds].sort();
     for (const id of ids) {
       const ent = entities.find(e => e?.id === id);
-      out += `${id}=${entityBaseColor(ent ?? {})}|`;
+      out += `${id}=${entityBaseColor(ent ?? {}, entities)}|`;
     }
   }
   return out;

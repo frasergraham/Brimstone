@@ -236,11 +236,19 @@ export function compileTurnBattlePairs(steps, finalEntities, ResEventType, PlanA
  * survivor the opponent surfaced is information the player shouldn't get. We
  * gate both on `humanFaction` (`ev.faction === humanFaction`); null counts all.
  *
+ * `nodeSpawnedSurvivors` are night-only power-node procs that happen in
+ * `endRound()` rather than in a step's events — they ride on `state` and need
+ * the same faction gate so the opposing player doesn't see a "🧑 Hannah"
+ * discovery on their wrap-up (today they only spawn for hero, so the gate is
+ * `entry.faction === humanFaction`; null counts all, matching loot/explore).
+ *
  * @param {Array}  steps        — StepRecord[] (heroEvents/witchEvents or playerEvents).
  * @param {string|null} humanFaction — 'hero' | 'witch' | null (null ⇒ count all).
+ * @param {Array} [nodeSpawnedSurvivors] — encounter objects from `state.nodeSpawnedSurvivors`;
+ *   each entry's `faction` field gates visibility.
  * @returns {{ discoveries: Array, loot: string[] }}
  */
-export function collectTurnFinds(steps, humanFaction = null) {
+export function collectTurnFinds(steps, humanFaction = null, nodeSpawnedSurvivors = []) {
   const discoveries = [];
   const loot = [];
   for (const step of steps ?? []) {
@@ -260,6 +268,10 @@ export function collectTurnFinds(steps, humanFaction = null) {
         if (item && item !== 'nothing') loot.push(item);
       }
     }
+  }
+  for (const s of nodeSpawnedSurvivors ?? []) {
+    if (humanFaction && s?.faction && s.faction !== humanFaction) continue;
+    discoveries.push(s);
   }
   return { discoveries, loot };
 }

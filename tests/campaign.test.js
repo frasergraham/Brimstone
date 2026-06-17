@@ -4,7 +4,7 @@ import { describe, test, beforeEach } from 'node:test';
 import { legacyTileType } from '../src/tiles.js';
 import assert from 'node:assert/strict';
 import { GameState, Phase, phaseForRound, getCycleLength, DEFAULT_CYCLE_PHASES } from '../src/game.js';
-import { EntityType, createMinion, createZombie, createWoodGolem, createSurvivor, markRosterUsedByName, resetRoster, SURVIVOR_ROSTER } from '../src/entities.js';
+import { EntityType, createMinion, createZombie, createWoodGolem, createSurvivor, markRosterUsedByName, resetRoster, SURVIVOR_ROSTER, getEquippedWeaponIdOf } from '../src/entities.js';
 import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import {
   Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves,
@@ -699,7 +699,7 @@ describe('Campaign class', () => {
     const list = c.getMissionList();
     assert.equal(list.length, 8);
     assert.ok(list[0].available);      // tutorial — no prereqs
-    assert.ok(!list[1].available);     // prologue (The Awakening) — needs tutorial
+    assert.ok(list[1].available);      // prologue (The Awakening) — no prereqs either
     assert.ok(!list[2].available);     // gathering_survivors — needs prologue
     assert.ok(!list[3].available);     // first_night — needs gathering_survivors
     assert.ok(!list[4].available);     // river_crossing — needs first_night
@@ -712,20 +712,21 @@ describe('Campaign class', () => {
     const c = new Campaign(hollowDef);
     const list = c.getMissionList();
     assert.ok(list[0].visible);        // tutorial — playable now
-    assert.ok(list[1].visible);        // prologue — one step away (tutorial is playable)
-    assert.ok(!list[2].visible);       // gathering_survivors — two steps away, hidden
+    assert.ok(list[1].visible);        // prologue — also playable now (no prereqs)
+    assert.ok(list[2].visible);        // gathering_survivors — one step away from prologue
     for (let i = 3; i < list.length; i++) {
       assert.ok(!list[i].visible, `${list[i].id} should be hidden on a fresh save`);
     }
 
-    // Completing the tutorial promotes The Awakening to playable and reveals the
-    // next mission after it.
-    c.completedMissions.add('tutorial');
+    // Completing The Awakening promotes gathering_survivors to playable and
+    // reveals the next mission after it.
+    c.completedMissions.add('prologue');
     const list2 = c.getMissionList();
-    assert.ok(list2[0].visible && list2[0].completed); // tutorial — completed, still shown
-    assert.ok(list2[1].available && list2[1].visible); // prologue — now playable
-    assert.ok(list2[2].visible && !list2[2].available);// gathering_survivors — now one step away
-    assert.ok(!list2[3].visible);                      // first_night — still hidden
+    assert.ok(list2[0].visible && list2[0].available); // tutorial — still playable
+    assert.ok(list2[1].visible && list2[1].completed); // prologue — completed
+    assert.ok(list2[2].visible && list2[2].available); // gathering_survivors — now playable
+    assert.ok(list2[3].visible && !list2[3].available);// first_night — now one step away
+    assert.ok(!list2[4].visible);                      // river_crossing — still hidden
   });
 
   test('getMissionDef looks up from campaignDef missions', () => {
@@ -908,15 +909,15 @@ describe('snapshotSurvivor', () => {
       ability: 'brawler', abilityLabel: 'Brawler',
       color: '#ff0000',
       hp: 3, maxHp: 4, attack: 2, defense: 1,
-      weapon: 'sword', items: { herbs: 1 },
+      items: { sword: { count: 1, equipped: true }, herbs: { count: 1 } },
     };
     const snap = snapshotSurvivor(entity);
     assert.equal(snap.name, 'Test');
     assert.equal(snap.hp, 3);
-    assert.equal(snap.weapon, 'sword');
-    assert.deepEqual(snap.items, { herbs: 1 });
-    entity.items.herbs = 99;
-    assert.equal(snap.items.herbs, 1);
+    assert.equal(getEquippedWeaponIdOf(snap.items), 'sword');
+    assert.deepEqual(snap.items, { sword: { count: 1, equipped: true }, herbs: { count: 1 } });
+    entity.items.herbs.count = 99;
+    assert.equal(snap.items.herbs.count, 1, 'snapshot deep-copies items');
   });
 });
 
@@ -2015,13 +2016,13 @@ describe('Mission failure preserves party state', () => {
       won: true,
       survivors: [{ name: 'Alice', title: 'Scout', bio: '', ability: null, abilityLabel: null, color: '#fff', hp: 1, maxHp: 3, attack: 1, defense: 1, weapon: null, items: {} }],
       resources: { wood: 1 },
-      heroStats: { hp: 80, maxHp: 98, attack: 2, defense: 2, weapon: 'axe', items: {} },
+      heroStats: { hp: 80, maxHp: 98, attack: 2, defense: 2, items: { axe: { count: 1, equipped: true } } },
     });
 
     assert.equal(c.roster.length, 1, 'only surviving roster member on victory');
     assert.equal(c.roster[0].name, 'Alice');
     assert.equal(c.heroStats.hp, 94, 'hero HP updated + healBonus (prologue healBonus=14)');
-    assert.equal(c.heroStats.weapon, 'axe', 'hero weapon updated on victory');
+    assert.equal(getEquippedWeaponIdOf(c.heroStats.items), 'axe', 'hero weapon updated on victory');
     assert.equal(c.resources.wood, 2, 'resources updated on victory (1 carry-forward + 1 reward)');
     assert.ok(c.completedMissions.has('prologue'), 'mission completed');
   });
@@ -2635,43 +2636,63 @@ describe('processWaves near_hero spawn appears in view', () => {
 describe('Campaign — hero starting loadout', () => {
   test('a new campaign defaults to the Paladin loadout (sword, base ATK 2)', () => {
     const c = new Campaign(hollowDef);
-    assert.equal(c.heroStats.weapon, 'sword');
+    assert.deepEqual(c.heroStats.items.sword, { count: 1, equipped: true });
     assert.equal(c.heroStats.attack, 2);
   });
 
   test('applyCarriedHeroLoadout keeps the starting sword when no weapon is carried', () => {
-    // Reproduces the bug: pre-overhaul / default heroStats carry weapon:null,
-    // which must NOT strip the fresh starting sword on mission load.
+    // Reproduces the bug: pre-overhaul / default heroStats carry no equipped
+    // weapon, which must NOT strip the fresh starting sword on mission load.
     const hero = getFaction('hero').createLeader(0, 0, 'hero');
-    assert.equal(hero.weapon, 'sword', 'precondition: freshly created Paladin holds a sword');
-    applyCarriedHeroLoadout(hero, { hp: 14, weapon: null, items: {} });
-    assert.equal(hero.weapon, 'sword', 'a null carried weapon must not disarm the hero');
+    assert.equal(hero.getEquippedWeaponId(), 'sword', 'precondition: freshly created Paladin holds a sword');
+    applyCarriedHeroLoadout(hero, { hp: 14, items: {} });
+    assert.equal(hero.getEquippedWeaponId(), 'sword', 'no carried weapon must not disarm the hero');
     assert.equal(hero.getRange(), 1);
+  });
+
+  test('a freshly created Paladin is issued a Horn innately', () => {
+    const hero = getFaction('hero').createLeader(0, 0, 'hero');
+    assert.ok(hero.hasItem('horn'), 'the horn-trained Paladin carries a horn');
+  });
+
+  test('campaign deploy strips the innate horn — the hero re-finds it in Ch1 M4', () => {
+    // The carried backpack (default = sword only) replaces the innate pack on
+    // mission load, so a fresh campaign hero arrives WITHOUT a horn and must
+    // discover one at the river church (Ch1M4 exploreOverride).
+    const hero = getFaction('hero').createLeader(0, 0, 'hero');
+    assert.ok(hero.hasItem('horn'), 'precondition: innate horn present pre-deploy');
+    applyCarriedHeroLoadout(hero, { hp: 98, maxHp: 98, items: { sword: { count: 1, equipped: true } } });
+    assert.ok(!hero.hasItem('horn'), 'carried loadout must not retain the innate horn');
+    assert.equal(hero.getEquippedWeaponId(), 'sword');
   });
 
   test('applyCarriedHeroLoadout adopts a carried weapon and syncs range', () => {
     const hero = getFaction('hero').createLeader(0, 0, 'hero');
-    applyCarriedHeroLoadout(hero, { hp: 10, weapon: 'musket', items: { sword: 1 } });
-    assert.equal(hero.weapon, 'musket');
+    applyCarriedHeroLoadout(hero, {
+      hp: 10,
+      items: { musket: { count: 1, equipped: true }, sword: { count: 1 } },
+    });
+    assert.equal(hero.getEquippedWeaponId(), 'musket');
     assert.equal(hero.getRange(), 2, 'range tracks the carried ranged weapon');
     assert.equal(hero.hp, 10);
-    assert.deepEqual(hero.items, { sword: 1 });
+    assert.equal(hero.getItemCount('sword'), 1, 'carried spare sword preserved');
   });
 
   test('applyCarriedHeroLoadout carries the wounded fraction (scale-invariant)', () => {
     // A save written before HP×DAMAGE_SCALE stores the old "14/14". It must
     // resolve to the Paladin's full scaled pool, not clamp the hero down to 14.
+    const carriedSword = { sword: { count: 1, equipped: true } };
     const full = getFaction('hero').createLeader(0, 0, 'hero');
-    applyCarriedHeroLoadout(full, { hp: 14, maxHp: 14, weapon: 'sword', items: {} });
+    applyCarriedHeroLoadout(full, { hp: 14, maxHp: 14, items: { ...carriedSword } });
     assert.equal(full.hp, full.maxHp, 'stale "full" save → full scaled HP');
 
     const half = getFaction('hero').createLeader(0, 0, 'hero');
-    applyCarriedHeroLoadout(half, { hp: 7, maxHp: 14, weapon: 'sword', items: {} });
+    applyCarriedHeroLoadout(half, { hp: 7, maxHp: 14, items: { ...carriedSword } });
     assert.equal(half.hp, Math.round(half.maxHp * 0.5), 'half-HP save → half the scaled pool');
 
     // A current-scale save round-trips exactly.
     const cur = getFaction('hero').createLeader(0, 0, 'hero');
-    applyCarriedHeroLoadout(cur, { hp: 70, maxHp: 98, weapon: 'sword', items: {} });
+    applyCarriedHeroLoadout(cur, { hp: 70, maxHp: 98, items: { ...carriedSword } });
     assert.equal(cur.hp, 70);
   });
 });

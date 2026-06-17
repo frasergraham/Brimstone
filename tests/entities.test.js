@@ -38,7 +38,7 @@ describe('Base stats — Hero', () => {
     // which createHero() bypasses.
     const hero = createHero(0, 0);
     assert.equal(hero.alive, true);
-    assert.equal(hero.weapon, null);
+    assert.equal(hero.getEquippedWeaponId(), null);
     assert.deepEqual(hero.items, {});
   });
 });
@@ -243,7 +243,7 @@ describe('equipWeapon', () => {
     hero.equipWeapon(WeaponType.SWORD);
     assert.equal(hero.getAttack(), 4);   // base 2 + sword +2
     assert.equal(hero.getDefense(), 2);  // unchanged
-    assert.equal(hero.weapon, WeaponType.SWORD);
+    assert.equal(hero.getEquippedWeaponId(), WeaponType.SWORD);
   });
 
   test('shield gives +2 DEF, no ATK change', () => {
@@ -281,7 +281,7 @@ describe('equipWeapon', () => {
     assert.equal(hero.getAttack(), 4);
     hero.equipWeapon(null);
     assert.equal(hero.getAttack(), 2, 'effective attack returns to base after unequip');
-    assert.equal(hero.weapon, null);
+    assert.equal(hero.getEquippedWeaponId(), null);
   });
 
   test('equipping same weapon twice does not double-apply bonus', () => {

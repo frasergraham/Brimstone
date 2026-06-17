@@ -26,7 +26,7 @@ function freshState() { return new GameState(true, true); }
 describe('weapons — weapon-derived range', () => {
   test('unarmed unit is melee (range 1)', () => {
     const s = createSurvivor(0, 0);
-    assert.equal(s.weapon, null);
+    assert.equal(s.getEquippedWeaponId(), null);
     assert.equal(s.getRange(), 1);
   });
 
@@ -36,7 +36,6 @@ describe('weapons — weapon-derived range', () => {
       const e = createSurvivor(0, 0);
       e.equipWeapon(weapon);
       assert.equal(e.getRange(), range, `${weapon} should grant range ${range}`);
-      assert.equal(e.range, range, `${weapon} should sync the denormalized range cache`);
     }
   });
 
@@ -83,29 +82,29 @@ describe('weapons — stat tuning', () => {
 describe('weapons — faction starting loadout', () => {
   test('Paladin starts with a sword (effective ATK 4)', () => {
     const p = getFaction('hero').createLeader(0, 0, 'p1');
-    assert.equal(p.weapon, 'sword');
+    assert.equal(p.getEquippedWeaponId(), 'sword');
     assert.equal(p.getAttack(), 4); // base 2 + sword 2
     assert.equal(p.getRange(), 1);
   });
 
   test('Rogue starts with a bow (range 3)', () => {
     const r = getFaction('rogue').createLeader(0, 0, 'p1');
-    assert.equal(r.weapon, 'bow');
+    assert.equal(r.getEquippedWeaponId(), 'bow');
     assert.equal(r.getRange(), 3);
   });
 
   test('Witch and Necromancer start with Magic Bolt (range 2)', () => {
     const w = getFaction('witch').createLeader(0, 0, 'p1');
-    assert.equal(w.weapon, 'magic_bolt');
+    assert.equal(w.getEquippedWeaponId(), 'magic_bolt');
     assert.equal(w.getRange(), 2);
     const n = getFaction('necromancer').createLeader(0, 0, 'p1');
-    assert.equal(n.weapon, 'magic_bolt');
+    assert.equal(n.getEquippedWeaponId(), 'magic_bolt');
     assert.equal(n.getRange(), 2);
   });
 
   test('Captain and Brute start unarmed (preserve melee base stats)', () => {
-    assert.equal(getFaction('captain').createLeader(0, 0, 'p1').weapon, null);
-    assert.equal(getFaction('brute').createLeader(0, 0, 'p1').weapon, null);
+    assert.equal(getFaction('captain').createLeader(0, 0, 'p1').getEquippedWeaponId(), null);
+    assert.equal(getFaction('brute').createLeader(0, 0, 'p1').getEquippedWeaponId(), null);
   });
 });
 
@@ -138,31 +137,31 @@ describe('weapons — once-per-round equip', () => {
     const state = freshState();
     const s = createSurvivor(0, 0);
     s.owner = 'hero';
-    s.items = { sword: 1, dagger: 1 };
+    s.items = { sword: { count: 1 }, dagger: { count: 1 } };
     state.entities.push(s);
 
     const first = executeUseItem(state, s, 'sword');
     assert.equal(first.success, true);
-    assert.equal(s.weapon, 'sword');
+    assert.equal(s.getEquippedWeaponId(), 'sword');
     assert.equal(s.equippedThisRound, true);
 
     const second = executeUseItem(state, s, 'dagger');
     assert.equal(second.success, false, 'second equip in the same round is refused');
-    assert.equal(s.weapon, 'sword', 'weapon unchanged after refused equip');
-    assert.equal(s.items.dagger, 1, 'refused equip does not consume the item');
+    assert.equal(s.getEquippedWeaponId(), 'sword', 'weapon unchanged after refused equip');
+    assert.equal(s.getItemCount('dagger'), 1, 'refused equip does not consume the item');
 
     s.resetTurn();
     assert.equal(s.equippedThisRound, false);
     const third = executeUseItem(state, s, 'dagger');
     assert.equal(third.success, true, 'equip allowed again next round');
-    assert.equal(s.weapon, 'dagger');
+    assert.equal(s.getEquippedWeaponId(), 'dagger');
   });
 
   test('equip is a free action (cost 0)', () => {
     const state = freshState();
     const s = createSurvivor(0, 0);
     s.owner = 'hero';
-    s.items = { sword: 1 };
+    s.items = { sword: { count: 1 } };
     state.entities.push(s);
     const r = executeUseItem(state, s, 'sword');
     assert.equal(r.cost, 0);
@@ -207,9 +206,9 @@ describe('weapons — any wielder becomes ranged', () => {
 describe('weapons — leader faction swap', () => {
   test('Paladin → Rogue swap adopts the bow (drops the sword)', () => {
     const state = freshState();
-    assert.equal(state.hero.weapon, 'sword'); // default day leader is the paladin
+    assert.equal(state.hero.getEquippedWeaponId(), 'sword'); // default day leader is the paladin
     state.swapLeaderToFaction('day', 'rogue');
-    assert.equal(state.hero.weapon, 'bow');
+    assert.equal(state.hero.getEquippedWeaponId(), 'bow');
     assert.equal(state.hero.getRange(), 3);
   });
 });
@@ -217,7 +216,7 @@ describe('weapons — leader faction swap', () => {
 // ── Serialization round-trip ────────────────────────────────────────────────
 
 describe('weapons — serialize/deserialize', () => {
-  test('weapon, derived range, and equippedThisRound survive a round-trip', () => {
+  test('equipped weapon, derived range, and equippedThisRound survive a round-trip', () => {
     const state = freshState();
     const archer = createSurvivor(5, 5);
     archer.owner = 'hero';
@@ -228,9 +227,8 @@ describe('weapons — serialize/deserialize', () => {
     const restored = deserializeState(serializeState(state));
     const copy = restored.entities.find(e => e.id === archer.id);
     assert.ok(copy);
-    assert.equal(copy.weapon, 'crossbow');
-    assert.equal(copy.range, 2, 'range restored from the equipped weapon');
-    assert.equal(copy.getRange(), 2);
+    assert.equal(copy.getEquippedWeaponId(), 'crossbow');
+    assert.equal(copy.getRange(), 2, 'range composes from the equipped weapon');
     assert.equal(copy.equippedThisRound, true);
   });
 });

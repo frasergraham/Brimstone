@@ -7,7 +7,12 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Phase, nodeController } from '../src/game.js';
-import { EntityType } from '../src/entities.js';
+import { EntityType, normalizeItems } from '../src/entities.js';
+
+// Phase-2 inventory: normalize each side's flat `{ id: N }` seed to the
+// canonical dict-of-objects shape `{ id: { count: N } }` the runtime uses.
+const normSidesInv = (inv) =>
+  Object.fromEntries(Object.entries(inv ?? {}).map(([s, m]) => [s, normalizeItems(m)]));
 import { TileType, ResourceType } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
 import { PlanSimState, roundsUntilScoring, scoreNodeFeasibility } from '../src/ai.js';
@@ -87,10 +92,10 @@ function makeFakeState(overrides = {}) {
     ],
     nodeScore: overrides.nodeScore ?? { hero: 0, witch: 0 },
     fogOfWar: 'none',
-    inventory: overrides.inventory ?? {
+    inventory: normSidesInv(overrides.inventory ?? {
       witch: { [ResourceType.WOOD]: 2, [ResourceType.METAL]: 0 },
       hero: { [ResourceType.WOOD]: 2, [ResourceType.METAL]: 1, [ResourceType.FOOD]: 3 },
-    },
+    }),
     entities,
   };
 }
@@ -243,12 +248,12 @@ describe('Sound Horn AI generation', () => {
   test('applySoundHorn deducts food from shared inventory', () => {
     const state = makeFakeState();
     const sim = new PlanSimState(state, 'hero');
-    const foodBefore = sim.inventory.hero[ResourceType.FOOD];
+    const foodBefore = (sim.inventory.hero[ResourceType.FOOD]?.count ?? 0);
     const budgetBefore = sim.actionsLeft;
 
     sim.applySoundHorn();
 
-    assert.equal(sim.inventory.hero[ResourceType.FOOD], foodBefore - 1);
+    assert.equal((sim.inventory.hero[ResourceType.FOOD]?.count ?? 0), foodBefore - 1);
     assert.equal(sim.actionsLeft, budgetBefore - 1);
   });
 });

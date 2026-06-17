@@ -97,8 +97,8 @@ describe('witchSummonCount', () => {
     assert.equal(state.witchSummonCount, 0);
 
     // Give witch resources to summon
-    state.inventory.witch[ResourceType.WOOD] = 4;
-    state.inventory.witch[ResourceType.METAL] = 4;
+    state.inventory.witch[ResourceType.WOOD] = { count: 4 };
+    state.inventory.witch[ResourceType.METAL] = { count: 4 };
 
     const witch = state.witch;
     const result = executeSummon(state, witch);

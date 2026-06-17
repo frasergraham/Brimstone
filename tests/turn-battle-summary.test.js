@@ -243,4 +243,128 @@ describe('collectTurnFinds', () => {
     ])];
     assert.equal(collectTurnFinds(steps, null).discoveries.length, 2);
   });
+
+  // Fog-of-war regression: node-spawned survivors are always hero-faction
+  // (power-node night procs). When the viewer is the witch (online MP or
+  // local two-player), surfacing them in the wrap-up leaks hero-side info.
+  test('filters hero-tagged node-spawned survivors from a witch viewer', () => {
+    const spawned = [{ id: 's7', type: 'survivor', name: 'Hannah', faction: 'hero' }];
+    const { discoveries } = collectTurnFinds([], 'witch', spawned);
+    assert.equal(discoveries.length, 0,
+      'witch viewer must not see hero-side node-spawned survivors');
+  });
+
+  test('includes hero-tagged node-spawned survivors for the hero viewer', () => {
+    const spawned = [{ id: 's7', type: 'survivor', name: 'Hannah', faction: 'hero' }];
+    const { discoveries } = collectTurnFinds([], 'hero', spawned);
+    assert.equal(discoveries.length, 1);
+    assert.equal(discoveries[0].name, 'Hannah');
+  });
+
+  test('includes all node-spawned survivors when no humanFaction (AI vs AI / spectator)', () => {
+    const spawned = [{ id: 's7', type: 'survivor', name: 'Hannah', faction: 'hero' }];
+    const { discoveries } = collectTurnFinds([], null, spawned);
+    assert.equal(discoveries.length, 1);
+  });
+
+  // ── MP playerEvents shape ────────────────────────────────────────────────
+  // The legacy `makeStep` above only produces `heroEvents` / `witchEvents`.
+  // Online MP (server/resolver.js `resolvePlansMP` + lobby.js wire format)
+  // ships `playerEvents: [{ playerId, faction, events: [...] }]` instead —
+  // each inner event already carries its own `faction` tag from the resolver.
+  // These tests pin the aggregator on that shape so an MP-only double-count
+  // can't sneak in unnoticed.
+  describe('MP playerEvents shape (operator: MP wrap-up totals)', () => {
+    const mpStep = (playerEvents) => ({ stepIndex: 0, playerEvents, entitySnapshot: [] });
+    const pe     = (playerId, faction, events) => ({ playerId, faction, events });
+
+    test('hero viewer sees the SUM of all hero-side explores, not 2× (operator regression)', () => {
+      // 2v2 MP step: two hero players each explore — A finds wood + metal,
+      // B finds wood. The wrap-up Looted pip must read 2×🪵 + 1×⚙, never 4×🪵.
+      const step = mpStep([
+        pe('p-h-A', 'hero',  [exploreEvent('hero',  'h1', ['+🪵', '+⚙'])]),
+        pe('p-h-B', 'hero',  [exploreEvent('hero',  'h2', ['+🪵'])]),
+        pe('p-w-C', 'witch', [exploreEvent('witch', 'w1', ['+🍞'])]),
+      ]);
+      assert.deepEqual(collectTurnFinds([step], 'hero').loot, ['+🪵', '+⚙', '+🪵']);
+      assert.deepEqual(collectTurnFinds([step], 'witch').loot, ['+🍞']);
+    });
+
+    test('same explore event in two pe buckets is counted once per bucket (no dedupe)', () => {
+      // Defensive: if the resolver ever routes the SAME event object into two
+      // buckets (it shouldn't, see server/resolver.js drainOneStep), the
+      // aggregator counts each bucket. Two distinct events (same hex, same
+      // faction, same loot) by two different players is the legitimate case
+      // — we count both.
+      const ev = exploreEvent('hero', 'h1', ['+🪵']);
+      const step = mpStep([
+        pe('p-h-A', 'hero', [ev]),
+        pe('p-h-B', 'hero', [exploreEvent('hero', 'h2', ['+🪵'])]),
+      ]);
+      assert.deepEqual(collectTurnFinds([step], 'hero').loot, ['+🪵', '+🪵']);
+    });
+
+    test('inner event faction wins over pe.faction (guard-strike events ride in the actor\'s bucket)', () => {
+      // The resolver appends guard-strike events to the actor's player bucket
+      // even though `ev.faction = guardian.owner` (opposing faction). The
+      // aggregator must filter by `ev.faction`, not by `pe.faction`, so the
+      // guard's faction wins the gate. (Guard strikes never carry lootItems,
+      // but `result.encounterSurvivor` is the same shape — pin the same gate.)
+      const heroExplore = exploreEvent('hero', 'h1', ['+🪵']);
+      const witchGuardOnHeroBucket = {
+        type:    ResEventType.ACTION_OK,
+        faction: 'witch',  // guard's faction wins
+        action:  { type: PlanActionType.BATTLE_UNIT, entityId: 'witch-guard' },
+        result:  { success: true, cost: 0, log: [], lootItems: ['+🪵'] }, // hypothetical
+      };
+      const step = mpStep([
+        pe('p-h-A', 'hero', [heroExplore, witchGuardOnHeroBucket]),
+      ]);
+      // Hero viewer should see only the hero explore, NOT the witch-tagged event
+      // that happens to live in a hero player's bucket.
+      assert.deepEqual(collectTurnFinds([step], 'hero').loot, ['+🪵']);
+    });
+
+    test('discoveries (encounterSurvivor) gate by ev.faction in MP playerEvents', () => {
+      const mine   = { id: 's9', type: 'survivor', name: 'Mara' };
+      const theirs = { id: 's4', type: 'survivor', name: 'Pyke' };
+      const step = mpStep([
+        pe('p-h-A', 'hero',  [exploreEvent('hero',  'h1', [], mine)]),
+        pe('p-w-B', 'witch', [exploreEvent('witch', 'w1', [], theirs)]),
+      ]);
+      const { discoveries } = collectTurnFinds([step], 'hero');
+      assert.equal(discoveries.length, 1);
+      assert.equal(discoveries[0].name, 'Mara');
+    });
+
+    test('pe.faction fallback applies when an inner event has no faction tag', () => {
+      // Defensive: an event that arrived without `ev.faction` (legacy?) should
+      // inherit pe.faction so the filter doesn't accidentally drop it.
+      const heroExplore = {
+        type:   ResEventType.ACTION_OK,
+        // faction OMITTED on purpose
+        action: { type: PlanActionType.EXPLORE, entityId: 'h1' },
+        result: { success: true, cost: 1, log: [], lootItems: ['+🪵'] },
+      };
+      const step = mpStep([pe('p-h-A', 'hero', [heroExplore])]);
+      assert.deepEqual(collectTurnFinds([step], 'hero').loot, ['+🪵']);
+      assert.deepEqual(collectTurnFinds([step], 'witch').loot, []);
+    });
+
+    test('a single explore event is counted exactly once (not duplicated by both arrays)', () => {
+      // Defensive pin: if a caller ever populates BOTH the legacy `heroEvents`
+      // AND the MP `playerEvents` for the same logical step (a state-sync bug,
+      // a misjoined replay, etc.), the SAME explore event will be counted twice
+      // — once from each array. This test makes that failure mode visible.
+      // The MP wire shape only ever has `playerEvents`; the legacy shape only
+      // ever has `heroEvents`/`witchEvents`. They must not coexist.
+      const ev = exploreEvent('hero', 'h1', ['+🪵']);
+      const cleanMpStep = {
+        stepIndex: 0,
+        playerEvents: [pe('p-h-A', 'hero', [ev])],
+        entitySnapshot: [],
+      };
+      assert.deepEqual(collectTurnFinds([cleanMpStep], 'hero').loot, ['+🪵']);
+    });
+  });
 });

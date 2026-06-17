@@ -4,7 +4,7 @@
 
 import { PlanActionType } from './planner.js';
 import { ITEMS } from './items.js';
-import { EntityType, ENTITY_COLOR } from './entities.js';
+import { EntityType, ENTITY_COLOR, getEquippedWeaponIdOf, getItemCountOf, removeItemInItems, normalizeItems, isLeaderType } from './entities.js';
 import { ResourceType, WEAPON_LABEL, RESOURCE_LABEL } from './tiles.js';
 import { nodeController, PHASE_ICON, DEFAULT_CYCLE_PHASES } from './game.js';
 import { hexKey } from './hex.js';
@@ -89,9 +89,118 @@ export function describePlanAction(action, entities, index = 0) {
       return `${who} uses ability`;
     case PlanActionType.SOUND_HORN:
       return `${who} sounds the horn`;
+    case PlanActionType.SENT_TO: {
+      // The actor IS the survivor (entityId === survivorId). The destination
+      // leader is keyed by ownerId — find a live leader on that ownerId in
+      // the snapshot so the label reads names, not UUIDs.
+      const survivorName = entity?.displayName ?? 'Survivor';
+      const destLeader = action.destOwnerId
+        ? entities.find(e => e.ownerId === action.destOwnerId && isLeaderType(e.type))
+        : null;
+      const destName = destLeader?.displayName ?? 'another leader';
+      return `📤 Send ${survivorName} to ${destName}`;
+    }
     default:
       return `Step ${index + 1}`;
   }
+}
+
+// ── Turn-card auto-scroll (replay timeline) ───────────────────────────────────
+//
+// A long turn card (a big game's busy resolution step) overflows the screen.
+// The card is CSS-scrollable; as resolution advances we auto-scroll the active
+// action into the upper portion of the card so the player always sees what's
+// happening — UNLESS the player has just scrolled manually, in which case we
+// stand down so we don't fight them.
+//
+// This module owns only the *decision* logic (DOM-free, unit-testable); the
+// wiring (scroll listeners, scrollIntoView) lives in ui.js.
+
+/** How long (ms) a manual scroll suppresses auto-scroll before it resumes. */
+export const TURN_CARD_AUTOSCROLL_SUSPEND_MS = 4000;
+
+/**
+ * Tracks whether the player has manually scrolled a turn card recently, so the
+ * auto-scroll-to-active logic can suspend itself and not yank the card away
+ * while the player is reading.
+ *
+ * Pure + DOM-free: callers feed it a millisecond timestamp (`Date.now()`); it
+ * owns no timers and touches no DOM, so it unit-tests without a browser.  A
+ * manual scroll is recorded via {@link notifyUserScroll}; it then reports
+ * `isSuspended(now) === true` for `windowMs` after that scroll, then resumes.
+ */
+export class TurnCardAutoScroll {
+  constructor({ windowMs = TURN_CARD_AUTOSCROLL_SUSPEND_MS } = {}) {
+    this.windowMs = windowMs;
+    this._lastUserScrollTs = null;   // null → the player has never scrolled
+  }
+
+  /** Record a manual user scroll (wheel / touch / key) at time `now` (ms). */
+  notifyUserScroll(now) {
+    this._lastUserScrollTs = now;
+  }
+
+  /** True while a recent manual scroll should suppress auto-scroll. */
+  isSuspended(now) {
+    if (this._lastUserScrollTs == null) return false;
+    return (now - this._lastUserScrollTs) < this.windowMs;
+  }
+
+  /** Convenience inverse of {@link isSuspended} — auto-scroll may run now. */
+  shouldAutoScroll(now) {
+    return !this.isSuspended(now);
+  }
+
+  /** Forget any recent scroll (e.g. when a fresh round's cards mount). */
+  reset() {
+    this._lastUserScrollTs = null;
+  }
+}
+
+/**
+ * Decide whether the active turn-card entry should be auto-scrolled into view.
+ *
+ * Pure gate shared by ui.js's `_autoScrollActiveEntry`.  Auto-scroll runs only
+ * when: there IS an active step to target, the card isn't collapsed (a collapsed
+ * card shows just the active row — scrolling it would only cause a jump), and
+ * the player hasn't scrolled manually inside the suspend window.
+ *
+ * @param {object} opts
+ * @param {boolean} [opts.suspended]  Player scrolled recently (TurnCardAutoScroll.isSuspended).
+ * @param {boolean} [opts.collapsed]  Card is in its collapsed (active-row-only) state.
+ * @param {boolean} [opts.hasActive]  An `.is-acting` entry exists to scroll to.
+ * @returns {boolean}
+ */
+export function shouldAutoScrollToActive({ suspended = false, collapsed = false, hasActive = true } = {}) {
+  if (suspended) return false;   // don't fight a player who just scrolled
+  if (collapsed) return false;   // collapsed card shows only the active row → nothing to scroll, no jump
+  return !!hasActive;            // only scroll when there's an active action to follow
+}
+
+/**
+ * Compute whether a scroll viewport should show a top/bottom fade gradient.
+ * A fade is only warranted when there's content hidden in that direction —
+ * a card whose content fits entirely within `clientHeight` gets neither fade
+ * (so we don't dim readable text for no reason).
+ *
+ * Pure + DOM-free: callers feed in measured numbers; the function returns
+ * the two boolean flags. UI wiring then toggles the corresponding classes
+ * on the scroll viewport.
+ *
+ * @param {object} [opts]
+ * @param {number} [opts.scrollTop]      Current scroll offset (px).
+ * @param {number} [opts.clientHeight]   Viewport visible height (px).
+ * @param {number} [opts.scrollHeight]   Full content height (px).
+ * @returns {{ top: boolean, bottom: boolean }}
+ */
+export function computeFadeFlags({ scrollTop = 0, clientHeight = 0, scrollHeight = 0 } = {}) {
+  // Fits entirely → no overflow either direction.
+  if (scrollHeight <= clientHeight) return { top: false, bottom: false };
+  // 1px tolerance absorbs sub-pixel rounding (mid-smooth-scroll fractional offsets,
+  // device-pixel ratios) so the fade doesn't flicker right at the edges.
+  const atTop    = scrollTop <= 0;
+  const atBottom = scrollTop + clientHeight >= scrollHeight - 1;
+  return { top: !atTop, bottom: !atBottom };
 }
 
 // ── Plan steps list HTML ──────────────────────────────────────────────────────
@@ -112,13 +221,13 @@ const RES_ICON = {
 function _stepCostLabel(action, projShared, projWitch, projEntityItems) {
   switch (action.type) {
     case PlanActionType.SUMMON: {
-      if ((projWitch[ResourceType.METAL] || 0) >= 2) return `−2${RES_ICON[ResourceType.METAL]}`;
-      if ((projWitch[ResourceType.WOOD]  || 0) >= 2) return `−2${RES_ICON[ResourceType.WOOD]}`;
+      if (getItemCountOf(projWitch, ResourceType.METAL) >= 2) return `−2${RES_ICON[ResourceType.METAL]}`;
+      if (getItemCountOf(projWitch, ResourceType.WOOD)  >= 2) return `−2${RES_ICON[ResourceType.WOOD]}`;
       return '−2 res';
     }
     case PlanActionType.FORTIFY:
-      if ((projShared[ResourceType.METAL] || 0) > 0) return `−1${RES_ICON[ResourceType.METAL]}`;
-      if ((projShared[ResourceType.WOOD]  || 0) > 0) return `−1${RES_ICON[ResourceType.WOOD]}`;
+      if (getItemCountOf(projShared, ResourceType.METAL) > 0) return `−1${RES_ICON[ResourceType.METAL]}`;
+      if (getItemCountOf(projShared, ResourceType.WOOD)  > 0) return `−1${RES_ICON[ResourceType.WOOD]}`;
       return '';
     case PlanActionType.HEAL:
       return `−1${RES_ICON[ResourceType.HERBS]}`;
@@ -157,9 +266,11 @@ export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entit
     [EntityType.IRON_GOLEM]: '⚙',
   };
 
-  // Projected inventory — updated as we walk through steps
-  const projShared      = { ...(initialInv?.hero        ?? {}) };
-  const projWitch       = { ...(initialInv?.witch       ?? {}) };
+  // Projected inventory — updated as we walk through steps. Deep-clone the
+  // resource dicts (dict-of-objects shape) so mutating projected counts never
+  // touches the real state.inventory entries.
+  const projShared      = normalizeItems(initialInv?.hero);
+  const projWitch       = normalizeItems(initialInv?.witch);
   const projEntityItems = {};
   if (initialInv?.entityItems) {
     for (const [id, items] of Object.entries(initialInv.entityItems)) {
@@ -205,39 +316,7 @@ export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entit
       </div>`;
 
     // Advance projected inventory for subsequent steps
-    switch (a.type) {
-      case PlanActionType.SUMMON:
-        if ((projWitch[ResourceType.METAL] || 0) >= 2) { projWitch[ResourceType.METAL] -= 2; }
-        else if ((projWitch[ResourceType.WOOD] || 0) >= 2) { projWitch[ResourceType.WOOD] -= 2; }
-        else {
-          let rem = 2;
-          for (const k of Object.keys(projWitch).sort((a, b) => projWitch[b] - projWitch[a])) {
-            const spend = Math.min(projWitch[k] || 0, rem); projWitch[k] -= spend; rem -= spend;
-            if (rem === 0) break;
-          }
-        }
-        break;
-      case PlanActionType.FORTIFY:
-        if ((projShared[ResourceType.METAL] || 0) > 0) projShared[ResourceType.METAL]--;
-        else if ((projShared[ResourceType.WOOD] || 0) > 0) projShared[ResourceType.WOOD]--;
-        break;
-      case PlanActionType.HEAL: {
-        const healEnt = entities.find(e => e.id === a.entityId);
-        const healPools = { hero: projShared, witch: projWitch };
-        const healPool = healPools[healEnt?.owner] || projShared;
-        if ((healPool[ResourceType.HERBS] || 0) > 0) healPool[ResourceType.HERBS]--;
-        break;
-      }
-      case PlanActionType.USE_ITEM: {
-        const item = a.item;
-        if (!item || ITEMS[item]?.kind === 'weapon') break;
-        if ((projShared[item] || 0) > 0) { projShared[item]--; }
-        break;
-      }
-      case PlanActionType.SOUND_HORN:
-        if ((projShared[ResourceType.FOOD] || 0) >= 1) projShared[ResourceType.FOOD] -= 1;
-        break;
-    }
+    _advanceProjectedInventory(a, projShared, projWitch, projEntityItems, entities);
   });
 
   return html || `<div class="plan-step"><span class="plan-step-desc" style="color:var(--muted)">No actions queued — click units to add</span></div>`;
@@ -274,8 +353,13 @@ export function buildUnitDetailHtml(entity, items) {
   const def = typeof entity.getDefense === 'function' ? entity.getDefense() : (entity.defense ?? 0);
   const rng = typeof entity.getRange === 'function' ? entity.getRange() : (entity.range ?? 1);
 
-  const weaponLabel = entity.weapon
-    ? (WEAPON_LABEL[entity.weapon] || entity.weapon)
+  // Equipped weapon is the entity's own equipped weapon (shown in the vitals
+  // line), independent of the projected `items` arg used for the pack listing.
+  const equippedId = typeof entity.getEquippedWeaponId === 'function'
+    ? entity.getEquippedWeaponId()
+    : getEquippedWeaponIdOf(entity.items);
+  const weaponLabel = equippedId
+    ? (WEAPON_LABEL[equippedId] || equippedId)
     : '👊 Unarmed';
   const abilityHtml = entity.abilityLabel
     ? `<span class="usb-ability">✦ ${entity.abilityLabel}</span>`
@@ -283,17 +367,17 @@ export function buildUnitDetailHtml(entity, items) {
   const effectsHtml = buildEffectsHtml(entity);
 
   // Pack rows: weapons via WEAPON_LABEL, everything else via RESOURCE_LABEL.
-  // The equipped weapon lives in the vitals line, not the pack (entity.items
-  // already excludes it).
+  // The equipped weapon shows in the vitals line, so it's excluded here so the
+  // pack only lists spare gear.
   const packRows = Object.entries(pack)
-    .filter(([, n]) => (n || 0) > 0)
-    .map(([k, n]) => {
+    .filter(([k, e]) => (e?.count ?? 0) > 0 && k !== equippedId)
+    .map(([k, e]) => {
       const label = ITEMS[k]?.kind === 'weapon'
         ? (WEAPON_LABEL[k] || k)
         : (RESOURCE_LABEL[k] || k);
       return `<div class="inv-resource-row">`
            + `<span class="inv-resource-label">${label}</span>`
-           + `<span class="inv-resource-val">×${n}</span></div>`;
+           + `<span class="inv-resource-val">×${e.count}</span></div>`;
     }).join('');
 
   // Each group on its own line — a long weapon label wrapping next to the
@@ -355,8 +439,8 @@ export function buildUnitPlanBlocksHtml(
   const budgetState = new Map();   // key → 'ok' | 'food' | 'over'
   const costLabels  = new Map();   // key → string
 
-  const projShared      = { ...(initialInv?.hero        ?? {}) };
-  const projWitch       = { ...(initialInv?.witch       ?? {}) };
+  const projShared      = normalizeItems(initialInv?.hero);
+  const projWitch       = normalizeItems(initialInv?.witch);
   const projEntityItems = {};
   if (initialInv?.entityItems) {
     for (const [id, items] of Object.entries(initialInv.entityItems)) {
@@ -486,35 +570,35 @@ export function buildUnitPlanBlocksHtml(
 function _advanceProjectedInventory(a, projShared, projWitch, projEntityItems, entities) {
   switch (a.type) {
     case PlanActionType.SUMMON:
-      if ((projWitch[ResourceType.METAL] || 0) >= 2) { projWitch[ResourceType.METAL] -= 2; }
-      else if ((projWitch[ResourceType.WOOD] || 0) >= 2) { projWitch[ResourceType.WOOD] -= 2; }
+      if (getItemCountOf(projWitch, ResourceType.METAL) >= 2) { removeItemInItems(projWitch, ResourceType.METAL, 2); }
+      else if (getItemCountOf(projWitch, ResourceType.WOOD) >= 2) { removeItemInItems(projWitch, ResourceType.WOOD, 2); }
       else {
         let rem = 2;
-        for (const k of Object.keys(projWitch).sort((a, b) => projWitch[b] - projWitch[a])) {
-          const spend = Math.min(projWitch[k] || 0, rem); projWitch[k] -= spend; rem -= spend;
+        for (const k of Object.keys(projWitch).sort((a, b) => getItemCountOf(projWitch, b) - getItemCountOf(projWitch, a))) {
+          const spend = Math.min(getItemCountOf(projWitch, k), rem); removeItemInItems(projWitch, k, spend); rem -= spend;
           if (rem === 0) break;
         }
       }
       break;
     case PlanActionType.FORTIFY:
-      if ((projShared[ResourceType.METAL] || 0) > 0) projShared[ResourceType.METAL]--;
-      else if ((projShared[ResourceType.WOOD] || 0) > 0) projShared[ResourceType.WOOD]--;
+      if (getItemCountOf(projShared, ResourceType.METAL) > 0) removeItemInItems(projShared, ResourceType.METAL, 1);
+      else if (getItemCountOf(projShared, ResourceType.WOOD) > 0) removeItemInItems(projShared, ResourceType.WOOD, 1);
       break;
     case PlanActionType.HEAL: {
       const healEnt = entities?.find(e => e.id === a.entityId);
       const healPools = { hero: projShared, witch: projWitch };
       const healPool = healPools[healEnt?.owner] || projShared;
-      if ((healPool[ResourceType.HERBS] || 0) > 0) healPool[ResourceType.HERBS]--;
+      if (getItemCountOf(healPool, ResourceType.HERBS) > 0) removeItemInItems(healPool, ResourceType.HERBS, 1);
       break;
     }
     case PlanActionType.USE_ITEM: {
       const item = a.item;
       if (!item || ITEMS[item]?.kind === 'weapon') break;
-      if ((projShared[item] || 0) > 0) { projShared[item]--; }
+      if (getItemCountOf(projShared, item) > 0) { removeItemInItems(projShared, item, 1); }
       break;
     }
     case PlanActionType.SOUND_HORN:
-      if ((projShared[ResourceType.FOOD] || 0) >= 1) projShared[ResourceType.FOOD] -= 1;
+      if (getItemCountOf(projShared, ResourceType.FOOD) >= 1) removeItemInItems(projShared, ResourceType.FOOD, 1);
       break;
   }
 }

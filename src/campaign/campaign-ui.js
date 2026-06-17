@@ -2,7 +2,7 @@
 // Extracted from main.js to reduce its size and colocate campaign logic.
 
 import { Renderer } from '../renderer.js';
-import { ENTITY_COLOR, EntityType } from '../entities.js';
+import { ENTITY_COLOR, EntityType, getEquippedWeaponIdOf } from '../entities.js';
 import { xpForLevel } from '../balance.js';
 import { ITEMS } from '../items.js';
 import { WEAPON_LABEL } from '../tiles.js';
@@ -245,13 +245,13 @@ function poolWeaponRowHTML(id, count, targets) {
 /**
  * The shared-armory block for the Shared Inventory section: every pooled weapon
  * with per-unit Equip controls. '' when the pool is empty.
- * @param {object} weapons  shared pool, `{ weaponId: count }`
+ * @param {object} weapons  shared pool, `{ weaponId: { count } }`
  * @param {{idx:(number|'leader'), label:string}[]} targets  equip candidates
  */
 function sharedWeaponsHTML(weapons, targets) {
-  const entries = Object.entries(weapons || {}).filter(([id, c]) => c > 0 && isWeapon(id));
+  const entries = Object.entries(weapons || {}).filter(([id, e]) => (e?.count ?? 0) > 0 && isWeapon(id));
   if (entries.length === 0) return '';
-  const rows = entries.map(([id, count]) => poolWeaponRowHTML(id, count, targets)).join('');
+  const rows = entries.map(([id, e]) => poolWeaponRowHTML(id, e.count, targets)).join('');
   return `<div class="cprog-section-label armory-label">Armory</div>
     <div class="cprog-pool-weapons">${rows}</div>`;
 }
@@ -263,20 +263,22 @@ function sharedWeaponsHTML(weapons, targets) {
  * stamped onto each Equip button for event wiring.
  */
 function weaponListHTML(unit, idx) {
-  const equipped = isWeapon(unit.weapon) ? unit.weapon : null;
-  const carried = Object.entries(unit.items || {})
-    .filter(([id, count]) => count > 0 && isWeapon(id) && id !== equipped);
+  const items = unit.items || {};
+  const equipped = getEquippedWeaponIdOf(items);
+  const carried = Object.entries(items)
+    .filter(([id, e]) => (e?.count ?? 0) > 0 && isWeapon(id) && id !== equipped);
   if (!equipped && carried.length === 0) return '';
   const rows = [];
   if (equipped) rows.push(weaponRowHTML(equipped, 1, idx, true));
-  for (const [id, count] of carried) rows.push(weaponRowHTML(id, count, idx, false));
+  for (const [id, e] of carried) rows.push(weaponRowHTML(id, e.count, idx, false));
   return `<div class="cprog-weapons">${rows.join('')}</div>`;
 }
 
 /** Badge row for a unit's carried non-weapon items. Empty string if none. */
 function itemRowHTML(items) {
   const badges = [];
-  for (const [id, count] of Object.entries(items || {})) {
+  for (const [id, entry] of Object.entries(items || {})) {
+    const count = entry?.count ?? 0;
     if (!count || isWeapon(id)) continue; // weapons render via weaponListHTML
     const n = count > 1 ? `<span class="cprog-item-n">×${count}</span>` : '';
     badges.push(`<span class="cprog-item" title="${ITEMS[id]?.label || id}">${itemGlyph(id)}${n}</span>`);
@@ -375,7 +377,7 @@ export function partyPaneHTML(heroStats, roster, activeIndices, maxActive, opts 
     hp: heroStats.hp, maxHp: heroStats.maxHp,
     attack: heroStats.attack, defense: heroStats.defense,
     level: heroStats.level, xp: heroStats.xp,
-    weapon: heroStats.weapon, items: heroStats.items,
+    items: heroStats.items,
   };
 
   let html = '<div class="cprog-party-scroll">';
@@ -455,7 +457,7 @@ function _survivorUnit(s) {
     assetId: Renderer.survivorAssetId(s.title) || 'survivor_innkeeper',
     color: s.color || ENTITY_COLOR.survivor,
     hp: s.hp, maxHp: s.maxHp, attack: s.attack, defense: s.defense,
-    level: s.level, xp: s.xp, weapon: s.weapon, items: s.items,
+    level: s.level, xp: s.xp, items: s.items,
   };
 }
 

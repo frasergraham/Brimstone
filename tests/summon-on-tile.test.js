@@ -18,7 +18,7 @@ function freshState() {
 describe('executeSummon — spawns on summoner tile', () => {
   test('summoned minion appears at witch position', () => {
     const state = freshState();
-    state.inventory.witch[ResourceType.FOOD] = 2;
+    state.inventory.witch[ResourceType.FOOD] = { count: 2 };
     const { col, row } = state.witch;
 
     const r = executeSummon(state, state.witch);
@@ -29,7 +29,7 @@ describe('executeSummon — spawns on summoner tile', () => {
 
   test('summoned iron golem appears at witch position', () => {
     const state = freshState();
-    state.inventory.witch[ResourceType.METAL] = 2;
+    state.inventory.witch[ResourceType.METAL] = { count: 2 };
     const { col, row } = state.witch;
 
     executeSummon(state, state.witch, EntityType.IRON_GOLEM);
@@ -41,7 +41,7 @@ describe('executeSummon — spawns on summoner tile', () => {
 
   test('unit does NOT spawn at an adjacent hex', () => {
     const state = freshState();
-    state.inventory.witch[ResourceType.FOOD] = 2;
+    state.inventory.witch[ResourceType.FOOD] = { count: 2 };
     const { col, row } = state.witch;
     const neighbors = getNeighbors(col, row).map(n => hexKey(n.col, n.row));
 
@@ -55,7 +55,7 @@ describe('executeSummon — spawns on summoner tile', () => {
 
   test('works even when all adjacent hexes are occupied', () => {
     const state = freshState();
-    state.inventory.witch[ResourceType.FOOD] = 2;
+    state.inventory.witch[ResourceType.FOOD] = { count: 2 };
     // Fill all valid neighbors with minions
     for (const n of getNeighbors(state.witch.col, state.witch.row)) {
       const t = state.tiles.get(hexKey(n.col, n.row));
@@ -67,7 +67,7 @@ describe('executeSummon — spawns on summoner tile', () => {
 
   test('multiple units can stack on witch tile', () => {
     const state = freshState();
-    state.inventory.witch[ResourceType.FOOD] = 6;
+    state.inventory.witch[ResourceType.FOOD] = { count: 6 };
     const { col, row } = state.witch;
 
     executeSummon(state, state.witch);
@@ -83,7 +83,7 @@ describe('executeSummon — spawns on summoner tile', () => {
 describe('getValidActions — SUMMON availability', () => {
   test('includes SUMMON actions when witch has >= 2 resources', () => {
     const state = freshState();
-    state.inventory.witch[ResourceType.FOOD] = 2;
+    state.inventory.witch[ResourceType.FOOD] = { count: 2 };
 
     const actions = getValidActions(state, state.witch);
     const summons = actions.filter(a => a.type === ActionType.SUMMON);
@@ -92,7 +92,7 @@ describe('getValidActions — SUMMON availability', () => {
 
   test('SUMMON available even when all adjacent hexes are occupied', () => {
     const state = freshState();
-    state.inventory.witch[ResourceType.FOOD] = 2;
+    state.inventory.witch[ResourceType.FOOD] = { count: 2 };
     // Fill all valid neighbors
     for (const n of getNeighbors(state.witch.col, state.witch.row)) {
       const t = state.tiles.get(hexKey(n.col, n.row));
@@ -124,8 +124,8 @@ describe('getValidActions — SUMMON availability', () => {
 
   test('SUMMON actions have correct affordability flags', () => {
     const state = freshState();
-    state.inventory.witch[ResourceType.METAL] = 2;
-    state.inventory.witch[ResourceType.WOOD] = 0;
+    state.inventory.witch[ResourceType.METAL] = { count: 2 };
+    state.inventory.witch[ResourceType.WOOD] = { count: 0 };
 
     const actions = getValidActions(state, state.witch);
     const ironGolem = actions.find(a => a.type === ActionType.SUMMON && a.summonType === EntityType.IRON_GOLEM);
@@ -139,7 +139,7 @@ describe('getValidActions — SUMMON availability', () => {
 
   test('SUMMON actions have no targets array', () => {
     const state = freshState();
-    state.inventory.witch[ResourceType.FOOD] = 2;
+    state.inventory.witch[ResourceType.FOOD] = { count: 2 };
 
     const actions = getValidActions(state, state.witch);
     const summons = actions.filter(a => a.type === ActionType.SUMMON);
@@ -150,7 +150,7 @@ describe('getValidActions — SUMMON availability', () => {
 
   test('hero cannot SUMMON', () => {
     const state = freshState();
-    state.inventory.witch[ResourceType.FOOD] = 4;
+    state.inventory.witch[ResourceType.FOOD] = { count: 4 };
     const actions = getValidActions(state, state.hero);
     const summons = actions.filter(a => a.type === ActionType.SUMMON);
     assert.equal(summons.length, 0, 'Hero should never have SUMMON actions');

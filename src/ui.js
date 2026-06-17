@@ -2,7 +2,7 @@
 import { hexKey, hexToPixel, hexDistance, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus, legacyTileType } from './tiles.js';
 import { ITEMS } from './items.js';
-import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf, rangeOf } from './entities.js';
+import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf, rangeOf, getEquippedWeaponIdOf, getItemCountOf, totalItemCount } from './entities.js';
 import { DAMAGE_SCALE } from './balance.js';
 import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
@@ -15,12 +15,12 @@ import * as audio from './audio.js';
 
 import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan, groupPlanByEntity, validatePlanAction, buildAutoGuardQueue } from './planner.js';
 import { ABILITIES } from './abilities.js';
-import { buildRollRows, buildOutcomeSummary, buildTurnCardHoverOverlays, battleOutcomeWord } from './replay-timeline.js';
+import { buildRollRows, buildOutcomeSummary, buildTurnCardHoverOverlays, battleOutcomeWord, compactUneventfulTurns } from './replay-timeline.js';
 import { compileTurnBattleSummary, compileTurnXpSummary } from './battle-utils.js';
 import { buildWrapupCombatsHtml, wrapupIconHtml } from './wrapup-summary.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
-import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos } from './ui-render.js';
+import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos, TurnCardAutoScroll, shouldAutoScrollToActive, computeFadeFlags } from './ui-render.js';
 import {
   hideActionPopup, getEntityScreenPos, computeArcPositions,
   positionArcPopup, startArcTracking, positionPopup,
@@ -28,6 +28,7 @@ import {
 } from './ui-popup.js';
 import { isVoiceMuted, toggleVoiceMuted, voiceMuteIconHtml } from './voiceover.js';
 import { xpProgress } from './campaign/campaign-ui.js';
+import { runStoryBeatGate } from './story-beat-cinematic.js';
 
 /** Enum of UI operating modes. */
 export const UIMode = Object.freeze({ LOCAL: 'local', ONLINE: 'online', SPECTATOR: 'spectator' });
@@ -1065,12 +1066,11 @@ export class UIController {
     if (this._planSubmitted) return;
 
     // ── Plan cap: 1.5× (budget + food) — prevent runaway queues ────────
-    const isFreeAction = action.type === PlanActionType.EQUIP_WEAPON
-                      || action.type === PlanActionType.USE_ITEM;
+    const isFreeAction = !actionCosts(action.type);
     if (!isFreeAction) {
       const flatPlan = interleavePlan(this._unitPlans);
       const currentCost = flatPlan.filter(a => actionCosts(a.type)).length;
-      const foodAvailable = (this.state.inventory?.hero?.[ResourceType.FOOD] || 0);
+      const foodAvailable = getItemCountOf(this.state.inventory?.hero, ResourceType.FOOD);
       const cap = Math.ceil((this._planBudget + foodAvailable) * 1.5);
 
       if (currentCost >= cap) {
@@ -1225,8 +1225,7 @@ export class UIController {
     // Annotate each step with whether it exceeds the action budget
     let runningCost = 0;
     for (const step of steps) {
-      const isFree = step.action.type === PlanActionType.EQUIP_WEAPON
-                  || step.action.type === PlanActionType.USE_ITEM;
+      const isFree = !actionCosts(step.action.type);
       if (!isFree) runningCost++;
       step.overBudget = !isFree && runningCost > this._planBudget;
     }
@@ -1477,15 +1476,13 @@ export class UIController {
 
     // Count budget-consuming actions across all unit queues
     const flatPlan = interleavePlan(this._unitPlans);
-    const budgetCost = flatPlan.filter(a =>
-      a.type !== PlanActionType.EQUIP_WEAPON && a.type !== PlanActionType.USE_ITEM
-    ).length;
+    const budgetCost = flatPlan.filter(a => actionCosts(a.type)).length;
     const remaining = this._planBudget - budgetCost;
 
     if (budgeEl) budgeEl.textContent = `${Math.max(0, remaining)} left`;
 
     // Food is auto-applied to over-budget actions until exhausted.
-    const foodAvailable = (this.state.inventory?.hero?.[ResourceType.FOOD] || 0);
+    const foodAvailable = getItemCountOf(this.state.inventory?.hero, ResourceType.FOOD);
 
     const initialInv = computeProjectedInventory(this.state, []);
 
@@ -1555,7 +1552,7 @@ export class UIController {
     const tabCount = this._el('plan-tab-count');
     if (tabCount) {
       tabCount.textContent = budgetCost;
-      const foodAvail = this.state?.inventory?.hero?.[ResourceType.FOOD] || 0;
+      const foodAvail = getItemCountOf(this.state?.inventory?.hero, ResourceType.FOOD);
       if (budgetCost > this._planBudget + foodAvail) {
         tabCount.className = 'plan-tab-count plan-tab-over';
       } else if (budgetCost > this._planBudget) {
@@ -2288,8 +2285,8 @@ export class UIController {
         }
         case ActionType.FORTIFY: {
           const fortInv    = projInv ? projInv.hero : state.inventory.hero;
-          const hasMetal   = (fortInv.metal || 0) > 0;
-          const hasWood    = (fortInv.wood  || 0) > 0;
+          const hasMetal   = getItemCountOf(fortInv, ResourceType.METAL) > 0;
+          const hasWood    = getItemCountOf(fortInv, ResourceType.WOOD) > 0;
           const cantAfford = projInv ? (!hasMetal && !hasWood) : !action.affordable;
           const hasDoubler = entity.type === EntityType.SURVIVOR && entity.hasAbility(SurvivorAbility.FORTIFY_DOUBLE);
           const tileData   = state.tiles.get(hexKey(entity.col, entity.row));
@@ -2322,7 +2319,7 @@ export class UIController {
           let healDis = dis || action.atFullHp;
           if (projInv) {
             const healPool = entity.owner === 'witch' ? projInv.witch : projInv.hero;
-            if ((healPool[ResourceType.HERBS] || 0) < 1) healDis = true;
+            if (getItemCountOf(healPool, ResourceType.HERBS) < 1) healDis = true;
           }
           arcItems.push({ group: 'items', label: 'Heal', fullLabel: action.atFullHp ? 'Already at full HP' : 'Herbs (heal 2D10 HP)',
             desc: action.atFullHp ? 'Already at full HP.' : 'Spend 1 herb to heal this unit 2D10 HP. (1 action)',
@@ -2336,7 +2333,7 @@ export class UIController {
             let itemDis = dis;
             if (projInv) {
               if (ITEMS[item.item]?.kind !== 'weapon') {
-                if ((projInv.hero[item.item] || 0) < 1) itemDis = true;
+                if (getItemCountOf(projInv.hero, item.item) < 1) itemDis = true;
               }
             }
             // Strip leading emoji from item labels
@@ -2371,6 +2368,17 @@ export class UIController {
             attrs: `data-action="use_ability" data-ability="${action.ability}"` });
           break;
         }
+        case ActionType.SENT_TO:
+          // Multiplayer free action on the SURVIVOR — getValidActions only
+          // surfaces this when the survivor has a live owning leader AND
+          // there's at least one OTHER live leader on the same faction.
+          // Clicking opens a radial destination picker (one item per other
+          // leader). Free, mirrors USE_ITEM / EQUIP_WEAPON styling.
+          arcItems.push({ group: 'items', label: 'Send To…', fullLabel: 'Send To… — hand off to another leader on your faction',
+            desc: 'Hand this survivor over to another leader on your faction. Free.',
+            color: '#b0b0b0', dis: false, free: true, cost: 0,
+            attrs: 'data-action="sent_to"' });
+          break;
       }
     }
 
@@ -2380,16 +2388,16 @@ export class UIController {
     // the panel doesn't surface summons during off-turn views.
     if (isLeaderType(entity.type) && entity.owner === 'witch' && actions.some(a => a.type === ActionType.SUMMON || a.type === ActionType.GUARD)) {
       const projWitch = projInv ? projInv.witch : state.inventory.witch;
-      const projMetal = projWitch?.[ResourceType.METAL] || 0;
-      const projWood  = projWitch?.[ResourceType.WOOD]  || 0;
-      const projTotal = projWitch ? Object.values(projWitch).reduce((s, v) => s + (v || 0), 0) : 0;
+      const projMetal = getItemCountOf(projWitch, ResourceType.METAL);
+      const projWood  = getItemCountOf(projWitch, ResourceType.WOOD);
+      const projTotal = totalItemCount(projWitch);
       // Probe with a "rich enough" inventory so we get the full allowed-
       // summon set for this faction even when the actual inventory is empty
       // (we still want to show greyed-out unaffordable options, so the
       // player understands what's possible to summon eventually).
       const allowedSummons = new Set(
         concreteFactionOf(entity)
-          .getSummonOptions({ [ResourceType.METAL]: 99, [ResourceType.WOOD]: 99 })
+          .getSummonOptions({ [ResourceType.METAL]: { count: 99 }, [ResourceType.WOOD]: { count: 99 } })
           .map(o => o.summonType)
       );
       const ALL_SUMMONS = [
@@ -2700,9 +2708,9 @@ export class UIController {
     popup.querySelectorAll('.arc-item[data-action="summon"]').forEach(btn => {
       const st = btn.dataset.summonType;
       const projWitch = projInv.witch;
-      const projMetal = projWitch[ResourceType.METAL] || 0;
-      const projWood  = projWitch[ResourceType.WOOD]  || 0;
-      const projTotal = Object.values(projWitch).reduce((s, v) => s + (v || 0), 0);
+      const projMetal = getItemCountOf(projWitch, ResourceType.METAL);
+      const projWood  = getItemCountOf(projWitch, ResourceType.WOOD);
+      const projTotal = totalItemCount(projWitch);
       const affordable = st === EntityType.IRON_GOLEM ? projMetal >= 2
         : st === EntityType.WOOD_GOLEM ? projWood >= 2
         : projTotal >= 2;
@@ -2710,8 +2718,8 @@ export class UIController {
     });
     popup.querySelectorAll('.arc-item[data-action="fortify"]').forEach(btn => {
       const shared = projInv.hero;
-      const hasMetal = (shared.metal || 0) > 0;
-      const hasWood  = (shared.wood  || 0) > 0;
+      const hasMetal = getItemCountOf(shared, ResourceType.METAL) > 0;
+      const hasWood  = getItemCountOf(shared, ResourceType.WOOD) > 0;
       btn.disabled = !hasMetal && !hasWood;
     });
   }
@@ -2807,8 +2815,9 @@ export class UIController {
     // Equipped weapon — use the registry label (carries icon + bonus + range,
     // e.g. "🏹 Bow (range 3)"). Range is weapon-derived, so an unarmed unit
     // is melee (range 1).
-    const weaponLabel = entity.weapon
-      ? (WEAPON_LABEL[entity.weapon] || entity.weapon)
+    const equippedWeaponId = getEquippedWeaponIdOf(entity.items);
+    const weaponLabel = equippedWeaponId
+      ? (WEAPON_LABEL[equippedWeaponId] || equippedWeaponId)
       : '👊 Unarmed';
     const effectsHtml = buildEffectsHtml(entity);
 
@@ -2959,7 +2968,7 @@ export class UIController {
       const faction = this._planFaction;
       const glyph   = faction === 'hero' ? '⚔' : '✦';
       const budget  = this._planBudget;
-      const used    = interleavePlan(this._unitPlans).filter(a => a.type !== PlanActionType.EQUIP_WEAPON && a.type !== PlanActionType.USE_ITEM).length;
+      const used    = interleavePlan(this._unitPlans).filter(a => actionCosts(a.type)).length;
       const capped  = Math.min(used, budget); // don't render more diamonds than budget
       const diamonds = '◆'.repeat(Math.max(0, budget - capped)) + '◇'.repeat(capped);
       if (this._planSubmitted) {
@@ -3415,7 +3424,167 @@ export class UIController {
         else this._clearSelection();
         this._updateSidebar(); this.onRedraw(); break;
       }
+
+      case 'sent_to': {
+        // Open the Send To destination picker — a radial action arc with
+        // one item per OTHER leader on this survivor's faction. Clicking
+        // an item queues a free SENT_TO action on the survivor.
+        this._openSentToPicker(entity);
+        break;
+      }
+
+      case 'sent_to_pick': {
+        // Radial destination item was clicked — payload carries the
+        // destination leader's ownerId. The actor (entityId) is the
+        // SURVIVOR; the sender leader is re-derived live at resolution.
+        const destOwnerId = button.dataset.destOwnerId;
+        if (destOwnerId) {
+          this._addToPlan({
+            type: PlanActionType.SENT_TO,
+            entityId: entity.id,
+            destOwnerId,
+          });
+        }
+        hideActionPopup(this);
+        if (entity.alive) this._selectEntity(entity);
+        else this._clearSelection();
+        this._updateSidebar(); this.onRedraw(); break;
+      }
     }
+  }
+
+  // ── Send To destination picker ─────────────────────────────────────────────
+  // Renders a RADIAL action arc (same component the unit action menu uses)
+  // with one item per destination leader on the actor's faction. Items are
+  // colour-coded with the destination LEADER's player color via
+  // GameState.playerColorFor — same source the renderer and chronicle use.
+  _openSentToPicker(actor) {
+    const popup = this._el('action-popup');
+    if (this._arcCloseTimer) { clearTimeout(this._arcCloseTimer); this._arcCloseTimer = null; }
+    // Stay in arc mode — drop list-mode styling and any prior arc-open class
+    // so the open animation re-triggers cleanly.
+    popup.classList.remove('arc-open', 'arc-closing', 'popup-list-mode');
+    this._popupVisible = true;
+
+    const state = this.state;
+    const validActions = getValidActions(state, actor);
+    const sentTo = validActions.find(a => a.type === ActionType.SENT_TO);
+    if (!sentTo || (sentTo.destinations?.length ?? 0) === 0) {
+      // No eligible destinations — surface a "nothing to do" list popup
+      // rather than an empty arc. Defensive: getValidActions should already
+      // have hidden the parent action, but this keeps the UI honest.
+      popup.classList.add('popup-list-mode');
+      popup.innerHTML = `<div class="popup-unit-name">No destination leader</div>`;
+      positionPopup(popup, this);
+      popup.style.display = 'block';
+      return;
+    }
+
+    // Build one radial item per destination leader, coloured with the
+    // destination leader's player color (so the picker mirrors the colour
+    // the recipient is rendered with on the map).
+    const arcItems = sentTo.destinations.map((dest, i) => {
+      const color = state.playerColorFor(dest.leader) ?? '#b0b0b0';
+      const destName = dest.name ?? dest.leader.displayName ?? 'Leader';
+      return {
+        group: 'sent_to_dest',
+        label: destName,
+        fullLabel: `Send to ${destName}`,
+        desc: `Hand off to ${destName}. Free, no action cost.`,
+        color,
+        dis: false,
+        free: true,
+        cost: 0,
+        attrs: `data-action="sent_to_pick" data-dest-owner-id="${dest.ownerId}"`,
+        _idx: i,
+      };
+    });
+
+    // Position the arc relative to the survivor (or its planned/ghost
+    // position) so it visually radiates from the actor — matches the way
+    // the standard unit-action arc opens.
+    let arcOriginEntity = actor;
+    if (this._planMode) {
+      const proj = this._getProjectedPos(actor.id);
+      if (proj && (proj.col !== actor.col || proj.row !== actor.row)) {
+        arcOriginEntity = Object.setPrototypeOf(
+          { ...actor, col: proj.col, row: proj.row },
+          Object.getPrototypeOf(actor)
+        );
+      }
+    }
+    const screenPos = getEntityScreenPos(this, arcOriginEntity);
+    if (!screenPos) {
+      // Fallback to a positioned list popup if we can't compute a screen
+      // position (e.g. off-canvas) — keeps the action reachable.
+      popup.classList.add('popup-list-mode');
+      let html = `<div class="popup-unit-name">Send To…</div>`;
+      for (const dest of sentTo.destinations) {
+        const color = state.playerColorFor(dest.leader) ?? '#b0b0b0';
+        const destName = dest.name ?? dest.leader.displayName ?? 'Leader';
+        html += `<button class="plan-btn" style="border-left:3px solid ${color};"
+          data-action="sent_to_pick"
+          data-dest-owner-id="${dest.ownerId}">${destName}</button>`;
+      }
+      popup.innerHTML = html;
+      positionPopup(popup, this);
+      popup.style.display = 'block';
+      attachPopupListeners(popup, this);
+      return;
+    }
+
+    const openRight = screenPos.x < window.innerWidth / 2;
+    const canvasRect = this.canvas.getBoundingClientRect();
+    const canvasScale = canvasRect.width / this.canvas.width;
+    const hexScreenPx = this.renderer.hexSize * canvasScale * this.renderer.zoomLevel;
+
+    // Generate arc item HTML — same template as _showActionPopup.
+    let html = '';
+    for (const item of arcItems) {
+      const delay = item._idx * 30;
+      const freeCls = ' arc-free';
+      const costTag = '<span class="arc-cost arc-cost-free">FREE</span>';
+      const descTag = item.desc ? `<span class="arc-item-desc">${item.desc}</span>` : '';
+      html += `<button class="arc-item${freeCls}"
+        style="--arc-x:0px;--arc-y:0px;--arc-delay:${delay}ms;--arc-color:${item.color};--arc-hover:${item.color};--arc-glow:${item.color}33"
+        ${item.attrs}><span class="arc-item-main">${item.label}${costTag}</span>${descTag}</button>`;
+    }
+    popup.innerHTML = html;
+
+    // Track arc state so pan/zoom keep the popup anchored.
+    this._arcEntityCol = arcOriginEntity.col;
+    this._arcEntityRow = arcOriginEntity.row;
+    this._arcItems = arcItems;
+    this._arcOpenRight = openRight;
+
+    positionArcPopup(popup, this);
+    popup.style.display = 'block';
+
+    const btns = popup.querySelectorAll('.arc-item');
+    for (const btn of btns) {
+      btn.style.transition = 'none';
+      btn.style.transform = 'translate(-50%, -50%) scale(1)';
+      btn.style.opacity = '0';
+    }
+    popup.offsetHeight; // force layout
+
+    computeArcPositions(popup, this, hexScreenPx);
+
+    for (const btn of btns) {
+      btn.style.transform = '';
+      btn.style.opacity = '';
+      btn.style.transition = '';
+    }
+
+    attachPopupListeners(popup, this);
+    this._bindArcHoverExpansion(popup);
+
+    requestAnimationFrame(() => {
+      popup.classList.add('arc-open');
+      this.onRedraw();
+    });
+
+    startArcTracking(this);
   }
 
   // ── Hazard flash animations ───────────────────────────────────────────────
@@ -3632,7 +3801,7 @@ export class UIController {
     const entities = this.state.entities;
     const inventory = this.state.inventory;
     const stash = faction === 'hero' ? inventory?.hero : inventory?.witch;
-    const foodCount = stash?.food ?? 0;
+    const foodCount = getItemCountOf(stash, 'food');
 
     const rows = [];
     if (faction === 'hero') {
@@ -3689,10 +3858,17 @@ export class UIController {
   }
 
   /**
-   * Show a narrative story modal (campaign triggers).
+   * Show a narrative story modal / beat card (campaign triggers).
    * Returns a Promise that resolves when the player dismisses it.
+   *
+   * @param {object} [opts]
+   * @param {number} [opts.autoDismissMs] Autoplay: auto-advance after this dwell
+   *        (a Continue countdown labels the button and auto-clicks at 0; the
+   *        operator can click sooner). Omit for the human path — gate on click
+   *        forever.
+   * @param {object} [opts.gateOpts] Forwarded to runStoryBeatGate (test timers).
    */
-  showStoryModal(title, text) {
+  showStoryModal(title, text, opts = {}) {
     return new Promise(resolve => {
       const el = this._el('story-modal');
       if (!el) { resolve(); return; }
@@ -3700,6 +3876,11 @@ export class UIController {
       el.querySelector('.story-modal-text').textContent = text;
       el.classList.add('visible');
       const btn = this._el('story-modal-continue');
+      if (opts.autoDismissMs != null) {
+        runStoryBeatGate(btn, { minDwellMs: opts.autoDismissMs, ...(opts.gateOpts ?? {}) })
+          .then(() => { el.classList.remove('visible'); resolve(); });
+        return;
+      }
       const handler = () => {
         btn.removeEventListener('click', handler);
         el.classList.remove('visible');
@@ -4531,13 +4712,13 @@ export class UIController {
     const stash   = isHero ? inv.hero : inv.witch;
     const label   = isHero ? '⚔ Supplies' : '🕯 Stores';
 
-    const entries = Object.entries(stash).filter(([, v]) => v > 0);
+    const entries = Object.entries(stash).filter(([, v]) => (v?.count ?? 0) > 0);
 
     const rows = entries.length
       ? entries.map(([k, v]) =>
           `<div class="inv-resource-row">
             <span class="inv-resource-label">${RESOURCE_LABEL[k] || k}</span>
-            <span class="inv-resource-val">×${v}</span>
+            <span class="inv-resource-val">×${v.count}</span>
           </div>`
         ).join('')
       : `<div class="inv-empty">Nothing held.</div>`;
@@ -4744,8 +4925,12 @@ export class UIController {
         }
       }
 
-      // Include survivors spawned at power nodes during endRound
+      // Include survivors spawned at power nodes during endRound — but gate by
+      // viewer faction so a witch viewer doesn't see the hero's power-node
+      // procs (the wrap-up's other discoveries respect fog already, this
+      // legacy branch was missing the same gate).
       for (const s of (this.state.nodeSpawnedSurvivors ?? [])) {
+        if (humanFaction && s?.faction && s.faction !== humanFaction) continue;
         survivors.push(s);
       }
 
@@ -5324,7 +5509,24 @@ export class UIController {
     const wrap  = this._el('replay-timeline');
     const track = this._el('replay-timeline-track');
     if (!wrap || !track || !Array.isArray(digest)) return;
-    this._replayDigest = digest;
+    // Compact long runs of quiet move/guard turns into a single timeline card
+    // before render. Purely a UX-layer fold over buildStepDigest output — the
+    // resolver / step records / round history are untouched. The compactor
+    // returns the original digest unchanged when there's nothing to collapse.
+    // We store BOTH the rendered (compacted) digest — used by hover lookups
+    // that key off the column's `data-step` — and a follower→leader stepIndex
+    // map so highlightReplayEntry / revealReplayEntryOutcome / advance calls
+    // for a follower step resolve to the compacted leader's column.
+    const compacted = compactUneventfulTurns(digest);
+    this._replayDigest = compacted;
+    this._replayStepLeader = new Map();
+    for (const col of compacted) {
+      if (col.kind === 'compacted' && Array.isArray(col.memberStepIndices)) {
+        for (const m of col.memberStepIndices) {
+          this._replayStepLeader.set(String(m), col.stepIndex);
+        }
+      }
+    }
     this._replayTrackX = 0;
     this._activeReplayOrd = 0;
     track.style.transform = 'translateX(0)';
@@ -5332,9 +5534,17 @@ export class UIController {
     // entirely). data-step keeps the ORIGINAL step index so highlight/centre
     // calls (keyed on the animation step) still match; the "Step N" label is
     // numbered sequentially among the visible cards.
-    const visible = digest.filter(col => col.entries.length > 0);
-    let n = 0;
-    track.innerHTML = visible.map(col => this._replayColHtml(col, ++n)).join('');
+    const visible = compacted.filter(col => col.entries.length > 0);
+    // Bump the displayed turn number by (count - 1) for each compacted card so
+    // a "Turns 5–8" block doesn't make the next solo card read as "Turn 6".
+    let displayNum = 0;
+    track.innerHTML = visible.map(col => {
+      const startNum = displayNum + 1;
+      const span = (col.kind === 'compacted' && col.count > 1) ? col.count : 1;
+      const endNum = startNum + span - 1;
+      displayNum = endNum;
+      return this._replayColHtml(col, startNum, endNum);
+    }).join('');
     if (!visible.length) { wrap.classList.remove('visible'); return; }
     wrap.classList.add('visible');
     // Mobile defaults to collapsed cards (they otherwise cover the board);
@@ -5344,10 +5554,94 @@ export class UIController {
     if (this._replayCollapsed === undefined) this._replayCollapsed = this._isMobileViewport();
     this._bindReplayCollapse();
     this._bindReplayHoverHighlights();
+    this._bindTurnCardScrollDetection();
+    // A fresh round's cards mount at the top — forget any prior manual scroll so
+    // auto-scroll resumes immediately for the new turn.
+    (this._turnCardAutoScroll ??= new TurnCardAutoScroll()).reset();
     this._applyReplayCollapse(this._replayCollapsed);
     if (typeof document !== 'undefined') document.body?.classList?.add('replay-timeline-up');
     this._el('replay-progress')?.classList.add('visible');
     this.setReplayTimelineStep(visible[0].stepIndex);
+    // Cards are fresh in the DOM — no scroll events have fired yet, so set the
+    // initial fade-flag state (cards that fit on screen get NO mask gradient,
+    // cards that overflow get a bottom fade only since scrollTop starts at 0).
+    this._updateAllColFades();
+  }
+
+  /** Wire manual-scroll detection on the (persistent) timeline container once.
+   *  A wheel or touch scroll inside a turn card flags the auto-scroll controller
+   *  so it suspends itself for a few seconds — we never yank the card away while
+   *  the player is reading. Programmatic scrollIntoView fires no wheel/touch
+   *  event, so it never trips this. Listeners share the UIController-wide
+   *  AbortController (`_eventsAC`) so `destroy()` removes them — otherwise an
+   *  orphaned UIController would keep firing on shared replay DOM in the next
+   *  game (see tests/ui/action-panel-stuck.test.js for the pattern). */
+  _bindTurnCardScrollDetection() {
+    if (this._turnCardScrollBound) return;
+    const wrap = this._el('replay-timeline');
+    if (!wrap || typeof wrap.addEventListener !== 'function') return;
+    const onUserScroll = () => {
+      const now = (typeof Date !== 'undefined' && Date.now) ? Date.now() : 0;
+      (this._turnCardAutoScroll ??= new TurnCardAutoScroll()).notifyUserScroll(now);
+    };
+    const opts = { passive: true, signal: this._eventsAC.signal };
+    wrap.addEventListener('wheel',     onUserScroll, opts);
+    wrap.addEventListener('touchmove', onUserScroll, opts);
+    // `scroll` doesn't bubble, so capture-phase on the wrapper sees scrolls on
+    // every descendant `.replay-step-col` (fired by both user and programmatic
+    // scrollIntoView). Each fires _updateColFade so the top/bottom mask gradient
+    // only appears when content is actually clipped above/below the viewport.
+    wrap.addEventListener('scroll', (e) => {
+      const col = e.target;
+      if (col && col.classList && col.classList.contains('replay-step-col')) {
+        this._updateColFade(col);
+      }
+    }, { capture: true, passive: true, signal: this._eventsAC.signal });
+    this._turnCardScrollBound = true;
+  }
+
+  /** Toggle `.has-fade-top` / `.has-fade-bottom` on a turn card based on whether
+   *  content is currently hidden above or below the visible viewport. Cards that
+   *  fit entirely get neither class (no mask gradient → no dimmed readable text).
+   *  The mask CSS is keyed off these classes (styles.css). */
+  _updateColFade(col) {
+    if (!col || !col.classList) return;
+    const { top, bottom } = computeFadeFlags({
+      scrollTop:    col.scrollTop    ?? 0,
+      clientHeight: col.clientHeight ?? 0,
+      scrollHeight: col.scrollHeight ?? 0,
+    });
+    col.classList.toggle('has-fade-top',    top);
+    col.classList.toggle('has-fade-bottom', bottom);
+  }
+
+  /** Walk every rendered turn card and refresh its fade state — used after a
+   *  fresh render where no scroll events have fired yet, or after a layout
+   *  change that may have flipped overflow on/off. */
+  _updateAllColFades() {
+    const wrap = this._el('replay-timeline');
+    if (!wrap || typeof wrap.querySelectorAll !== 'function') return;
+    wrap.querySelectorAll('.replay-step-col').forEach(col => this._updateColFade(col));
+  }
+
+  /** Keep the action currently resolving inside the visible upper portion of a
+   *  long, scrollable turn card. Targets the first `.is-acting` row and aligns
+   *  it to the card's top + `scroll-margin-top` (set in CSS), landing it above
+   *  the middle of the screen. Stands down while the player has scrolled
+   *  manually (TurnCardAutoScroll) and on collapsed cards (only the active row
+   *  shows — scrolling would just jump). */
+  _autoScrollActiveEntry(col) {
+    if (!col || typeof col.querySelector !== 'function') return;
+    const now = (typeof Date !== 'undefined' && Date.now) ? Date.now() : 0;
+    const suspended = (this._turnCardAutoScroll ??= new TurnCardAutoScroll()).isSuspended(now);
+    const active = col.querySelector('.replay-step-entry.is-acting');
+    if (!shouldAutoScrollToActive({
+      suspended,
+      collapsed: !!this._replayCollapsed,
+      hasActive: !!active,
+    })) return;
+    if (typeof active.scrollIntoView !== 'function') return;
+    active.scrollIntoView({ block: 'start', behavior: 'smooth' });
   }
 
   /** Wire the per-card +/- toggle once. Cards are re-rendered every round, so
@@ -5412,6 +5706,10 @@ export class UIController {
     this._replayCollapsed = !!collapsed;
     const wrap = this._el('replay-timeline');
     if (!wrap) return;
+    // Auto-scroll is deliberately NOT triggered here — only resolution advancing
+    // moves the card. (Preserving scrollTop across the toggle is a no-op: the
+    // collapsed state clamps scrollTop to 0, so by the time we read it for the
+    // re-expand it's already lost.)
     wrap.classList.toggle('collapsed', this._replayCollapsed);
     const glyph = this._replayCollapsed ? '+' : '−';
     const label = this._replayCollapsed ? 'Expand turn card' : 'Collapse turn card';
@@ -5424,8 +5722,11 @@ export class UIController {
   /** Build one visible step column's HTML (icons, names, hidden outcomes).
    *  A +/- toggle in the header collapses the card down to just the action
    *  currently playing (see `_applyReplayCollapse`); the trailing `.replay-more`
-   *  dots are revealed by CSS when several actions are active at once. */
-  _replayColHtml(col, displayNum) {
+   *  dots are revealed by CSS when several actions are active at once.
+   *  `endNum` is the LAST turn number in the card — equals `displayNum` for a
+   *  regular column, and the inclusive end of the run for a compacted card
+   *  (e.g. `Turns 5–8`). */
+  _replayColHtml(col, displayNum, endNum = displayNum) {
     const rows = col.entries.map((e, j) => this._replayRowHtml(e, j)).join('');
     if (col.kind === 'storyBeat') {
       const esc = (s) => String(s ?? '')
@@ -5462,6 +5763,27 @@ export class UIController {
            +   `<button class="replay-conv-btn" type="button">SKIP</button>`
            +   `<button class="replay-conv-continue" type="button" style="display:none">CONTINUE ▶</button>`
            + `</div>`
+           + `</div>`;
+    }
+    // Compacted (consecutive uneventful turns folded into one card).
+    // Header reads "Turns N–M" with a small count badge; the body shows every
+    // constituent action so the player can still see what happened, but NEXT
+    // walks past the whole block in one click (see main.js's manual-step gate
+    // and _replayStepLeader in showReplayTimeline).
+    if (col.kind === 'compacted') {
+      const span = (endNum > displayNum)
+        ? `Turns ${displayNum}–${endNum}`
+        : `Turn ${displayNum}`;
+      const countBadge = (col.count ?? 1) > 1
+        ? `<span class="replay-compact-badge" title="${col.count} quiet turns collapsed">×${col.count}</span>`
+        : '';
+      return `<div class="replay-step-col replay-compact-col" data-step="${col.stepIndex}">`
+           + `<div class="replay-step-header">`
+           +   `<div class="replay-step-label">${span}${countBadge}</div>`
+           +   `<button class="replay-collapse-btn" type="button" aria-label="Collapse turn card">−</button>`
+           + `</div>`
+           + rows
+           + `<div class="replay-more" aria-hidden="true">…</div>`
            + `</div>`;
     }
     return `<div class="replay-step-col" data-step="${col.stepIndex}">`
@@ -5533,7 +5855,12 @@ export class UIController {
    */
   insertReplayTimelineCol(col, afterStepIndex = null) {
     const digest = this._replayDigest ?? [];
-    let idx = digest.findIndex(c => String(c.stepIndex) === String(afterStepIndex));
+    // When `afterStepIndex` is a follower of a compacted card, route it to the
+    // leader's stepIndex so the conversation lands AFTER the whole folded
+    // block (not the unfindable middle of it).
+    const leader = this._replayStepLeader?.get?.(String(afterStepIndex));
+    const key = leader != null ? leader : afterStepIndex;
+    let idx = digest.findIndex(c => String(c.stepIndex) === String(key));
     if (idx < 0) {
       // Fall back to the active card's position in the digest.
       const cols = this._replayCols();
@@ -5660,6 +5987,7 @@ export class UIController {
     col.querySelectorAll('.replay-step-entry').forEach(e => e.classList.remove('is-acting'));
     col.querySelectorAll(`.replay-step-entry[data-entity="${entityId}"]`)
       .forEach(e => e.classList.add('is-acting'));
+    this._autoScrollActiveEntry(col);
   }
 
   /**
@@ -5673,6 +6001,7 @@ export class UIController {
     const set = new Set(types);
     col.querySelectorAll('.replay-step-entry').forEach(e =>
       e.classList.toggle('is-acting', set.has(e.getAttribute('data-action'))));
+    this._autoScrollActiveEntry(col);
   }
 
   /** Reveal one ACTION's rolls + outcome once that action has resolved. */
@@ -5683,10 +6012,16 @@ export class UIController {
       entry.querySelectorAll('.replay-step-outcome, .replay-roll, .replay-discovered').forEach(o => o.classList.add('revealed')));
   }
 
-  /** Look up a step column element by index. */
+  /** Look up a step column element by index. When `stepIndex` is a follower of
+   *  a compacted card (one of the quiet turns folded into a leader column), the
+   *  leader's column is returned — so highlightReplayEntry / revealOutcome /
+   *  advance calls keyed on a follower step still land on its merged card. */
   _replayCol(stepIndex) {
     const track = this._el('replay-timeline-track');
-    return track ? track.querySelector(`.replay-step-col[data-step="${stepIndex}"]`) : null;
+    if (!track) return null;
+    const leaderKey = this._replayStepLeader?.get?.(String(stepIndex));
+    const key = leaderKey != null ? leaderKey : stepIndex;
+    return track.querySelector(`.replay-step-col[data-step="${key}"]`);
   }
 
   /**
@@ -5700,7 +6035,13 @@ export class UIController {
   setReplayTimelineStep(stepIndex) {
     const cols = this._replayCols();
     if (!cols.length) return;
-    let ord = cols.findIndex(c => c.getAttribute('data-step') === String(stepIndex));
+    // Resolve a follower step to its compacted-card leader so an advance call
+    // on a folded turn lands on (i.e. holds) the same merged card. Without
+    // this, _animateResolutionSteps' per-step setReplayTimelineStep(i) would
+    // silently miss for follower steps and the card would never highlight.
+    const leaderKey = this._replayStepLeader?.get?.(String(stepIndex));
+    const key = leaderKey != null ? String(leaderKey) : String(stepIndex);
+    let ord = cols.findIndex(c => c.getAttribute('data-step') === key);
     if (ord < 0) ord = this._activeReplayOrd ?? 0;
     this._setReplayActiveOrd(ord);
   }
@@ -5914,9 +6255,9 @@ export class UIController {
 
   /** Reveal the outcome lines for a step once it has played out. */
   revealReplayOutcome(stepIndex) {
-    const track = this._el('replay-timeline-track');
-    if (!track) return;
-    const col = track.querySelector(`.replay-step-col[data-step="${stepIndex}"]`);
+    // Route follower steps in a compacted run to the leader's column so its
+    // shared outcome reveals together — see _replayCol.
+    const col = this._replayCol(stepIndex);
     if (!col) return;
     // Reveal the dice rolls, outcome badges, and discovered units together.
     col.querySelectorAll('.replay-step-outcome, .replay-roll, .replay-discovered').forEach(o => o.classList.add('revealed'));
@@ -5924,9 +6265,7 @@ export class UIController {
 
   /** Re-hide a step's rolls/outcomes (used when a step is replayed). */
   hideReplayOutcome(stepIndex) {
-    const track = this._el('replay-timeline-track');
-    if (!track) return;
-    const col = track.querySelector(`.replay-step-col[data-step="${stepIndex}"]`);
+    const col = this._replayCol(stepIndex);
     if (!col) return;
     col.querySelectorAll('.replay-step-outcome, .replay-roll, .replay-discovered').forEach(o => o.classList.remove('revealed'));
   }
@@ -5944,6 +6283,7 @@ export class UIController {
     if (dots) dots.innerHTML = '';
     this._replayReviewMode = false;
     this._replayDigest = null;
+    this._replayStepLeader = null;
   }
 
   /**

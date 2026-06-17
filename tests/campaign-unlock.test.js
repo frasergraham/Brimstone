@@ -204,7 +204,7 @@ describe('unlock / Campaign integration', () => {
     const c = makeCampaign(missions, { completed: ['a'] });
     assert.equal(c.isMissionUnlocked(missions[1]), false, 'requires met but unlock not satisfied');
 
-    const c2 = makeCampaign(missions, { completed: ['a'], items: { key: 1 } });
+    const c2 = makeCampaign(missions, { completed: ['a'], items: { key: { count: 1 } } });
     assert.equal(c2.isMissionUnlocked(missions[1]), true, 'hasItem satisfies the OR');
 
     const c3 = makeCampaign(missions, { completed: ['a'], flags: { found_path: true } });

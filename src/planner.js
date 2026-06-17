@@ -2,7 +2,7 @@
 import { hexKey, getNeighbors } from './hex.js';
 import { getReachableHexes, getVisiblePositions } from './actions.js';
 import { ResourceType, isRiver } from './tiles.js';
-import { EntityType } from './entities.js';
+import { EntityType, normalizeItems, getItemCountOf, removeItemInItems } from './entities.js';
 import { ITEMS } from './items.js';
 import { effectsBlockActions } from './effects.js';
 
@@ -27,6 +27,12 @@ export const PlanActionType = Object.freeze({
   USE_ABILITY:  'use-ability',
   GUARD:        'guard',
   SOUND_HORN:   'sound-horn',
+  // Multiplayer-only free action: a SURVIVOR is sent from its current
+  // owning leader to another leader on the same faction. Cost: 0.
+  // Plan-action shape: { type, entityId: survivorId, destOwnerId: newLeaderOwnerId }
+  // The sender leader is derived live at resolution time from the
+  // survivor's current ownerId — no separate sender field on the wire.
+  SENT_TO:      'sent-to',
 });
 
 // Maximum number of steps a player may place in their plan.
@@ -36,7 +42,9 @@ export const MAX_PLAN_LENGTH = 12;
 
 // Returns true if an action type normally costs 1 action point.
 export function actionCosts(type) {
-  return type !== PlanActionType.USE_ITEM && type !== PlanActionType.EQUIP_WEAPON;
+  return type !== PlanActionType.USE_ITEM
+      && type !== PlanActionType.EQUIP_WEAPON
+      && type !== PlanActionType.SENT_TO;
 }
 
 /**
@@ -79,7 +87,10 @@ export function snapEntity(entity) {
     // defenseBonus) are added on top by the dialog.
     attack:      entity.getAttack(),
     defense:     entity.getDefense(),
-    weapon:      entity.weapon,
+    // Equipped weapon now lives inside `items` (tagged equipped). Deep-copy so
+    // consumers (projectile FX, re-parented display clones) read the equipped
+    // id without aliasing the live entity's backpack.
+    items:       normalizeItems(entity.items),
     attackBonus: entity.attackBonus || 0,
     defenseBonus: entity.defenseBonus || 0,
     // Attack range in hexes — used by playback to decide whether to render
@@ -156,8 +167,8 @@ export function computeGhostState(state, plan) {
       if (!summonType) {
         const ownerFaction = (state.entities ?? []).find(e => e.id === action.entityId)?.owner ?? 'witch';
         const inv = state.inventory?.[ownerFaction] ?? {};
-        summonType = (inv[ResourceType.METAL] || 0) >= 2 ? EntityType.IRON_GOLEM
-                   : (inv[ResourceType.WOOD]  || 0) >= 2 ? EntityType.WOOD_GOLEM
+        summonType = getItemCountOf(inv, ResourceType.METAL) >= 2 ? EntityType.IRON_GOLEM
+                   : getItemCountOf(inv, ResourceType.WOOD)  >= 2 ? EntityType.WOOD_GOLEM
                    : EntityType.MINION;
       }
       // Summoned unit appears on the witch's current projected position.
@@ -192,8 +203,10 @@ export function computeGhostState(state, plan) {
 // inventory values keyed by faction id).  Does NOT mutate the real state.
 
 export function computeProjectedInventory(state, plan) {
-  const hero   = { ...(state.inventory?.hero  ?? {}) };
-  const witch  = { ...(state.inventory?.witch ?? {}) };
+  // Deep-clone the dict-of-objects resource maps (normalizeItems) so projected
+  // spending never mutates the real state.inventory entries.
+  const hero   = normalizeItems(state.inventory?.hero);
+  const witch  = normalizeItems(state.inventory?.witch);
   // Per-entity personal items (herbs, weapons)
   const entityItems = {};
   for (const e of (state.entities ?? [])) {
@@ -204,15 +217,15 @@ export function computeProjectedInventory(state, plan) {
     switch (action.type) {
       case PlanActionType.SUMMON: {
         // Mirrors pickSummonType + executeSummon spending
-        if ((witch[ResourceType.METAL] || 0) >= 2) {
-          witch[ResourceType.METAL] -= 2;
-        } else if ((witch[ResourceType.WOOD] || 0) >= 2) {
-          witch[ResourceType.WOOD] -= 2;
+        if (getItemCountOf(witch, ResourceType.METAL) >= 2) {
+          removeItemInItems(witch, ResourceType.METAL, 2);
+        } else if (getItemCountOf(witch, ResourceType.WOOD) >= 2) {
+          removeItemInItems(witch, ResourceType.WOOD, 2);
         } else {
           let rem = 2;
-          for (const k of Object.keys(witch).sort((a, b) => witch[b] - witch[a])) {
-            const spend = Math.min(witch[k] || 0, rem);
-            witch[k] = (witch[k] || 0) - spend;
+          for (const k of Object.keys(witch).sort((a, b) => getItemCountOf(witch, b) - getItemCountOf(witch, a))) {
+            const spend = Math.min(getItemCountOf(witch, k), rem);
+            removeItemInItems(witch, k, spend);
             rem -= spend;
             if (rem === 0) break;
           }
@@ -221,23 +234,23 @@ export function computeProjectedInventory(state, plan) {
       }
       case PlanActionType.FORTIFY:
         // Metal preferred, then wood — mirrors executeFortify
-        if ((hero[ResourceType.METAL] || 0) > 0) hero[ResourceType.METAL]--;
-        else if ((hero[ResourceType.WOOD] || 0) > 0) hero[ResourceType.WOOD]--;
+        if (getItemCountOf(hero, ResourceType.METAL) > 0) removeItemInItems(hero, ResourceType.METAL, 1);
+        else if (getItemCountOf(hero, ResourceType.WOOD) > 0) removeItemInItems(hero, ResourceType.WOOD, 1);
         break;
       case PlanActionType.HEAL: {
         const healEntity = (state.entities ?? []).find(e => e.id === action.entityId);
         const pool = healEntity?.owner === 'witch' ? witch : hero;
-        if ((pool[ResourceType.HERBS] || 0) > 0) pool[ResourceType.HERBS]--;
+        if (getItemCountOf(pool, ResourceType.HERBS) > 0) removeItemInItems(pool, ResourceType.HERBS, 1);
         break;
       }
       case PlanActionType.USE_ITEM: {
         const item = action.item;
         if (!item || ITEMS[item]?.kind === 'weapon') break;
-        if ((hero[item] || 0) > 0) hero[item]--;
+        if (getItemCountOf(hero, item) > 0) removeItemInItems(hero, item, 1);
         break;
       }
       case PlanActionType.SOUND_HORN:
-        if ((hero[ResourceType.FOOD] || 0) >= 1) hero[ResourceType.FOOD] -= 1;
+        if (getItemCountOf(hero, ResourceType.FOOD) >= 1) removeItemInItems(hero, ResourceType.FOOD, 1);
         break;
     }
   }
@@ -311,7 +324,7 @@ export function validatePlanAction(state, action, projectedPositions = null) {
       if (!t || isRiver(t))
         return { valid: false, reason: 'Cannot move there.' };
       // Range check against projected position — road tiles cost half movement.
-      const hasHorse = entity.owner === 'hero' && (entity.items?.['horse'] || 0) > 0;
+      const hasHorse = entity.owner === 'hero' && (entity.items?.['horse']?.count ?? 0) > 0;
       const visibleHexes = state.fogOfWar !== 'none'
         ? getVisiblePositions(state, entity.owner)
         : null;
@@ -355,6 +368,22 @@ export function validatePlanAction(state, action, projectedPositions = null) {
       // Equipping is a free action capped at once per round per unit.
       if (entity.equippedThisRound) {
         return { valid: false, reason: `${entity.displayName ?? 'Unit'} already equipped a weapon this round.` };
+      }
+      return { valid: true };
+    }
+
+    case PlanActionType.SENT_TO: {
+      // Free action: send a SURVIVOR (the actor) to another leader on the
+      // same faction. Authoritative checks (live owning leader, faction has
+      // >1 leader, destination is a live leader on the same faction) live
+      // in executeSentTo — this client-side gate catches obvious shape errors.
+      if (!action.destOwnerId) return { valid: false, reason: 'No destination leader specified.' };
+      if (entity.type !== EntityType.SURVIVOR) {
+        return { valid: false, reason: 'Only a survivor can be sent.' };
+      }
+      // No self-send: destination must differ from the survivor's current owner.
+      if (action.destOwnerId === entity.ownerId) {
+        return { valid: false, reason: 'Cannot send a survivor to yourself.' };
       }
       return { valid: true };
     }

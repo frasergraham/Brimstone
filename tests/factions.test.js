@@ -271,7 +271,7 @@ describe('Available actions', () => {
   });
 
   test('Witch summon options with sufficient resources', () => {
-    const inv = { [ResourceType.METAL]: 2, [ResourceType.WOOD]: 1 };
+    const inv = { [ResourceType.METAL]: { count: 2 }, [ResourceType.WOOD]: { count: 1 } };
     const opts = getFaction('witch').getSummonOptions(inv);
     assert.equal(opts.length, 3);
     assert.equal(opts[0].summonType, EntityType.IRON_GOLEM);
@@ -283,7 +283,7 @@ describe('Available actions', () => {
   });
 
   test('Witch summon options empty with insufficient resources', () => {
-    const inv = { [ResourceType.METAL]: 1 };
+    const inv = { [ResourceType.METAL]: { count: 1 } };
     assert.deepEqual(getFaction('witch').getSummonOptions(inv), []);
   });
 
@@ -523,17 +523,17 @@ describe('Faction helpers', () => {
 
 describe('hasHorse', () => {
   test('Hero with horse returns true', () => {
-    assert.equal(getFaction('hero').hasHorse({ items: { horse: 1 } }), true);
+    assert.equal(getFaction('hero').hasHorse({ items: { horse: { count: 1 } } }), true);
   });
 
   test('Hero without horse returns false', () => {
     assert.equal(getFaction('hero').hasHorse({ items: {} }), false);
-    assert.equal(getFaction('hero').hasHorse({ items: { horse: 0 } }), false);
+    assert.equal(getFaction('hero').hasHorse({ items: { horse: { count: 0 } } }), false);
     assert.equal(getFaction('hero').hasHorse({}), false);
   });
 
   test('Witch always returns false even with horse item', () => {
-    assert.equal(getFaction('witch').hasHorse({ items: { horse: 1 } }), false);
+    assert.equal(getFaction('witch').hasHorse({ items: { horse: { count: 1 } } }), false);
   });
 });
 

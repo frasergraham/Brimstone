@@ -11,7 +11,7 @@
 import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, bestWitchObjective, nearestBuilding, roundsUntilScoring, scoreNodeFeasibility, WITCH_PERSONALITIES, adjacentBlockingFortToward } from './ai.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
-import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf } from './entities.js';
+import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf, rangeOf, getItemCountOf, totalItemCount, removeItemInItems } from './entities.js';
 import { ResourceType, hasBuilding, isRiver, isBuildingFootprint } from './tiles.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
 import { DAMAGE_SCALE } from './balance.js';
@@ -183,9 +183,9 @@ export function assessBoard(sim) {
 
   // Resources
   const inv = sim.inventory?.witch || {};
-  const metalCount = inv[ResourceType.METAL] || 0;
-  const woodCount = inv[ResourceType.WOOD] || 0;
-  const totalResources = Object.values(inv).reduce((s, v) => s + (v || 0), 0);
+  const metalCount = getItemCountOf(inv, ResourceType.METAL);
+  const woodCount = getItemCountOf(inv, ResourceType.WOOD);
+  const totalResources = totalItemCount(inv);
   const canAffordSummon = totalResources >= 2;
   let bestSummonType = null;
   if (canAffordSummon) {
@@ -436,7 +436,7 @@ export function estimateCombat(attacker, defender, board) {
   // Ranged attackers (range > 1) don't benefit from — or fear — adjacency:
   // no attacker gang-up, no defender ally-defence. Match the rules in
   // executeBattle so the AI estimator lines up with actual dice math.
-  const attackerRange = attacker.range ?? 1;
+  const attackerRange = rangeOf(attacker);
   const isRanged = attackerRange > 1;
 
   const gangUpCount = isRanged ? 0 : board.minions.filter(m =>
@@ -498,7 +498,7 @@ export function genDefendWitch(sim, board, budget, config = null) {
 
   // Heal: use herbs if witch is injured (costs 1 action, from shared supply)
   const witchEntity = sim.entities.find(e => e.id === board.witch.id);
-  const herbs = sim.inventory?.witch?.[ResourceType.HERBS] || 0;
+  const herbs = getItemCountOf(sim.inventory?.witch, ResourceType.HERBS);
   if (herbs > 0 && board.witchHpRatio < 1.0 && remaining > 0) {
     actions.push({
       type: PlanActionType.HEAL, entityId: board.witch.id,
@@ -633,7 +633,7 @@ export function genHuntHeroes(sim, board, budget) {
 
       // If in attack range — shoot or swing directly. Ranged units (witch,
       // range 2) skip the close-in step when they can already hit the target.
-      const unitRange = simUnit.range ?? 1;
+      const unitRange = rangeOf(simUnit);
       if (dist <= unitRange) {
         const est = estimateCombat(simUnit, target.entity, board);
         // For hunting, accept unfavorable odds too — attrition wins
@@ -662,7 +662,7 @@ export function genHuntHeroes(sim, board, budget) {
         attackersAssigned++;
 
         let stepsLeft = Math.min(remaining, 3);
-        const unitHuntRange = simUnit.range ?? 1;
+        const unitHuntRange = rangeOf(simUnit);
         while (stepsLeft > 0) {
           const curDist = hexDistance(simUnit.col, simUnit.row, target.entity.col, target.entity.row);
           if (curDist <= unitHuntRange) {
@@ -891,9 +891,9 @@ function _trySummons(actions, sim, board, remaining) {
 
   while (remaining > 0 && currentArmy < armyCap) {
     const ledger = sim.resourceLedger;
-    const metal = ledger[ResourceType.METAL] || 0;
-    const wood = ledger[ResourceType.WOOD] || 0;
-    const total = Object.values(ledger).reduce((s, v) => s + (v || 0), 0);
+    const metal = getItemCountOf(ledger, ResourceType.METAL);
+    const wood = getItemCountOf(ledger, ResourceType.WOOD);
+    const total = totalItemCount(ledger);
 
     if (total < 2) break;
 
@@ -903,15 +903,16 @@ function _trySummons(actions, sim, board, remaining) {
     else summonType = EntityType.MINION;
 
     if (summonType === EntityType.IRON_GOLEM) {
-      ledger[ResourceType.METAL] -= 2;
+      removeItemInItems(ledger, ResourceType.METAL, 2);
     } else if (summonType === EntityType.WOOD_GOLEM) {
-      ledger[ResourceType.WOOD] -= 2;
+      removeItemInItems(ledger, ResourceType.WOOD, 2);
     } else {
-      const keys = Object.keys(ledger).filter(k => ledger[k] > 0).sort((a, b) => ledger[b] - ledger[a]);
+      const keys = Object.keys(ledger).filter(k => getItemCountOf(ledger, k) > 0)
+        .sort((a, b) => getItemCountOf(ledger, b) - getItemCountOf(ledger, a));
       let spend = 2;
       for (const k of keys) {
-        const take = Math.min(ledger[k], spend);
-        ledger[k] -= take;
+        const take = Math.min(getItemCountOf(ledger, k), spend);
+        removeItemInItems(ledger, k, take);
         spend -= take;
         if (spend === 0) break;
       }
@@ -1000,7 +1001,7 @@ export function genControlNodes(sim, board, budget) {
       if (onNode) {
         // AGGRESSIVE: fight ALL enemies within attack range of the unit
         // (adjacency for melee minions, range 2 for the witch).
-        const onNodeUnitRange = simUnit.range ?? 1;
+        const onNodeUnitRange = rangeOf(simUnit);
         const adjacentEnemies = board.visibleHeroes.filter(h =>
           hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= onNodeUnitRange
         );
@@ -1039,7 +1040,7 @@ export function genControlNodes(sim, board, budget) {
       // Move toward node, attacking enemies encountered en route
       sim.unitCommitments.set(simUnit.id, Goal.CONTROL_NODES);
       let stepsForUnit = Math.min(remaining, maxStepsPerUnit);
-      const enRouteUnitRange = simUnit.range ?? 1;
+      const enRouteUnitRange = rangeOf(simUnit);
       while (stepsForUnit > 0) {
         // Opportunity attack: fight enemies within this unit's attack range
         const adjacentFoes = board.visibleHeroes.filter(h =>

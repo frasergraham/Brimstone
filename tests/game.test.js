@@ -968,6 +968,7 @@ describe('swapLeaderToFaction', () => {
     const heroCol     = state.hero.col;
     const heroRow     = state.hero.row;
 
+    assert.ok(state.hero.hasItem('horn'), 'precondition: Paladin holds a horn before the swap');
     state.swapLeaderToFaction('day', 'rogue');
 
     // Same entity, mutated in place — id/owner/position preserved.
@@ -984,6 +985,9 @@ describe('swapLeaderToFaction', () => {
     assert.equal(state.hero.factionId, 'rogue');
     // Full-heal on swap (game just started).
     assert.equal(state.hero.hp,        state.hero.maxHp);
+    // Horn-training is stripped on a paladin → rogue swap, so the horn key
+    // item goes with it (the Sound Horn gate reads the item).
+    assert.ok(!state.hero.hasItem('horn'), 'rogue swap must take back the horn');
   });
 
   test('swapping to side default is a no-op', () => {

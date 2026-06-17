@@ -103,7 +103,7 @@ describe('Witch minions cannot explore or summon', () => {
     const minion = createMinion(3, 3);
     minion.owner = 'witch';
     state.entities.push(minion);
-    state.inventory.witch[ResourceType.WOOD] = 5;
+    state.inventory.witch[ResourceType.WOOD] = { count: 5 };
 
     const actions = getValidActions(state, minion);
     assert.ok(!actions.some(a => a.type === ActionType.SUMMON),
@@ -114,7 +114,7 @@ describe('Witch minions cannot explore or summon', () => {
     const state = freshState();
     const witch = getFaction('witch').createLeader(3, 3, 'witch');
     state.entities.push(witch);
-    state.inventory.witch[ResourceType.WOOD] = 5;
+    state.inventory.witch[ResourceType.WOOD] = { count: 5 };
 
     const actions = getValidActions(state, witch);
     assert.ok(actions.some(a => a.type === ActionType.SUMMON),
@@ -180,7 +180,7 @@ describe('Sound Horn action', () => {
     const state = freshState();
     const hero = getFaction('hero').createLeader(3, 3, 'hero');
     state.entities.push(hero);
-    state.inventory.hero.food = 5;
+    state.inventory.hero.food = { count: 5 };
 
     const actions = getValidActions(state, hero);
     const horn = actions.find(a => a.type === ActionType.SOUND_HORN);
@@ -202,7 +202,7 @@ describe('Sound Horn action', () => {
     const state = freshState();
     const hero = getFaction('hero').createLeader(3, 3, 'hero');
     state.entities.push(hero);
-    state.inventory.hero.food = 0;
+    state.inventory.hero.food = { count: 0 };
 
     const actions = getValidActions(state, hero);
     const horn = actions.find(a => a.type === ActionType.SOUND_HORN);
@@ -217,12 +217,12 @@ describe('Sound Horn action', () => {
     const hero = getFaction('hero').createLeader(3, 3, 'hero');
     hero.owner = 'hero';
     state.entities.push(hero);
-    state.inventory.hero.food = 5;
+    state.inventory.hero.food = { count: 5 };
 
     const result = executeSoundHorn(state, hero);
     assert.equal(result.success, true);
     assert.equal(result.cost, 1);
-    assert.equal(state.inventory.hero.food, 4);
+    assert.equal((state.inventory.hero.food?.count ?? 0), 4);
   });
 
   test('executeSoundHorn fails with insufficient food', () => {
@@ -231,7 +231,7 @@ describe('Sound Horn action', () => {
     const hero = getFaction('hero').createLeader(3, 3, 'hero');
     hero.owner = 'hero';
     state.entities.push(hero);
-    state.inventory.hero.food = 0;
+    state.inventory.hero.food = { count: 0 };
 
     const result = executeSoundHorn(state, hero);
     assert.equal(result.success, false);
@@ -244,7 +244,7 @@ describe('Sound Horn action', () => {
     const hero = getFaction('hero').createLeader(3, 3, 'hero');
     hero.owner = 'hero';
     state.entities.push(hero);
-    state.inventory.hero.food = 5;
+    state.inventory.hero.food = { count: 5 };
 
     assert.equal(state.heroRevealedByHorn, false);
     executeSoundHorn(state, hero);
@@ -256,7 +256,7 @@ describe('Sound Horn action', () => {
     state.addLog = () => {};
     const witch = createWitch(3, 3);
     state.entities.push(witch);
-    state.inventory.hero.food = 5;
+    state.inventory.hero.food = { count: 5 };
 
     const result = executeSoundHorn(state, witch);
     assert.equal(result.success, false);
@@ -297,7 +297,7 @@ describe('Sound Horn action', () => {
     const hero = getFaction('hero').createLeader(3, 3, 'hero');
     hero.owner = 'hero';
     state.entities.push(hero);
-    state.inventory.hero.food = 5;
+    state.inventory.hero.food = { count: 5 };
 
     executeSoundHorn(state, hero);
     const witchLog = logs.find(l => l.faction === 'witch');
@@ -313,7 +313,7 @@ describe('Sound Horn action', () => {
     const hero = getFaction('hero').createLeader(3, 3, 'hero');
     hero.owner = 'hero';
     state.entities.push(hero);
-    state.inventory.hero.food = 5;
+    state.inventory.hero.food = { count: 5 };
 
     // Place a hidden survivor at (3, 4) — within 4 hexes
     const tile = state.tiles.get(hexKey(3, 4));
@@ -337,7 +337,7 @@ describe('Sound Horn action', () => {
       const h = getFaction('hero').createLeader(3, 3, 'hero');
       h.owner = 'hero';
       s.entities.push(h);
-      s.inventory.hero.food = 5;
+      s.inventory.hero.food = { count: 5 };
       const t = s.tiles.get(hexKey(3, 4));
       if (t) {
         decomposeTileType(t, TileType.BUILDING);

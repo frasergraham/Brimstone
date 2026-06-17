@@ -58,7 +58,6 @@ describe('unit range registry', () => {
     const w = createWitch(0, 0);
     w.equipWeapon('magic_bolt');
     assert.equal(w.getRange(), 2);
-    assert.equal(w.range, 2);
   });
 
   test('hero and minion have range 1', () => {
@@ -435,29 +434,46 @@ describe('resolver — ranged BATTLE_UNIT', () => {
 });
 
 describe('state-sync — range round-trips', () => {
-  test('witch.range survives serialization', () => {
+  test('equipped weapon survives serialization (getRange composes 2)', () => {
     const state = freshState();
     const snap = serializeState(state);
     const witchSnap = snap.entities.find(e => e.type === EntityType.WITCH);
-    assert.equal(witchSnap.range, 2);
+    // No denormalized range or weapon slot — the equipped weapon rides in items.
+    assert.equal(witchSnap.range, undefined);
+    assert.equal(witchSnap.weapon, undefined);
+    assert.deepEqual(witchSnap.items.magic_bolt, { count: 1, equipped: true });
 
     const restored = deserializeState(snap);
     const witchRestored = restored.entities.find(e => e.type === EntityType.WITCH);
-    assert.equal(witchRestored.range, 2);
     assert.equal(typeof witchRestored.getRange, 'function');
     assert.equal(witchRestored.getRange(), 2);
+    assert.equal(witchRestored.getEquippedWeaponId(), 'magic_bolt');
   });
 
-  test('legacy snapshot without range still hydrates to UNIT_TYPES default', () => {
+  test('legacy v6 snapshot (weapon slot, no range) migrates to equipped-tag items', () => {
     const state = freshState();
     const snap = serializeState(state);
-    // Strip range from every entity to simulate a pre-ranged-attacks save.
-    for (const e of snap.entities) delete e.range;
+    // Rewrite each entity to the legacy v6 shape: equipped weapon in a top-level
+    // `weapon` string slot, items as the old flat count map, no range field.
+    for (const e of snap.entities) {
+      const equippedId = Object.keys(e.items).find(k => e.items[k]?.equipped) ?? null;
+      e.weapon = equippedId;
+      const flat = {};
+      for (const [k, v] of Object.entries(e.items)) {
+        if (k === equippedId) continue; // the equipped copy lived in the slot, not items
+        flat[k] = v.count;
+      }
+      e.items = flat;
+      delete e.range;
+    }
 
     const restored = deserializeState(snap);
     const witchRestored = restored.entities.find(e => e.type === EntityType.WITCH);
     const heroRestored  = restored.entities.find(e => e.type === EntityType.PALADIN);
-    assert.equal(witchRestored.range, 2, 'witch default range restored from registry');
-    assert.equal(heroRestored.range,  1, 'paladin default range restored from registry');
+    assert.equal(witchRestored.getRange(), 2, 'witch range composes from migrated magic_bolt');
+    assert.equal(witchRestored.getEquippedWeaponId(), 'magic_bolt');
+    assert.equal(heroRestored.getRange(), 1, 'paladin sword keeps melee range');
+    assert.equal(heroRestored.getEquippedWeaponId(), 'sword');
+    assert.equal(heroRestored.weapon, undefined, 'legacy weapon slot dropped after migration');
   });
 });

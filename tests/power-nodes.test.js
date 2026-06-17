@@ -427,7 +427,7 @@ describe('Fortify allowed on node hexes', () => {
     const obj = state.witchObjectives[0];
     state.hero.col = obj.hexes[0].col;
     state.hero.row = obj.hexes[0].row;
-    state.inventory.hero['wood'] = 5;
+    state.inventory.hero['wood'] = { count: 5 };
     const result = executeFortify(state, state.hero);
     assert.equal(result.success, true, 'Fortify on center hex should succeed');
   });
@@ -439,7 +439,7 @@ describe('Fortify allowed on node hexes', () => {
     if (!satellite) return; // degenerate cluster, skip
     state.hero.col = satellite.col;
     state.hero.row = satellite.row;
-    state.inventory.hero['wood'] = 5;
+    state.inventory.hero['wood'] = { count: 5 };
     const result = executeFortify(state, state.hero);
     assert.equal(result.success, true, 'Fortify on satellite hex should succeed');
   });
@@ -449,7 +449,7 @@ describe('Fortify allowed on node hexes', () => {
     const obj = state.witchObjectives[0];
     state.hero.col = obj.hexes[0].col;
     state.hero.row = obj.hexes[0].row;
-    state.inventory.hero['wood'] = 5;
+    state.inventory.hero['wood'] = { count: 5 };
     const actions = getValidActions(state, state.hero);
     const hasFortify = actions.some(a => a.type === 'fortify');
     assert.equal(hasFortify, true, 'FORTIFY should be available on node hex');
@@ -627,12 +627,15 @@ describe('nodeSpawnedSurvivors', () => {
     const state = new GameState();
     generateMap(state, 'skirmish');
     state.nodeSpawnedSurvivors = [
-      { type: 'survivor', name: 'TestSurvivor', title: 'Scout', hp: 3, maxHp: 3, attack: 1, defense: 1, abilityLabel: null, color: '#aaa' },
+      { type: 'survivor', name: 'TestSurvivor', title: 'Scout', hp: 3, maxHp: 3, attack: 1, defense: 1, abilityLabel: null, color: '#aaa', faction: 'hero' },
     ];
     const snap = serializeState(state);
     const restored = deserializeState(snap);
     assert.equal(restored.nodeSpawnedSurvivors.length, 1);
     assert.equal(restored.nodeSpawnedSurvivors[0].name, 'TestSurvivor');
+    // Faction tag survives the wire — the wrap-up uses this to fog-filter
+    // node spawns by viewer side, so dropping it would re-introduce the leak.
+    assert.equal(restored.nodeSpawnedSurvivors[0].faction, 'hero');
   });
 
   test('defaults to empty array when missing from snapshot', () => {

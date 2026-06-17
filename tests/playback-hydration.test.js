@@ -41,11 +41,11 @@ test('patchAlive hydrates getAttack / getDefense correctly across weapon state',
   const snap = [{
     id: 'e1', type: EntityType.PALADIN, owner: 'hero',
     col: 0, row: 0, hp: 10, maxHp: 14, attack: 3, defense: 2,
-    weapon: 'sword', items: {},
+    items: { sword: { count: 1, equipped: true } },
   }];
   patchAlive(snap);
   const e = snap[0];
-  // Phase 3: getAttack composes base + weapon mod at call time.
+  // getAttack composes base + equipped-weapon mod at call time.
   assert.equal(e.getAttack(),  5, '3 base + 2 sword');
   assert.equal(e.getDefense(), 2, 'sword has no defense mod');
 });

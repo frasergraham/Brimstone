@@ -16,6 +16,7 @@ import {
   createHero, createSurvivor, createWitch, createMinion,
   createWoodGolem, createIronGolem, createZombie, createSoldier,
   createRogue, createCaptain, createBrute, createNecromancer,
+  rangeOf, getEquippedWeaponIdOf,
 } from '../entities.js';
 
 // Two stable side ids — placed on the entity's `ownerId` field so allied
@@ -175,12 +176,10 @@ function _layoutCombatants(state, slots, size, attackMode = 'melee') {
   if (slots.attacker) {
     attackerEntity = _placeUnit(state, slots.attacker, centre.col, centre.row, ATK_SIDE_ID);
     // In ranged mode, equip a bow so the attacker becomes ranged regardless
-    // of the picked unit type. Units have no innate range now — range is
-    // weapon-derived (Entity.getRange() reads ITEMS[weapon].range), and
-    // executeBattle routes through getRange(), so simply setting `.range`
-    // would be ignored. equipWeapon('bow') sets both this.weapon (range 3 =
-    // RANGED_ATTACK_RANGE, projectileType 'bolt') and the denormalized
-    // this.range cache — making the strike a true ranged attack.
+    // of the picked unit type. Units have no innate range — range is
+    // weapon-derived (Entity.getRange() reads ITEMS[equippedWeapon].range, with
+    // the bow at range 3 / projectileType 'bolt'), so equipping the bow makes
+    // the strike a true ranged attack.
     if (attackMode === 'ranged') attackerEntity.equipWeapon('bow');
   }
   if (slots.defender) {
@@ -496,7 +495,8 @@ function _snap(e) {
   return {
     id: e.id, col: e.col, row: e.row,
     owner: e.owner, type: e.type, title: e.title ?? null,
-    range: e.range ?? 1,
+    range: rangeOf(e),
+    weapon: getEquippedWeaponIdOf(e.items),
   };
 }
 

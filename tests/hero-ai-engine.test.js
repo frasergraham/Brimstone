@@ -4,7 +4,12 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Phase } from '../src/game.js';
-import { EntityType } from '../src/entities.js';
+import { EntityType, rangeOf, normalizeItems } from '../src/entities.js';
+
+// Phase-2 inventory: normalize each side's flat `{ id: N }` seed to the
+// canonical dict-of-objects shape `{ id: { count: N } }` the runtime uses.
+const normSidesInv = (inv) =>
+  Object.fromEntries(Object.entries(inv ?? {}).map(([s, m]) => [s, normalizeItems(m)]));
 import { TileType, ResourceType } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
 import { PlanSimState, HERO_PERSONALITIES } from '../src/ai.js';
@@ -21,6 +26,7 @@ import {
   genProtectHero,
   genControlNodes,
   genExplore,
+  genHuntWitch,
   fillGapsHero,
 } from '../src/hero-ai-engine.js';
 import { PlanActionType } from '../src/planner.js';
@@ -78,10 +84,10 @@ function makeFakeState(overrides = {}) {
     ],
     nodeScore: overrides.nodeScore ?? { hero: 0, witch: 0 },
     fogOfWar: 'none',
-    inventory: overrides.inventory ?? {
+    inventory: normSidesInv(overrides.inventory ?? {
       witch: {},
       hero: { [ResourceType.WOOD]: 2, [ResourceType.METAL]: 1, [ResourceType.FOOD]: 2, [ResourceType.HERBS]: 1 },
-    },
+    }),
     entities,
   };
 }
@@ -187,7 +193,7 @@ describe('assessHeroBoard', () => {
       entities: [
         makeEntity({
           id: 'hero1', col: 3, row: 3,
-          items: { [ResourceType.HERBS]: 1, 'sword': 1 },
+          items: { [ResourceType.HERBS]: { count: 1 }, sword: { count: 1 } },
         }),
         makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
       ],
@@ -435,8 +441,8 @@ describe('HERO_PERSONALITY_CONFIGS', () => {
 describe('HeroEnginePlanSimState', () => {
   test('resourceLedger uses shared inventory', () => {
     const sim = makeHeroEngineSim();
-    assert.equal(sim.resourceLedger[ResourceType.WOOD], 2);
-    assert.equal(sim.resourceLedger[ResourceType.METAL], 1);
+    assert.equal((sim.resourceLedger[ResourceType.WOOD]?.count ?? 0), 2);
+    assert.equal((sim.resourceLedger[ResourceType.METAL]?.count ?? 0), 1);
   });
 
   test('has departedHexes and unitCommitments', () => {
@@ -513,7 +519,7 @@ describe('genProtectHero', () => {
     const sim = makeHeroEngineSim({
       entities: [
         makeEntity({ id: 'hero1', col: 3, row: 3, hp: 5, maxHp: 10,
-          items: { 'sword': 1 } }),
+          items: { sword: { count: 1 } } }),
         makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
       ],
     });
@@ -797,6 +803,64 @@ describe.skip('genFortifyPosition (removed — merged into EXPLORE and CONTROL_N
     const actions = genFortifyPosition(sim, board, 5, config);
     const fortifyCount = actions.filter(a => a.type === PlanActionType.FORTIFY).length;
     assert.ok(fortifyCount <= 1, `should not exceed day cap (got ${fortifyCount})`);
+  });
+});
+
+// ── genHuntWitch ────────────────────────────────────────────────────────────
+
+describe('genHuntWitch', () => {
+  // Regression (Phase-1 inventory refactor): the priority-target pre-filter
+  // must derive the hero leader's reach from rangeOf(heroEntity), NOT from a
+  // stale `heroEntity.range` own-property. The refactor removed entity.range
+  // as a denormalized field, so a PlanSimState clone ({...e}) has no `range`
+  // own-property and the old `heroEntity.range ?? 1` collapsed to 1 — even for
+  // a range-3 rogue bow — silently dropping minions the rogue can already
+  // shoot from 2–3 hexes. See hero-ai-engine.js genHuntWitch.
+  test('priority pre-filter uses rangeOf(bow=3) so a minion at distance 2 is targeted', () => {
+    const hero = makeEntity({
+      id: 'hero1', type: EntityType.HERO, owner: 'hero',
+      col: 3, row: 3, hp: 14, maxHp: 14, attack: 3, defense: 2,
+      items: { bow: { equipped: true, count: 1 } },   // bow ⇒ range 3
+    });
+    // Anchor the bug: range comes from the equipped weapon, and there is NO
+    // stale own-property to fall back on. (range 1 here would mean the bug.)
+    assert.equal(rangeOf(hero), 3);
+    assert.equal(hero.range, undefined);
+
+    // Survivor sits adjacent to the minion to execute the kill once the
+    // minion is admitted to the target list by the hero-leader pre-filter.
+    const survivor = makeEntity({
+      id: 'surv1', type: EntityType.SURVIVOR, owner: 'hero',
+      col: 4, row: 3, hp: 8, maxHp: 8, attack: 4, defense: 1, items: {},
+    });
+    // Minion is 2 hexes from the hero — beyond melee (range 1), inside bow
+    // range (3). Far from the witch so it gains no defensive gang-up.
+    const minion = makeEntity({
+      id: 'minion1', type: EntityType.MINION, owner: 'witch',
+      col: 5, row: 3, hp: 1, maxHp: 1, attack: 1, defense: 0, items: {},
+    });
+    const witch = makeEntity({
+      id: 'witch1', type: EntityType.WITCH, owner: 'witch',
+      col: 1, row: 3, hp: 8, maxHp: 8, attack: 2, defense: 1, items: {},
+    });
+
+    const sim = makeHeroEngineSim({ entities: [hero, survivor, minion, witch] });
+    const board = assessHeroBoard(sim);
+
+    // Pre-conditions: the witch is visible (gate) and the minion is seen.
+    assert.equal(board.witchVisible, true);
+    assert.ok(board.witchMinions.some(m => m.id === 'minion1'),
+      'minion should be visible to the hero');
+
+    const actions = genHuntWitch(sim, board, 5);
+
+    // With the bug (heroAttackRange === 1) the distance-2 minion never enters
+    // the target list, so nothing is dispatched against it. With the fix it
+    // does, and the adjacent survivor is sent to kill it.
+    assert.ok(
+      actions.some(a => a.type === PlanActionType.BATTLE_UNIT && a.targetId === 'minion1'),
+      'expected a BATTLE_UNIT against the distance-2 minion (in bow range)',
+    );
   });
 });
 

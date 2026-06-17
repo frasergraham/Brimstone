@@ -157,14 +157,15 @@ export const ABILITIES = Object.freeze({
 
   // ── Faction-innate leader abilities (Phase 5) ────────────────────────
   // Pushed onto leaders by `Faction.createLeader()` via
-  // `innateLeaderAbilities`; the action-availability gates in
-  // src/actions.js check `actor.hasAbility(id)` instead of the legacy
-  // `isLeaderType + owner` pair. Execute bodies still live in
-  // src/actions.js (`executeSoundHorn`, `executeSummon`) — a full
-  // registry-delegated dispatch is deferred to a follow-up PR because
-  // the executor bodies depend on getFaction / createMinion / the
-  // _triggerSurvivorEncounter helper, which would create cross-module
-  // cycles if inlined here.
+  // `innateLeaderAbilities`. The `summon` action gate in src/actions.js
+  // checks `actor.hasAbility('summon')`; `sound_horn` instead marks a leader
+  // as horn-trained (so createLeader issues them the Horn key item) while the
+  // Sound Horn action gate reads `actor.hasItem('horn')` — see executeSoundHorn.
+  // Execute bodies still live in src/actions.js (`executeSoundHorn`,
+  // `executeSummon`) — a full registry-delegated dispatch is deferred to a
+  // follow-up PR because the executor bodies depend on getFaction /
+  // createMinion / the _triggerSurvivorEncounter helper, which would create
+  // cross-module cycles if inlined here.
   sound_horn: {
     id: 'sound_horn',
     kind: 'active',

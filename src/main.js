@@ -31,7 +31,7 @@ import { VERSION, BUILD_VERSION } from './version.js';
 import { buildPlayerStatusHtml } from './ui-render.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType, groupPlanByEntity } from './planner.js';
-import { buildStepDigest, buildStoryBeatDigest, isEventVisible } from './replay-timeline.js';
+import { buildStepDigest, buildStoryBeatDigest, isEventVisible, compactUneventfulTurns } from './replay-timeline.js';
 import { hexDistance, getNeighbors, hexKey } from './hex.js';
 import { planCombatFrames } from './combat-presentation.js';
 import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD, deriveBlockedSlots } from './tiles.js';
@@ -49,8 +49,8 @@ import { ReplayCache } from './replay-cache.js';
 import { makeShowLoadingAndReveal } from './loading-reveal.js';
 import { MAP_SIZES } from './map.js';
 import { nodeController } from './game.js';
-import { MissionConductor, areHintsSuppressed, markHintsSeen } from './mission-conductor.js';
-import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel } from './entities.js';
+import { MissionConductor, areHintsSuppressed, markHintsSeen, resetAllHintsForCampaign } from './mission-conductor.js';
+import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel, getEquippedWeaponIdOf, normalizeItems, flattenItemCounts } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, CAMPAIGN_SLOT_COUNT, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
@@ -63,6 +63,7 @@ import { playConversation } from './conversation-player.js';
 import { loadVoiceManifest } from './voiceover.js';
 import { buildMissionMap } from './campaign/mission-map.js';
 import { run3DCombatCardHold } from './combat-cinematic.js';
+import { STORY_BEAT_MIN_DWELL_MS, storyBeatHoldMs } from './story-beat-cinematic.js';
 import { runDiscoveryReadout, discoveryText } from './discovery-cinematic.js';
 import { playFastCombatDisplay } from './combat-fast.js';
 import {
@@ -679,8 +680,9 @@ function _startLocalPlanningPhase() {
   state.startPlanning();
 
   if (_autoplay) {
-    // AI vs AI: generate both plans immediately then resolve
-    setTimeout(() => _runLocalAutoResolution(), 0);
+    // AI vs AI: surface any authored pre-planning story beats first (autoplay
+    // must not skip narrative content), then generate both plans and resolve.
+    setTimeout(() => _runLocalAutoResolutionWithStoryBeats(), 0);
     return;
   }
 
@@ -787,13 +789,30 @@ async function _presentStepLogicEvents(events, afterStepIndex) {
 }
 
 /** Insert a story-beat card into the live replay timeline and gate on NEXT (like
- *  a step boundary) so the player reads it; auto-advances on autoplay. */
+ *  a step boundary) so the player reads it. When resolution is auto-advancing
+ *  (AI-vs-AI autoplay, or the replay "AutoPlay" toggle leaves playback un-paused)
+ *  there's no human to press NEXT, so we hold the beat for a readable dwell
+ *  instead of letting its card flash past — auto-advancing once the dwell
+ *  elapses, or sooner if the operator presses NEXT (playbackDelay collapses on
+ *  stepRequested). A paused/manual replay still gates on NEXT. */
 async function _presentStoryBeatCard(beat, afterStepIndex) {
   if (!ui?.insertReplayTimelineCol) return;
   const col = buildStoryBeatDigest(beat, `${afterStepIndex}:${_beatCardSeq++}`);
   ui.insertReplayTimelineCol(col, afterStepIndex);
   ui.setReplayTimelineStep?.(col.stepIndex);
-  if (_autoplay) { await playbackDelay(1100); return; }
+  const holdMs = storyBeatHoldMs({
+    autoplay: _autoplay,
+    paused:   playback.paused,
+    title:    beat?.title,
+    text:     beat?.text,
+  });
+  if (holdMs > 0) {
+    await playbackDelay(holdMs);
+    // A NEXT press during the hold (replay AutoPlay) collapsed the dwell to skip
+    // this beat — consume it so it doesn't leak into the next step's gate.
+    playback.stepRequested = false;
+    return;
+  }
   if (playback.paused) ui.setReplayNextReady?.(true);
   while (playback.paused && !playback.stepRequested
          && !playback.restart && !playback.aborted && !playback.goBack && !playback.jumpToEnd) {
@@ -979,6 +998,61 @@ async function _onLocalHumanPlanSubmit(faction, plan) {
   if (bothReady) await _runLocalResolution();
 }
 
+// Autoplay twin of the human pre-planning story flow in _startLocalPlanningPhase:
+// drain the same pre-planning story beats (mission story triggers + the round-
+// start mission-logic pump, including any intro beats queued at missionStart)
+// and present them as auto-dismissing cards so an AI-vs-AI run still pauses long
+// enough to read them — then generate plans and resolve. For a plain (non-
+// campaign) AI-vs-AI game there are no story triggers and no logic engine, so
+// storyEvents stays empty and this is identical to _runLocalAutoResolution().
+async function _runLocalAutoResolutionWithStoryBeats() {
+  if (!state || state.gameOver) return;
+
+  let storyEvents = [];
+  if (_activeMissionDef?.storyTriggers && _activeCampaign) {
+    storyEvents = processStoryTriggers(state, _activeMissionDef.storyTriggers, _activeCampaign.storyFlags);
+  }
+  if (state.logicEngine) {
+    state.pumpMissionLogic('roundStart');
+    storyEvents = storyEvents.concat(_drainLogicStoryEvents());
+  }
+
+  // The round-start pump can DECIDE the mission (mirrors the human path) — show
+  // the beats then surface the debrief instead of resolving an over mission.
+  if (state.gameOver) {
+    if (storyEvents.length > 0) await _showAutoplayStorySequence(storyEvents);
+    _finishDecidedMissionBeforePlanning();
+    return;
+  }
+
+  if (storyEvents.length > 0) await _showAutoplayStorySequence(storyEvents);
+  if (!state || state.gameOver) return;   // a beat could end the mission
+  _runLocalAutoResolution();
+}
+
+// Present pre-planning story beats during autoplay. Story-beat cards show as the
+// story modal, held for STORY_BEAT_MIN_DWELL_MS (auto-dismiss; a watching
+// operator can click Continue sooner). Conversation playback during autoplay is
+// owned by a separate change (its audio path) — skip it here so we don't add a
+// second, conflicting driver; this matches autoplay's prior behaviour (the human
+// pre-planning conversation path was never reached in autoplay).
+async function _showAutoplayStorySequence(events) {
+  if (!ui) return;
+  for (const ev of events) {
+    if (ev.conversation) continue;
+    // Scale the hold by beat text length (same model as the mid-replay card and
+    // the conversation player's reading time) so long beats actually stay up
+    // long enough to read instead of auto-dismissing at the bare floor.
+    const autoDismissMs = storyBeatHoldMs({
+      autoplay: true,
+      paused:   false,
+      title:    ev.title,
+      text:     ev.text,
+    });
+    await ui.showStoryModal(ev.title, ev.text, { autoDismissMs });
+  }
+}
+
 async function _runLocalAutoResolution() {
   if (!state || state.gameOver) return;
   const heroPlan  = heroAI  ? heroAI.generatePlan()  : [];
@@ -998,16 +1072,23 @@ async function _runLocalAutoResolution() {
 // Build the end-of-turn wrap-up card data: the upcoming phase/round title and
 // the structured combat pairs (icon-vs-icon with HP loss / kills). The UI layer
 // renders the icons + score dots from this.
-function _buildWrapUpContent(steps, roundNum) {
+//
+// `humanFaction` is the viewer's side — both explore discoveries and
+// `state.nodeSpawnedSurvivors` are fog-of-war filtered against it. Callers in
+// online MP and local PvP both have a single viewer faction even though
+// `state.heroIsAI`/`witchIsAI` are both false, so we accept it from the caller
+// instead of deriving it locally (deriving here returned `null` and surfaced
+// the opponent's discoveries on the wrap-up). null ⇒ count all (AI-vs-AI).
+function _buildWrapUpContent(steps, roundNum, humanFaction = null) {
   const combats = compileTurnBattlePairs(steps, state.entities, ResEventType, PlanActionType);
   // Survivors/zombies found this round — move/explore/horn encounters plus any
   // spawned at power nodes during endRound (matches the old summary modal).
   // Also collect explored-loot icons so the card lists the actual resources.
   // Loot is the PLAYER's only — see collectTurnFinds (AI loot goes to its own
   // inventory, so counting it would double-show shared resource icons).
-  const humanFaction = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : null;
-  const { discoveries, loot } = collectTurnFinds(steps, humanFaction);
-  for (const s of (state.nodeSpawnedSurvivors ?? [])) discoveries.push(s);
+  const { discoveries, loot } = collectTurnFinds(
+    steps, humanFaction, state.nodeSpawnedSurvivors ?? []
+  );
 
   // Night attrition roll-call — who suffered in the open and who was sheltered
   // by a building or fortification this round (from the post-round effects).
@@ -1057,7 +1138,7 @@ async function _runEndOfRoundReview({
     if (attritionLevel) state.attritionChanged = false;
     let action;
     do {
-      const wrap = _buildWrapUpContent(steps, roundNum);
+      const wrap = _buildWrapUpContent(steps, roundNum, humanFaction);
       action = await ui.showReplayWrapUp({
         titleHtml: wrap.title, combats: wrap.combats, discoveries: wrap.discoveries,
         loot: wrap.loot, attrition: wrap.attrition, attritionLevel,
@@ -1441,7 +1522,7 @@ async function _replayLastRoundInlineLocal() {
     // planning. Skipped entirely if the player hit jump-to-end mid-animation.
     if (!skipped) {
       setMode(AppMode.SUMMARY);
-      const wrap = _buildWrapUpContent(steps, entry.roundNum);
+      const wrap = _buildWrapUpContent(steps, entry.roundNum, humanFaction);
       let action;
       do {
         action = await ui.showReplayWrapUp({
@@ -1485,7 +1566,7 @@ function _playAttackIntroAnim(actorSnap, targetSnap, fromCol, fromRow, toCol, to
     // weapon names its projectileType (bolt for bows/firearms, sparkle for
     // the Magic Bolt). Fall back to sparkle for any legacy ranged source.
     const projectileType =
-      ITEMS[actorSnap.weapon]?.projectileType ?? 'sparkle';
+      ITEMS[getEquippedWeaponIdOf(actorSnap.items)]?.projectileType ?? 'sparkle';
     renderer.addProjectileAnim(projectileType, fromCol, fromRow, toCol, toRow, {
       owner: actorSnap.owner,
     });
@@ -1815,6 +1896,15 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   // (patched) animation gates then reuse. patchAlive is idempotent; the step
   // loop's per-step patch becomes a no-op.
   let stepDigest = null;
+  // Follower-step lookup: step indices that are non-leader members of a
+  // timeline-compacted run. The manual-step gate below suppresses the per-
+  // step NEXT hold for these (the leader's card already holds for NEXT;
+  // followers' state changes are folded into it, so making the player click
+  // NEXT once per folded step defeats the whole point). Derived from the
+  // SAME compactor the UI runs in showReplayTimeline, so its boundary rule
+  // (anything eventful / faction change / min-run) stays the single source
+  // of truth.
+  let _compactFollowerSteps = null;
   if (ui && steps.length) {
     for (const s of steps) patchAlive(s.entitySnapshot ?? []);
     patchAlive(finalEntities ?? []);
@@ -1822,6 +1912,17 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       isVisible: (col, row, ents) => _isFogVisible(col, row, humanFaction, ents, state.phase),
       PlanActionType, ResEventType, viewerFaction: humanFaction,
     });
+    const compacted = compactUneventfulTurns(stepDigest);
+    _compactFollowerSteps = new Set();
+    for (const col of compacted) {
+      if (col.kind === 'compacted' && Array.isArray(col.memberStepIndices)) {
+        // First member is the leader (its card holds for NEXT); the rest are
+        // followers and should not gate.
+        for (let m = 1; m < col.memberStepIndices.length; m++) {
+          _compactFollowerSteps.add(col.memberStepIndices[m]);
+        }
+      }
+    }
     ui.showReplayTimeline?.(stepDigest);
   }
   setMode(AppMode.RESOLVING);
@@ -2450,6 +2551,18 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               _heldCombatFrame3D = true;
             }
 
+            // ── Step 0.5: Combatants turn to meet each other ─────────────────
+            // Both attacker and defender pivot to face one another before the
+            // strike (today the defender keeps its previous facing). Short
+            // interpolated turn, fire-and-forget so strike timing is unchanged.
+            // The melee attacker's lunge re-asserts the same facing instantly,
+            // so this is effectively a no-op for it and a real turn for the
+            // defender and for a ranged attacker (which doesn't lunge). Works
+            // across the gap for ranged since it faces the entity, not an
+            // adjacent hex. No-ops safely when a model hasn't loaded.
+            renderer.faceEntityTowardEntity?.(actorSnap.id, targetSnap.id);
+            renderer.faceEntityTowardEntity?.(targetSnap.id, actorSnap.id);
+
             _playAttackIntroAnim(
               actorSnap, targetSnap,
               lungeFromCol, lungeFromRow,
@@ -3068,9 +3181,15 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // A story-beat card already gated this step on NEXT (its own card), so don't
     // make the player click NEXT a second time at the manual-step gate below.
     const stepHasCard = stepDigest?.[i]?.entries?.length > 0;
-    if (!_autoplay && ui && stepHasCard && !beatGated) {
+    // A non-leader follower of a compacted quiet run shares its leader's card.
+    // NEXT advances past the whole folded block in one click — don't make the
+    // player click NEXT once per folded step.
+    const isCompactFollower = _compactFollowerSteps?.has(i) === true;
+    if (!_autoplay && ui && stepHasCard && !beatGated && !isCompactFollower) {
       const fullMode = !!ui._replayOnControl;
-      const laterHasCard = stepDigest.slice(i + 1).some(c => c.entries.length > 0);
+      // Followers don't gate so they don't count as "later cards" either.
+      const laterHasCard = stepDigest.slice(i + 1)
+        .some((c, j) => c.entries.length > 0 && !_compactFollowerSteps?.has(i + 1 + j));
       if (!(fullMode && !laterHasCard)) {
         // Step finished animating — prompt the player to press NEXT.
         if (playback.paused) ui.setReplayNextReady?.(true);
@@ -3312,10 +3431,17 @@ const stepAsyncCreate  = document.getElementById('setup-step-async-create');
 const stepAsyncCreated = document.getElementById('setup-step-async-created');
 const stepAsyncJoin    = document.getElementById('setup-step-async-join');
 
+// Main-menu mobile column state: 'menus' (right, default) or 'games' (left).
+// Only meaningful on narrow viewports — desktop shows both columns at once.
+let _mmColumn = 'menus';
+
 function showStep(step) {
   // Refresh or tear down the main-menu games list depending on whether we're
   // entering or leaving the mode card.
   if (step === 'mode') {
+    // Default the mobile view to the menus column — a fresh player needs the
+    // mode buttons first. (No-op visual on desktop where both columns show.)
+    try { _setMmColumn?.('menus'); } catch {}
     // Fire-and-forget — each function handles its own loading/empty states.
     try { _fetchMainMenuGames?.(); } catch {}
     try { _renderReplaysList?.(); } catch {}
@@ -3603,6 +3729,7 @@ function _showSinglePlayerScreen() {
 }
 
 document.getElementById('btn-singleplayer-back').addEventListener('click', () => {
+  if (ui) ui.destroy();
   renderer = null; ui = null; state = null;
   showStep('mode');
 });
@@ -3926,6 +4053,21 @@ function _renderCampaignProgressScreen() {
   });
 
   _wireCampaignProgressHandlers();
+}
+
+/** Brief auto-dismissing confirmation toast on the Campaign Progress card. */
+let _cprogToastTimer = null;
+function _showCampaignProgressToast(text) {
+  const toast = document.getElementById('campaign-progress-toast');
+  if (!toast) return;
+  toast.textContent = text;
+  toast.style.display = '';
+  toast.classList.remove('campaign-progress-toast-out');
+  clearTimeout(_cprogToastTimer);
+  _cprogToastTimer = setTimeout(() => {
+    toast.classList.add('campaign-progress-toast-out');
+    setTimeout(() => { toast.style.display = 'none'; }, 600);
+  }, 2400);
 }
 
 function _wireCampaignProgressHandlers() {
@@ -4294,6 +4436,23 @@ function _scenarioPlan(planDefs, byRef) {
     } else if (p.explore) {
       // Pair with a tile-level `exploreOverride` for a deterministic loot roll.
       out.push({ type: PlanActionType.EXPLORE, entityId: actor.id });
+    } else if (p.sentTo) {
+      // Free action: a SURVIVOR is sent to another leader. The action now
+      // lives on the survivor (the survivor is the actor). `p.sentTo`
+      // names the survivor; `p.dest` names the destination leader (which
+      // must own a player slot — see extraLeaders in scenario def). The
+      // outer `p.ref` (typically the current owning leader) is ignored
+      // by SENT_TO — the sender leader is re-derived live at resolution
+      // from survivor.ownerId.
+      const survivor = byRef.get(p.sentTo);
+      const dest     = byRef.get(p.dest);
+      if (survivor && dest) {
+        out.push({
+          type:        PlanActionType.SENT_TO,
+          entityId:    survivor.id,
+          destOwnerId: dest.ownerId,
+        });
+      }
     }
   }
   return out;
@@ -4341,6 +4500,18 @@ function initScenario(def) {
   // ref → entity map for plan targeting (leaders are pre-registered).
   const byRef = new Map([['hero', state.hero]]);
   if (state.witch) byRef.set('witch', state.witch);
+
+  // Extra leaders — additional player seats for MP-shape scenarios (SENT_TO
+  // verification needs ≥2 leaders on one faction). Each entry creates a
+  // playerId + leader entity via state.addPlayer.
+  //   extraLeaders: [{ ref, faction:'hero', col, row, name? }]
+  for (const xl of def.extraLeaders ?? []) {
+    const pid    = xl.playerId ?? `${xl.faction ?? 'hero'}-${xl.ref}`;
+    const name   = xl.name ?? (xl.ref ?? pid);
+    const leader = state.addPlayer(pid, name, xl.faction ?? 'hero', xl.col, xl.row, false);
+    if (xl.ref) byRef.set(xl.ref, leader);
+  }
+
   for (const u of def.units ?? []) {
     const e = _createScenarioUnit(u.type, u.col, u.row, u.owner ?? 'witch', state);
     if (!e) continue;
@@ -4352,6 +4523,12 @@ function initScenario(def) {
       if (typeof ef === 'string') applyEffect(e, ef);
       else if (ef?.id) applyEffect(e, ef.id, ef);
     }
+    // Scenario survivors default to the primary leader's ownerId; an explicit
+    // `ownerRef` overrides (e.g. assign a survivor to the second hero seat).
+    if (u.ownerRef) {
+      const ownerEnt = byRef.get(u.ownerRef);
+      if (ownerEnt) e.ownerId = ownerEnt.ownerId;
+    }
     state.entities.push(e);
     assignSlotOnTile(state, e);
     if (u.ref) byRef.set(u.ref, e);
@@ -4361,8 +4538,21 @@ function initScenario(def) {
   redraw();
 
   // Dev-loader probe: the browser-verification harness inspects live state
-  // (entities, effects, HP) through this handle. Scenario mode only.
-  if (typeof window !== 'undefined') window.__scenarioState = state;
+  // (entities, effects, HP) through this handle. Scenario mode only. The
+  // renderer is exposed too (window.__renderer3d) so verification can read
+  // presentation-only details (e.g. a model's facing yaw, or loot/flash
+  // floaters and clearFlashes between explore steps) that never touch game
+  // state — driven and screenshotted without grinding a full AI game.
+  if (typeof window !== 'undefined') {
+    window.__scenarioState = state;
+    window.__renderer3d = renderer;
+    // ui isn't created yet (set inside _setupLocalUI's async path) — bind a
+    // lazy getter so verifier-browser drivers can grab the live UIController
+    // whenever it exists. Used by both turn-card-scroll tests (via __ui) and
+    // arc-action-popup / list-mode-picker drivers (via __scenarioUI).
+    Object.defineProperty(window, '__ui',         { configurable: true, get: () => ui });
+    Object.defineProperty(window, '__scenarioUI', { configurable: true, get: () => ui });
+  }
 
   if (def.resolve) {
     state.heroPlan  = _scenarioPlan(def.heroPlan, byRef);
@@ -4493,9 +4683,10 @@ function _initCampaignMission(missionDef) {
     applyCarriedHeroLoadout(state.hero, _activeCampaign.heroStats);
   }
 
-  // Inject carried-over resources (replaces faction defaults for campaign)
+  // Inject carried-over resources (replaces faction defaults for campaign).
+  // Campaign.resources persists as a flat `{ id: N }` numeric map; the live
+  // faction inventory uses the dict-of-objects shape, so normalize on the way in.
   if (_activeCampaign) {
-    state.inventory.hero = {};
     const res = { ...(_activeCampaign.resources || {}) };
     // Add mission starting resources
     if (missionDef.startingResources) {
@@ -4503,7 +4694,7 @@ function _initCampaignMission(missionDef) {
         res[k] = (res[k] || 0) + v;
       }
     }
-    Object.assign(state.inventory.hero, res);
+    state.inventory.hero = normalizeItems(res);
   }
 
   // Deploy carried-over survivors from roster (uses active/reserve selection)
@@ -4539,8 +4730,10 @@ function _initCampaignMission(missionDef) {
       // getAttack/getDefense), so copying them never double-counts the level.
       s.attack = rosterEntry.attack;
       s.defense = rosterEntry.defense;
-      s.weapon = rosterEntry.weapon;
-      s.items = { ...rosterEntry.items };
+      // Equipped weapon rides inside items (tagged equipped) — restore the
+      // whole backpack in canonical shape; the fresh-object ref invalidates the
+      // equipped-weapon cache automatically.
+      s.items = normalizeItems(rosterEntry.items);
       s.owner = 'hero';
       // Restore veterancy: xp first, then re-level off the fresh base maxHp.
       // applyLevel sets maxHp (and full hp); we then restore the carried,
@@ -4673,6 +4866,11 @@ function _initCampaignMission(missionDef) {
         document.getElementById('game-screen').style.display = 'none';
         document.getElementById('setup-screen').style.display = '';
         setMode(AppMode.MENU);
+        // Destroy the UIController before discarding it — otherwise its event
+        // listeners stay bound to the shared canvas/buttons and the next game's
+        // UIController double-fires every click (action panel toggle gets stuck).
+        // The conductor already self-destroyed before firing this onComplete.
+        if (ui) ui.destroy();
         renderer = null; ui = null; witchAI = null; heroAI = null;
         _missionConductor = null;
         _activeMissionDef = null;
@@ -4762,7 +4960,9 @@ function _handleCampaignMissionEnd() {
     _activeCampaign.applyMissionResult(missionDef.id, {
       won,
       survivors,
-      resources: { ...state.inventory.hero },
+      // Campaign.resources is a flat numeric map; flatten the live
+      // dict-of-objects faction inventory back down on the way out.
+      resources: flattenItemCounts(state.inventory.hero),
       heroStats: state.hero ? {
         hp: state.hero.hp, maxHp: state.hero.maxHp,
         attack: state.hero.attack, defense: state.hero.defense,
@@ -4771,7 +4971,7 @@ function _handleCampaignMissionEnd() {
         // fields). Without these the hero's veterancy would silently reset each
         // mission. applyCarriedHeroLoadout re-applies them at the next deploy.
         level: state.hero.level, xp: state.hero.xp,
-        weapon: state.hero.weapon, items: { ...state.hero.items },
+        items: normalizeItems(state.hero.items),
       } : _activeCampaign.heroStats,
       flags: {},
     });
@@ -4808,13 +5008,16 @@ function _handleCampaignMissionEnd() {
   const heroSnap = won && state.hero ? {
     hp: state.hero.hp, maxHp: state.hero.maxHp,
     attack: state.hero.attack, defense: state.hero.defense,
-    weapon: state.hero.weapon,
+    items: normalizeItems(state.hero.items),
   } : _activeCampaign.heroStats;
   const rosterHeading = won ? 'Surviving Roster' : 'Party Restored';
   rosterEl.innerHTML = `<h3>${rosterHeading}</h3>` +
     _campaignPartyHTML(heroSnap, survivors);
 
-  // Clean up game state
+  // Clean up game state — destroy the UIController and conductor first so their
+  // event listeners don't leak onto the shared DOM and double-fire in the next game.
+  if (ui) ui.destroy();
+  if (_missionConductor) _missionConductor.destroy();
   renderer = null; ui = null; witchAI = null; heroAI = null;
   _missionConductor = null;
   _activeMissionDef = null;
@@ -4859,11 +5062,35 @@ document.getElementById('btn-campaign-progress-unlock')?.addEventListener('click
   if (btn) btn.textContent = _campaignUnlocked ? '🔒 Lock' : '🔓 Unlock All';
   _renderCampaignProgressScreen();
 });
+document.getElementById('btn-campaign-progress-reset-hints')?.addEventListener('click', () => {
+  if (!_activeCampaign) return;
+  resetAllHintsForCampaign(_activeCampaign.campaignDef);
+  _showCampaignProgressToast('💡 Tutorial hints re-enabled for this campaign.');
+});
 document.querySelectorAll('.cprog-toggle-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     _progressPane = btn.dataset.pane === 'missions' ? 'missions' : 'party';
     _renderCampaignProgressScreen();
   });
+});
+
+// ── Main-menu column slide toggle (mobile: active games ↔ menus) ──────────────
+// Mirrors the Campaign Progress pane toggle — a class on the mode card drives
+// which column shows, and the title bar swaps with it. Inert on desktop, where
+// both columns render side by side.
+function _setMmColumn(col) {
+  _mmColumn = col === 'games' ? 'games' : 'menus';
+  const card = document.getElementById('setup-step-mode');
+  if (card) {
+    card.classList.toggle('mm-show-games', _mmColumn === 'games');
+    card.classList.toggle('mm-show-menus', _mmColumn === 'menus');
+  }
+  document.querySelectorAll('.mm-col-arrow, .mm-col-dot').forEach(el => {
+    el.classList.toggle('active', el.dataset.col === _mmColumn);
+  });
+}
+document.querySelectorAll('.mm-col-arrow, .mm-col-dot').forEach(el => {
+  el.addEventListener('click', () => _setMmColumn(el.dataset.col));
 });
 document.getElementById('btn-delete-campaign')  .addEventListener('click', () => {
   if (confirm('Start over? All campaign progress, roster survivors, and resources will be lost. This cannot be undone.')) {
@@ -5842,14 +6069,15 @@ async function _fetchMainMenuGames() {
 
   const { rows } = await _fetchAllGames();
 
-  // Hide the entire section when there are no games at all. (Signed-out users
-  // simply see no online games — the persistent footer "Sign In" button is the
-  // single sign-in entry point.)
-  if (section) section.style.display = rows.length ? '' : 'none';
+  // Keep the section visible even when empty so the active-games column never
+  // collapses to nothing on mobile — show a placeholder instead. (Signed-out
+  // users simply see no online games — the persistent footer "Sign In" button
+  // is the single sign-in entry point.)
+  if (section) section.style.display = '';
 
   _renderMmList(list, rows, {
     maxRows: 5,
-    emptyHtml: '',
+    emptyHtml: '<p class="mm-games-empty">No active games</p>',
     actionsFor: (row) => _mmGameListActions(row),
   });
 
@@ -6606,6 +6834,7 @@ async function _startSpReplay(data) {
     // After replay finishes, return to setup
     document.getElementById('setup-screen').style.display = '';
     document.getElementById('game-screen').style.display  = 'none';
+    if (ui) ui.destroy();
     state = null; renderer = null; ui = null;
     showStep('singleplayer');
     _renderSpSaves();
@@ -6779,6 +7008,7 @@ async function _startMpReplay(rounds, gameMeta) {
     // Return to online screen after replay
     document.getElementById('setup-screen').style.display = '';
     document.getElementById('game-screen').style.display  = 'none';
+    if (ui) ui.destroy();
     state = null; renderer = null; ui = null;
     _showOnlineScreen();
   });
@@ -7040,6 +7270,7 @@ document.getElementById('btn-battle-spectate')?.addEventListener('click', functi
 
 document.getElementById('btn-online-back').addEventListener('click', () => {
   if (mp) { mp.disconnect(); mp = null; }
+  if (ui) ui.destroy();
   renderer = null; ui = null; state = null;
   showStep('mode');
   _updateMultiplayerBadge();
@@ -8169,6 +8400,7 @@ document.getElementById('btn-mp-signin').addEventListener('click', () => {
 function _signOut() {
   clearSession();
   if (mp) { mp.disconnect(); mp = null; }
+  if (ui) ui.destroy();
   renderer = null; ui = null; state = null;
 }
 

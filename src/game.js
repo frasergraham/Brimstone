@@ -1,11 +1,11 @@
 // Central game state and turn management
 import { generateMap } from './map.js';
-import { createHero, createWitch, createMinion, createSurvivor, resetRoster, survivorRosterIndexByName, bumpEntityId as _bumpModuleEntityId, EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType } from './entities.js';
+import { createHero, createWitch, createMinion, createSurvivor, resetRoster, survivorRosterIndexByName, bumpEntityId as _bumpModuleEntityId, EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, normalizeItems } from './entities.js';
 import { BuildingType, ResourceType, hasBuilding, isRiver } from './tiles.js';
 import { hexKey, hexDistance, getNeighbors, setMapDimensions, MAP_COLS, MAP_ROWS } from './hex.js';
 import { applyPostRoundEffects, attritionForCycle } from './post-round-effects.js';
 import { sightRange, computeLineOfSight, hasLineOfSight } from './actions.js';
-import { getFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
+import { getFaction, allFactions, getFactionsForSide, sightRangeForEntity, isPlaceableTile } from './factions.js';
 import { allSides } from './sides.js';
 
 /**
@@ -226,9 +226,13 @@ export class GameState {
     // mid-mission in some future scenario doesn't silently flip behaviour.
     this.noWitchMission = !!mapDataOverride?.noWitch;
 
+    // Shared faction inventories use the canonical dict-of-objects shape
+    // (`{ id: { count } }`) — the same shape as entity backpacks and the
+    // campaign armory — so the entities.js item helpers operate on all three.
+    // getStartingResources() returns a flat `{ id: count }` seed; normalize it.
     this.inventory = {
-      hero:  { ...getFaction('hero').getStartingResources() },
-      witch: { ...getFaction('witch').getStartingResources() },
+      hero:  normalizeItems(getFaction('hero').getStartingResources()),
+      witch: normalizeItems(getFaction('witch').getStartingResources()),
     };
 
     this.mapSize       = mapData.mapSize;
@@ -517,9 +521,9 @@ export class GameState {
     leader.defense   = fresh.defense;
     leader.agility   = fresh.agility;
     // Adopt the new faction's starting weapon (Paladin sword → Rogue bow,
-    // etc.). equipWeapon keeps the weapon-derived range in sync, so the
-    // leader doesn't keep the old faction's reach.
-    leader.equipWeapon(fresh.weapon);
+    // etc.). The fresh leader already has it equipped in its items; route the
+    // id through equipWeapon so range/stats recompose from the new weapon.
+    leader.equipWeapon(fresh.getEquippedWeaponId());
     leader.factionId = fresh.factionId;
     // Faction.createLeader already stamped innate abilities on `fresh`.
     // Replace the leader's ability list to drop any abilities that the
@@ -528,6 +532,15 @@ export class GameState {
     // abilities the leader had picked up at runtime (none today, but
     // this is the natural extension point).
     leader.abilities = [...(fresh.abilities || [])];
+    // Keep the Horn key item in lockstep with horn-training: a swap to a
+    // horn-trained faction issues one, a swap away (e.g. paladin → rogue)
+    // takes it back, so the Sound Horn gate (hasItem('horn')) matches the
+    // new faction. Swaps happen at setup before any horn is looted.
+    if (leader.hasAbility('sound_horn')) {
+      if (!leader.hasItem('horn')) leader.addItem('horn');
+    } else if (leader.hasItem('horn')) {
+      leader.removeItem('horn');
+    }
     // Clear the constructor-assigned name ('Ishmael Charger' for the day
     // side default, 'Witch' for night) so Entity.displayName falls through
     // to the new type's default (e.g. 'Mercy Sloane' for ROGUE).
@@ -698,7 +711,7 @@ export class GameState {
       const cols = faction === 'hero' ? [0, 1, 2] : [MAP_COLS - 3, MAP_COLS - 2, MAP_COLS - 1];
       const candidates = [];
       for (const [, t] of this.tiles) {
-        if (!cols.includes(t.col) || isRiver(t)) continue;
+        if (!cols.includes(t.col) || !isPlaceableTile(this, t.col, t.row, faction)) continue;
         const occupied = this.entities.some(e => e.alive && e.col === t.col && e.row === t.row);
         if (!occupied) candidates.push({ col: t.col, row: t.row });
       }
@@ -717,11 +730,11 @@ export class GameState {
       if (!occupied) return b;
     }
 
-    // All buildings occupied — pick an unoccupied neighbor of any building
+    // All buildings occupied — pick an unoccupied, passable neighbor of any
+    // building (never a river, fort wall, or the building's own footprint).
     for (const b of buildings) {
       for (const n of getNeighbors(b.col, b.row)) {
-        const t = this.tiles.get(hexKey(n.col, n.row));
-        if (!t || isRiver(t)) continue;
+        if (!isPlaceableTile(this, n.col, n.row, faction)) continue;
         const occupied = this.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
         if (!occupied) return { col: n.col, row: n.row };
       }

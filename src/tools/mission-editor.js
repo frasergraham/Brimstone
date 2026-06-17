@@ -133,6 +133,7 @@ export const ExploreOverrideKind = Object.freeze({
   RESOURCE: 'resource',
   WEAPON: 'weapon',
   HORSE: 'horse',
+  HORN: 'horn',
   NOTHING: 'nothing',
 });
 
@@ -158,6 +159,7 @@ export function exploreOverridePickerOptions() {
     opts.push({ value: `weapon:${w}`, label: `⚔ ${_capitalize(w)}` });
   }
   opts.push({ value: 'horse', label: '🐴 Horse' });
+  opts.push({ value: 'horn', label: '📯 Horn' });
   return opts;
 }
 
@@ -169,6 +171,7 @@ function _capitalize(s) {
 export function exploreOverrideKeyFor(ov) {
   if (!ov || ov.kind === ExploreOverrideKind.NOTHING) return 'nothing';
   if (ov.kind === ExploreOverrideKind.HORSE) return 'horse';
+  if (ov.kind === ExploreOverrideKind.HORN) return 'horn';
   if (ov.kind === ExploreOverrideKind.RESOURCE) return `resource:${ov.id}`;
   if (ov.kind === ExploreOverrideKind.WEAPON) return `weapon:${ov.id}`;
   return 'nothing';
@@ -183,6 +186,7 @@ export function parseExploreOverrideKey(key) {
     return { kind: ExploreOverrideKind.NOTHING, id: null };
   }
   if (key === 'horse') return { kind: ExploreOverrideKind.HORSE, id: 'horse' };
+  if (key === 'horn') return { kind: ExploreOverrideKind.HORN, id: 'horn' };
   const i = key.indexOf(':');
   if (i < 0) return null;
   const kind = key.slice(0, i);

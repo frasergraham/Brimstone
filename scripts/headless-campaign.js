@@ -31,7 +31,7 @@ import { MissionLogicEngine } from '../src/mission-logic/engine.js';
 import { createGameContext } from '../src/mission-logic/game-context.js';
 import {
   EntityType, createSurvivor, createMinion, createZombie,
-  createWoodGolem, createIronGolem,
+  createWoodGolem, createIronGolem, normalizeItems,
 } from '../src/entities.js';
 import { SURVIVOR_ROSTER } from '../src/content/survivors.js';
 import { getNeighbors, hexKey } from '../src/hex.js';
@@ -97,7 +97,9 @@ function buildMissionState(missionDef) {
   if (missionDef.aiBudgetBonus) state.campaignAIBudgetBonus = missionDef.aiBudgetBonus;
   if (missionDef.lootOverrides) state.lootOverrides = missionDef.lootOverrides;
   if (missionDef.startingResources) {
-    Object.assign(state.inventory.hero, missionDef.startingResources);
+    // startingResources is authored as a flat `{ id: N }` map; the live faction
+    // inventory uses the dict-of-objects shape, so normalize before merging.
+    Object.assign(state.inventory.hero, normalizeItems(missionDef.startingResources));
   }
 
   state.victoryDelegate = missionDef.objectives ? buildVictoryDelegate(missionDef.objectives) : null;

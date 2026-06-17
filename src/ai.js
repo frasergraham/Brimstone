@@ -3,7 +3,7 @@
 // Witch AI: ai-engine.js (WitchAIEngine)
 import { getNeighbors, hexDistance, hexKey } from './hex.js';
 import { hasBuilding, isRiver, tileCapacityRemaining } from './tiles.js';
-import { Entity, EntityType, isLeaderType } from './entities.js';
+import { Entity, EntityType, isLeaderType, getItemCountOf, removeItemInItems } from './entities.js';
 import { Phase, computeActions, computeActionsForPlayer, nodeController, countHeldNodes } from './game.js';
 import { getReachableHexes, isFortBlocking } from './actions.js';
 
@@ -202,7 +202,17 @@ export class PlanSimState {
     // getter on access, matching the pre-refactor sim-clone semantics.
     this.entities = realState.entities
       .filter(e => e.alive)
-      .map(e => Object.setPrototypeOf({ ...e }, Entity.prototype));
+      .map(e => {
+        const clone = Object.setPrototypeOf({ ...e }, Entity.prototype);
+        // Deep-clone `items` so sim projection (equip toggles, item use) never
+        // mutates the real entity's backpack. The equipped weapon now lives
+        // INSIDE items as an `{ equipped: true }` tag, so a shared reference
+        // would corrupt live equipped state. The equipped-weapon memo cache is
+        // non-enumerable, so `{...e}` doesn't copy it — the clone rescans the
+        // fresh dict on first lookup. (Phase 1 inventory refactor.)
+        clone.items = e.items ? structuredClone(e.items) : {};
+        return clone;
+      });
 
     if (playerId) {
       // Multiplayer: scope leader ref and budget to this specific player.
@@ -306,11 +316,12 @@ export class PlanSimState {
     });
     // Spend 2 resources from faction inventory (drain largest stacks first)
     const inv = this.inventory[this._faction];
-    const keys = Object.keys(inv).filter(k => inv[k] > 0).sort((a, b) => inv[b] - inv[a]);
+    const keys = Object.keys(inv).filter(k => getItemCountOf(inv, k) > 0)
+      .sort((a, b) => getItemCountOf(inv, b) - getItemCountOf(inv, a));
     let remaining = 2;
     for (const k of keys) {
-      const spend = Math.min(inv[k], remaining);
-      inv[k] -= spend;
+      const spend = Math.min(getItemCountOf(inv, k), remaining);
+      removeItemInItems(inv, k, spend);
       remaining -= spend;
       if (remaining === 0) break;
     }
@@ -333,7 +344,7 @@ export class PlanSimState {
 
   applySoundHorn() {
     const inv = this.inventory?.hero || {};
-    if ((inv['food'] || 0) >= 1) inv['food']--;
+    if (getItemCountOf(inv, 'food') >= 1) removeItemInItems(inv, 'food', 1);
     this.actionsLeft--;
   }
 }

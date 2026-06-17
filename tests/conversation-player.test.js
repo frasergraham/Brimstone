@@ -6,7 +6,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { playConversation, conversationReadingMs } from '../src/conversation-player.js';
+import { playConversation, conversationReadingMs, awaitConversationLineEnd } from '../src/conversation-player.js';
 import { playback, resetPlayback } from '../src/playback.js';
 import { AppMode, setMode, getMode } from '../src/app-mode.js';
 
@@ -235,8 +235,94 @@ describe('playConversation — per-line camera framing', () => {
 });
 
 describe('conversationReadingMs', () => {
-  test('clamps between 1.6s and 6s', () => {
-    assert.equal(conversationReadingMs(''), 1600);
+  // The floor was 1600ms — that produced a ~1s "dead air" gap after short
+  // narration clips (e.g. "Run!") and made autoplay feel sluggish between
+  // dialog lines. Tighten the floor toward 300–500ms so short beats step
+  // briskly while long lines still get the per-character read time.
+  test('floor for a very short line is snappy (<= 500ms), not a ~1s wait', () => {
+    const floor = conversationReadingMs('');
+    assert.ok(floor <= 500, `floor too long: ${floor}ms`);
+    assert.ok(floor >= 250, `floor too short to read at all: ${floor}ms`);
+  });
+  test('ceiling stays at 6s for long lines', () => {
     assert.equal(conversationReadingMs('x'.repeat(500)), 6000);
+  });
+  test('long lines still get per-character reading time', () => {
+    // A roughly 30-char line should give the reader at least 1s.
+    assert.ok(conversationReadingMs('x'.repeat(30)) >= 1000);
+    // A ~80-char line should give the reader well over 2s.
+    assert.ok(conversationReadingMs('x'.repeat(80)) >= 2000);
+  });
+});
+
+// A minimal HTMLAudioElement stand-in: records listeners, lets the test fire
+// `ended` / `error` on a real timer to drive the auto-advance gate.
+function fakeAudio() {
+  const listeners = {};
+  const a = {
+    ended: false,
+    addEventListener(ev, fn) { (listeners[ev] ||= []).push(fn); },
+    fire(ev) {
+      if (ev === 'ended') a.ended = true;
+      (listeners[ev] || []).forEach(fn => fn());
+    },
+  };
+  return a;
+}
+
+describe('awaitConversationLineEnd — auto-advance respects narration length', () => {
+  // The core bug: autoplay advanced after the text-based reading estimate even
+  // when the spoken clip ran longer, cutting the sentence off. Advance must wait
+  // until max(reading floor, clip end).
+  test('a long clip holds until audio.ended — not the shorter reading floor', async () => {
+    const audio = fakeAudio();
+    setTimeout(() => audio.fire('ended'), 350);   // clip outlives the floor
+    const t0 = Date.now();
+    await awaitConversationLineEnd(audio, 'short line', { floorMs: 150 });
+    const dt = Date.now() - t0;
+    assert.ok(dt >= 320, `expected to wait for audio end (~350ms), advanced at ${dt}ms`);
+  });
+
+  test('a fast clip still holds for the reading floor (max, not the clip end)', async () => {
+    const audio = fakeAudio();
+    setTimeout(() => audio.fire('ended'), 80);    // clip ends well before the floor
+    const t0 = Date.now();
+    await awaitConversationLineEnd(audio, 'a much longer line of dialog', { floorMs: 350 });
+    const dt = Date.now() - t0;
+    assert.ok(dt >= 320, `expected to hold for the reading floor (~350ms), advanced at ${dt}ms`);
+  });
+
+  test('no clip (muted / headless) advances at the reading floor', async () => {
+    const t0 = Date.now();
+    await awaitConversationLineEnd(null, 'x', { floorMs: 150, ceilingMs: 5000 });
+    const dt = Date.now() - t0;
+    assert.ok(dt >= 130 && dt < 400, `expected ~150ms floor, advanced at ${dt}ms`);
+  });
+
+  test('a failed clip (error event, never ends) falls back to the reading floor', async () => {
+    const audio = fakeAudio();
+    setTimeout(() => audio.fire('error'), 80);    // missing file: only `error` fires
+    const t0 = Date.now();
+    await awaitConversationLineEnd(audio, 'x', { floorMs: 150, ceilingMs: 5000 });
+    const dt = Date.now() - t0;
+    assert.ok(dt >= 130 && dt < 500, `expected reading-floor fallback (~150ms), advanced at ${dt}ms`);
+  });
+
+  test('shouldStop (SKIP / NEXT) collapses even a long voice hold', async () => {
+    const audio = fakeAudio();   // never fires ended → a 5s+ hold without the skip
+    let stop = false;
+    setTimeout(() => { stop = true; }, 120);
+    const t0 = Date.now();
+    await awaitConversationLineEnd(audio, 'x', { floorMs: 5000, shouldStop: () => stop });
+    const dt = Date.now() - t0;
+    assert.ok(dt >= 100 && dt < 400, `expected NEXT/SKIP to collapse the hold, advanced at ${dt}ms`);
+  });
+
+  test('a stalled clip that never ends is bounded by the ceiling', async () => {
+    const audio = fakeAudio();   // neither `ended` nor `error` ever fires
+    const t0 = Date.now();
+    await awaitConversationLineEnd(audio, 'x', { floorMs: 100, ceilingMs: 250 });
+    const dt = Date.now() - t0;
+    assert.ok(dt >= 230 && dt < 500, `expected ceiling backstop (~250ms), advanced at ${dt}ms`);
   });
 });

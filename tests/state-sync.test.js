@@ -123,8 +123,40 @@ describe('state-sync — factionId round-trip (rogue)', () => {
 });
 
 describe('state-sync — SAVE_VERSION', () => {
-  test('SAVE_VERSION is 6 (building-footprint bump)', () => {
-    assert.equal(SAVE_VERSION, 6);
+  test('SAVE_VERSION is 8 (shared-inventory dict-of-objects bump)', () => {
+    assert.equal(SAVE_VERSION, 8);
+  });
+});
+
+// Phase 2 migration: shared faction inventories flatten from `{ id: N }` to the
+// dict-of-objects shape `{ id: { count: N } }` on deserialize. The shim chains
+// after the legacy `shared`→`hero` rename and is idempotent.
+describe('state-sync — inventory dict-of-objects migration (v7 → v8)', () => {
+  test('flat numeric resources migrate to { count } on deserialize', () => {
+    const snap = serializeState(freshState());
+    snap.inventory = { hero: { food: 5, silver: 3 }, witch: { wood: 4, metal: 2 } };
+    const restored = deserializeState(snap);
+    assert.deepEqual(restored.inventory.hero, { food: { count: 5 }, silver: { count: 3 } });
+    assert.deepEqual(restored.inventory.witch, { wood: { count: 4 }, metal: { count: 2 } });
+  });
+
+  test('idempotent — already-migrated (v8) data round-trips unchanged', () => {
+    const snap = serializeState(freshState());
+    snap.inventory = { hero: { food: { count: 5 } }, witch: { wood: { count: 2 } } };
+    const restored = deserializeState(snap);
+    assert.deepEqual(restored.inventory.hero, { food: { count: 5 } });
+    assert.deepEqual(restored.inventory.witch, { wood: { count: 2 } });
+  });
+
+  test('cascades v6 → v8: legacy `shared` pool is renamed to hero AND flattened', () => {
+    const snap = serializeState(freshState());
+    // A v6 snapshot predates BOTH the `shared`→`hero` rename and the numeric→
+    // object change; a single load must walk both shims in order.
+    snap.inventory = { shared: { food: 2, metal: 1 }, witch: { wood: 3 } };
+    const restored = deserializeState(snap);
+    assert.equal(restored.inventory.shared, undefined, 'shared pool renamed away');
+    assert.deepEqual(restored.inventory.hero, { food: { count: 2 }, metal: { count: 1 } });
+    assert.deepEqual(restored.inventory.witch, { wood: { count: 3 } });
   });
 });
 

@@ -177,9 +177,9 @@ export class Entity {
     this.attack  = stats.attack;
     this.defense = stats.defense;
     this.agility = BASE_AGILITY[type] ?? 1;
-    // No innate unit range — range comes from the equipped weapon (set by
-    // equipWeapon). Default melee 1 until a weapon is equipped.
-    this.range   = 1;
+    // No innate unit range — range comes from the equipped weapon. Read it via
+    // getRange() (composes ITEMS[equippedWeapon].range at call time); there is
+    // no denormalized `range` cache field any more.
 
     // Tag metadata from UNIT_TYPES (e.g. 'undead', 'construct', 'minion',
     // 'living', 'leader', 'day-leader'). Used by item combat triggers —
@@ -192,8 +192,9 @@ export class Entity {
     this.attackBonus  = 0;
     this.defenseBonus = 0;
 
-    // Equipped weapon
-    this.weapon = null;
+    // Equipped weapon now lives INSIDE `items` as the entry tagged
+    // `{ equipped: true }` (Phase 1 inventory refactor) — no top-level
+    // `weapon` slot. Query it via getEquippedWeaponId().
 
     // Survivor personality fields (set by createSurvivor)
     this.name     = null;
@@ -232,10 +233,13 @@ export class Entity {
     // rounds and between missions (snapshotSurvivor / heroStats).
     this.xp = 0;
 
-    // Personal backpack — a flat key→count map. Weapons use their ITEMS
-    // id directly (e.g. 'sword'); consumables and mounts use their
-    // resource/item id (e.g. 'horse', 'herbs'). ITEMS[key].kind
-    // distinguishes weapon from consumable.
+    // Personal backpack — a map of item-id → `{ count, equipped? }`. Weapons
+    // use their ITEMS id directly (e.g. 'sword'); consumables and mounts use
+    // their resource/item id (e.g. 'horse', 'herbs'). ITEMS[key].kind
+    // distinguishes weapon from consumable. At most one entry carries
+    // `equipped: true` — that is the wielded weapon (getEquippedWeaponId()).
+    // Always mutate via addItem/removeItem/equipWeapon/unequipWeapon so the
+    // memoized equipped-weapon cache stays valid.
     this.items = {};
   }
 
@@ -254,22 +258,21 @@ export class Entity {
   // (attackBonus / defenseBonus) are added by callers where relevant
   // (resolveCombat, AI expected-value estimators, battle-dialog breakdown).
   //
-  // During Phase 2 the weapon bonus is still baked into `this.attack` by
-  // equipWeapon(); Phase 3 decouples the two, at which point these
-  // accessors compose the bonus from ITEMS[this.weapon].statMods instead.
-  // Call sites stay correct across that transition.
+  // The weapon bonus is composed at call time from
+  // ITEMS[getEquippedWeaponId()].statMods — the equipped weapon lives in
+  // `items`, not a separate slot, so swaps never touch the base stat.
 
   getAttack()  {
     return this.attack
       + atkBonusForLevel(this.level)
-      + (ITEMS[this.weapon]?.statMods?.attack ?? 0)
+      + (ITEMS[this.getEquippedWeaponId()]?.statMods?.attack ?? 0)
       + _abilityStatMod(this.abilities, 'attack')
       + effectStatMod(this, 'attack');
   }
   getDefense() {
     return this.defense
       + defBonusForLevel(this.level)
-      + (ITEMS[this.weapon]?.statMods?.defense ?? 0)
+      + (ITEMS[this.getEquippedWeaponId()]?.statMods?.defense ?? 0)
       + _abilityStatMod(this.abilities, 'defense')
       + effectStatMod(this, 'defense');
   }
@@ -283,17 +286,17 @@ export class Entity {
   // `range` (default 1 for melee/unarmed) is the base; effects like
   // eagle_eyed extend it via rangeMod and permanent abilities (eagle_eye)
   // compose via ABILITIES[id].statMods.range, mirroring attack/defense.
-  // `this.range` is a denormalized cache of the weapon range (kept in sync
-  // by equipWeapon) so AI sim copies that read `simUnit.range` stay correct.
+  // There is no denormalized range cache — getRange() is the single source of
+  // truth, composed from the equipped weapon each call (memoized id lookup).
   getRange() {
-    return (ITEMS[this.weapon]?.range ?? 1)
+    return (ITEMS[this.getEquippedWeaponId()]?.range ?? 1)
       + _abilityStatMod(this.abilities, 'range')
       + effectRangeMod(this);
   }
 
   // Movement range in tiles. 1 base, +1 with horse equipped.
   getMoveRange() {
-    return 1 + ((this.items?.['horse'] || 0) > 0 ? 1 : 0);
+    return 1 + (this.hasItem('horse') ? 1 : 0);
   }
 
   // `abilities` is a plain data property (set in the constructor); the
@@ -311,18 +314,75 @@ export class Entity {
     return Array.isArray(this.tags) && this.tags.includes(tag);
   }
 
-  equipWeapon(weaponType) {
-    // Phase 3: weapon stats are no longer baked into this.attack /
-    // this.defense. getAttack() / getDefense() compose the bonus from
-    // ITEMS[this.weapon].statMods at call time. This keeps the base
-    // stat stable across weapon swaps and makes equipped weapons a
-    // true runtime-composed modifier.
-    this.weapon = weaponType || null;
-    // Range is weapon-derived (no innate unit range). Keep the
-    // denormalized this.range cache in sync for AI sim copies that read
-    // `simUnit.range ?? 1` without going through getRange().
-    this.range = ITEMS[this.weapon]?.range ?? 1;
+  // ── Backpack / equipped-weapon helpers (Phase 1 inventory refactor) ──
+  //
+  // The equipped weapon is the `items` entry tagged `{ equipped: true }`. All
+  // weapon/item bonuses (getAttack/getDefense/getRange/_combatNets) resolve the
+  // id through getEquippedWeaponId(), which memoizes the dict scan on a hidden
+  // `_equippedWeaponCache`. The cache keys on the items-object IDENTITY, so a
+  // wholesale `entity.items = {…}` replacement self-invalidates; in-place
+  // mutations (equip/unequip/add/remove) invalidate explicitly.
+
+  getEquippedWeaponId() {
+    const items = this.items;
+    const cache = this._equippedWeaponCache;
+    if (cache && cache.ref === items) return cache.id;
+    const id = getEquippedWeaponIdOf(items);
+    this._writeEqCache({ ref: items, id });
+    return id;
   }
+
+  // Store the memo cache as a NON-enumerable own property so it never leaks into
+  // `{...e}` spreads, JSON, or deep-equal entity snapshots (production paths use
+  // field allowlists, but tests snapshot whole entities). Subsequent writes keep
+  // the existing descriptor; the first write defines it hidden.
+  _writeEqCache(v) {
+    if (Object.prototype.hasOwnProperty.call(this, '_equippedWeaponCache')) {
+      this._equippedWeaponCache = v;
+    } else {
+      Object.defineProperty(this, '_equippedWeaponCache', {
+        value: v, writable: true, enumerable: false, configurable: true,
+      });
+    }
+  }
+
+  /** Equip a weapon by id. Ensures the entry exists (count ≥ 1), flags it
+   *  equipped, and clears equipped from every other entry. A falsy id
+   *  unequips (clears any equipped flag). */
+  equipWeapon(weaponType) {
+    if (!weaponType) { this.unequipWeapon(); return; }
+    if (!this.items) this.items = {};
+    equipWeaponInItems(this.items, weaponType);
+    this._writeEqCache(null);
+  }
+
+  /** Remove the equipped flag from whatever weapon currently holds it. The
+   *  weapon stays in the backpack at its existing count. */
+  unequipWeapon() {
+    if (!this.items) return;
+    unequipWeaponInItems(this.items);
+    this._writeEqCache(null);
+  }
+
+  /** Add `count` of an item. Creates the entry if absent. A count bump alone
+   *  cannot change the equipped lookup, so the cache is only invalidated when a
+   *  new key appears. */
+  addItem(id, count = 1) {
+    if (!this.items) this.items = {};
+    const isNew = !(id in this.items);
+    addItemInItems(this.items, id, count);
+    if (isNew) this._writeEqCache(null);
+  }
+
+  /** Remove `count` of an item. Deletes the entry when the count hits 0,
+   *  clearing the equipped flag (and the cache) in the process. */
+  removeItem(id, count = 1) {
+    if (!this.items) return;
+    if (removeItemInItems(this.items, id, count)) this._writeEqCache(null);
+  }
+
+  hasItem(id)       { return hasItemOf(this.items, id); }
+  getItemCount(id)  { return getItemCountOf(this.items, id); }
 
   resetTurn() {
     this.actedThisTurn = false;
@@ -399,7 +459,7 @@ export class Entity {
     // defender's tag set is sourced from `defender.tags` (set in the Entity
     // constructor) and falls back to UNIT_TYPES for plain-object test fixtures.
     let atkStaffAdvantage = 0;
-    const triggers = ITEMS[attacker.weapon]?.combatTriggers ?? [];
+    const triggers = ITEMS[getEquippedWeaponIdOf(attacker.items)]?.combatTriggers ?? [];
     if (triggers.length > 0) {
       const defTags = defender.tags && defender.tags.length > 0
         ? defender.tags
@@ -510,14 +570,15 @@ function _chosenDieProb(v, net) {
 // estimateCombat helpers don't break on lightweight test fixtures.
 //
 // For plain objects (post-Phase-3), the fallback composes the weapon
-// bonus from ITEMS[weapon].statMods so fixtures that set
-// { attack: 3, weapon: 'sword' } resolve to an effective value of 5,
-// matching Entity.getAttack() semantics.
+// bonus from ITEMS[equippedWeapon].statMods so fixtures that set
+// { attack: 3, items: { sword: { count: 1, equipped: true } } } resolve to an
+// effective value of 5, matching Entity.getAttack() semantics.
 export function attackOf(e) {
   if (typeof e?.getAttack === 'function') return e.getAttack();
   const base        = e?.attack ?? 0;
   const levelMod    = atkBonusForLevel(e?.level);
-  const weaponMod   = e?.weapon ? (ITEMS[e.weapon]?.statMods?.attack ?? 0) : 0;
+  const weaponId    = getEquippedWeaponIdOf(e?.items);
+  const weaponMod   = weaponId ? (ITEMS[weaponId]?.statMods?.attack ?? 0) : 0;
   const abilityMod  = _abilityStatMod(e?.abilities, 'attack');
   const effectMod   = effectStatMod(e, 'attack');
   return base + levelMod + weaponMod + abilityMod + effectMod;
@@ -526,21 +587,135 @@ export function defenseOf(e) {
   if (typeof e?.getDefense === 'function') return e.getDefense();
   const base        = e?.defense ?? 0;
   const levelMod    = defBonusForLevel(e?.level);
-  const weaponMod   = e?.weapon ? (ITEMS[e.weapon]?.statMods?.defense ?? 0) : 0;
+  const weaponId    = getEquippedWeaponIdOf(e?.items);
+  const weaponMod   = weaponId ? (ITEMS[weaponId]?.statMods?.defense ?? 0) : 0;
   const abilityMod  = _abilityStatMod(e?.abilities, 'defense');
   const effectMod   = effectStatMod(e, 'defense');
   return base + levelMod + weaponMod + abilityMod + effectMod;
 }
 // Attack range in hexes — tolerates plain-object fixtures. Range is
-// weapon-derived: prefer the denormalized `range` cache, else read it from
-// the equipped weapon (default 1 for melee/unarmed). Units have no innate
-// per-type range.
+// weapon-derived: read it from the equipped weapon in `items` (default 1 for
+// melee/unarmed). Units have no innate per-type range.
 export function rangeOf(e) {
   if (typeof e?.getRange === 'function') return e.getRange();
-  const base       = e?.range ?? ITEMS[e?.weapon]?.range ?? 1;
+  const weaponId   = getEquippedWeaponIdOf(e?.items);
+  const base       = ITEMS[weaponId]?.range ?? 1;
   const abilityMod = _abilityStatMod(e?.abilities, 'range');
   const effectMod  = effectRangeMod(e);
   return base + abilityMod + effectMod;
+}
+
+// ── Backpack item dict helpers (free functions) ──────────────────────────────
+//
+// Operate on a plain `items` dict (`{ id: { count, equipped? } }`) so both the
+// Entity prototype methods and plain-object call sites (campaign roster
+// snapshots, AI sim clones, state-sync migration) share one implementation.
+
+/** First equipped weapon id in a backpack dict, or null. Only weapon entries
+ *  ever carry the `equipped` flag, but we double-check ITEMS kind for safety. */
+export function getEquippedWeaponIdOf(items) {
+  if (!items) return null;
+  for (const k in items) {
+    const entry = items[k];
+    if (entry && entry.equipped && ITEMS[k]?.kind === 'weapon') return k;
+  }
+  return null;
+}
+
+/** Flag `id` equipped in a backpack dict, clearing the flag from every other
+ *  entry and ensuring `id` exists with count ≥ 1. Mutates and returns `items`. */
+export function equipWeaponInItems(items, id) {
+  for (const k in items) {
+    if (items[k] && items[k].equipped) delete items[k].equipped;
+  }
+  const entry = items[id];
+  if (entry && typeof entry.count === 'number') entry.equipped = true;
+  else items[id] = { count: 1, equipped: true };
+  return items;
+}
+
+/** Clear the equipped flag from whichever entry holds it. Mutates `items`. */
+export function unequipWeaponInItems(items) {
+  if (!items) return items;
+  for (const k in items) {
+    if (items[k] && items[k].equipped) delete items[k].equipped;
+  }
+  return items;
+}
+
+/** Bump `id`'s count in a backpack dict, creating the entry if absent.
+ *  Mutates and returns `items`. */
+export function addItemInItems(items, id, count = 1) {
+  const entry = items[id];
+  if (entry && typeof entry.count === 'number') entry.count += count;
+  else items[id] = { count };
+  return items;
+}
+
+/** Remove `count` of `id` from a backpack dict, deleting the entry at 0.
+ *  Returns true when the entry was deleted (so callers can invalidate caches).
+ *  Mutates `items`. */
+export function removeItemInItems(items, id, count = 1) {
+  const entry = items[id];
+  if (!entry) return false;
+  const next = (entry.count ?? 0) - count;
+  if (next > 0) { entry.count = next; return false; }
+  delete items[id];
+  return true;
+}
+
+/** Count of `id` in an item/resource dict (`{ id: { count, equipped? } }`),
+ *  tolerating a missing entry. 0 when absent. The read primitive shared by the
+ *  Entity.getItemCount method and every plain-dict call site (shared faction
+ *  inventory, campaign armory). */
+export function getItemCountOf(items, id) {
+  return items?.[id]?.count ?? 0;
+}
+
+/** True when the dict holds ≥1 of `id`. */
+export function hasItemOf(items, id) {
+  return (items?.[id]?.count ?? 0) > 0;
+}
+
+/** Sum of every entry's count — the total quantity held across all ids. Used by
+ *  the summon affordability checks (any-2-resources). */
+export function totalItemCount(items) {
+  let n = 0;
+  if (items) for (const k in items) n += items[k]?.count ?? 0;
+  return n;
+}
+
+/** Flatten a `{ id: { count } }` dict back to a plain `{ id: count }` numeric
+ *  map (tolerating an already-flat input). Inverse of {@link normalizeItems} —
+ *  used at the campaign boundary, where `Campaign.resources` persists as a flat
+ *  numeric map even though the live faction inventory is dict-of-objects. */
+export function flattenItemCounts(items) {
+  const out = {};
+  if (!items || typeof items !== 'object') return out;
+  for (const k in items) {
+    const v = items[k];
+    out[k] = (v && typeof v === 'object') ? (v.count ?? 0)
+           : (typeof v === 'number' ? v : 0);
+  }
+  return out;
+}
+
+/** Deep-copy a backpack dict into the canonical `{ id: { count, equipped? } }`
+ *  shape, tolerating the legacy `{ id: count }` numeric form. Used by snapshots
+ *  and by the save-migration shims. */
+export function normalizeItems(items) {
+  const out = {};
+  if (!items || typeof items !== 'object') return out;
+  for (const k in items) {
+    const v = items[k];
+    if (v && typeof v === 'object') {
+      out[k] = { count: v.count ?? 0 };
+      if (v.equipped) out[k].equipped = true;
+    } else if (typeof v === 'number') {
+      out[k] = { count: v };
+    }
+  }
+  return out;
 }
 
 // ── Advantage-dice math ─────────────────────────────────────────────────────
@@ -722,6 +897,47 @@ const _LEADER_TYPES = new Set([
 /** True if `type` is one of the registered faction leader entity types. */
 export function isLeaderType(type) {
   return _LEADER_TYPES.has(type);
+}
+
+/**
+ * Predicate: does the given faction (`owner` string: 'hero' | 'witch' | …) have
+ * MORE THAN ONE LIVE LEADER on the field? Used by the renderer to decide
+ * whether to tint a non-leader unit with its owning leader's per-player colour
+ * instead of the faction primary — in solo / single-leader play, returning
+ * `false` preserves the legacy "faction colour everywhere" appearance.
+ *
+ * Counts only entities that are `.alive`, share `.owner === factionOwner`, and
+ * carry a leader entity type. Pure / DOM-free / testable.
+ */
+export function factionHasMultipleLeaders(entityList, factionOwner) {
+  if (!factionOwner || !Array.isArray(entityList)) return false;
+  let count = 0;
+  for (const e of entityList) {
+    if (!e || !e.alive) continue;
+    if (e.owner !== factionOwner) continue;
+    if (!isLeaderType(e.type)) continue;
+    if (++count >= 2) return true;
+  }
+  return false;
+}
+
+/**
+ * Walk `entityList` and return the colour assigned to the LIVE leader whose
+ * `ownerId` matches `ownerId` (per-player tint set when seats are claimed).
+ * Returns `null` if no qualifying leader is found or `ownerId` is missing.
+ * Used by the renderer to propagate the owning leader's tint to every unit
+ * they own (survivors, summons, golems) once the multi-leader predicate fires.
+ * Pure / DOM-free / testable.
+ */
+export function leaderColorFor(entityList, ownerId) {
+  if (!ownerId || !Array.isArray(entityList)) return null;
+  for (const e of entityList) {
+    if (!e || !e.alive) continue;
+    if (e.ownerId !== ownerId) continue;
+    if (!isLeaderType(e.type)) continue;
+    if (e.color) return e.color;
+  }
+  return null;
 }
 
 // Default display name per entity type. Used by Entity.displayName on the

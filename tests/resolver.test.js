@@ -361,7 +361,7 @@ describe('resolvePlans — food extends budget', () => {
 
     // With food: budget+1 MOVE actions should NOT produce BUDGET_CAP
     // (food funds the one extra step). Without food it would cap.
-    state.inventory.hero[ResourceType.FOOD] = 1;
+    state.inventory.hero[ResourceType.FOOD] = { count: 1 };
     const heroActionsLeft = state.actionsLeft; // base budget
 
     // Build exactly budget+1 alternating moves
@@ -384,7 +384,7 @@ describe('resolvePlans — food extends budget', () => {
     assert.ok(!hasCap, 'BUDGET_CAP should not fire when food covers the extra action');
 
     // Food should be consumed from shared inventory
-    assert.equal(state.inventory.hero[ResourceType.FOOD], 0, 'Food should be consumed');
+    assert.equal((state.inventory.hero[ResourceType.FOOD]?.count ?? 0), 0, 'Food should be consumed');
   });
 });
 
@@ -471,7 +471,7 @@ describe('resolvePlans — state integrity', () => {
   test('summon adds entity to state.entities on witch tile', () => {
     const state = freshState();
     const witch = state.witch;
-    state.inventory.witch[ResourceType.FOOD] = 2;
+    state.inventory.witch[ResourceType.FOOD] = { count: 2 };
 
     const countBefore = state.entities.length;
     const witchPlan = [{
@@ -662,7 +662,7 @@ describe('executeMove — hex-step cap', () => {
     const state = roadChainState(1, 8);
     const hero = state.hero;
     // Give hero a horse (range 2, budget 4 → 4 road tiles cost-reachable)
-    hero.items = { horse: 1 };
+    hero.items = { horse: { count: 1 } };
 
     // Move to 3 tiles away (col 1 → col 4)
     const r3 = executeMove(state, hero, 4, 2);
@@ -674,7 +674,7 @@ describe('executeMove — hex-step cap', () => {
   test('horse unit reaches 4th road tile (full budget)', () => {
     const state = roadChainState(1, 8);
     const hero = state.hero;
-    hero.items = { horse: 1 };
+    hero.items = { horse: { count: 1 } };
 
     // col 5 is 4 road tiles away — cost-reachable with horse (budget 4, each road costs 1)
     const r4 = executeMove(state, hero, 5, 2);
@@ -686,7 +686,7 @@ describe('executeMove — hex-step cap', () => {
   test('horse unit cannot reach 5 road tiles away', () => {
     const state = roadChainState(1, 10);
     const hero = state.hero;
-    hero.items = { horse: 1 };
+    hero.items = { horse: { count: 1 } };
 
     // col 6 is 5 road tiles away — beyond horse budget (4)
     const r5 = executeMove(state, hero, 6, 2);

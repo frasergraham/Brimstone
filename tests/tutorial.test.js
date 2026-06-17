@@ -575,10 +575,13 @@ describe('Tutorial folded into Chapter 1', async () => {
     assert.equal(m.objectives.lose, null);
   });
 
-  test('The Awakening now requires the tutorial', () => {
+  test('The Awakening has no prereqs — playable from the start', () => {
     const awakening = chapter1.missions.find(m => m.id === 'prologue');
     assert.ok(awakening, 'The Awakening (prologue) is part of Chapter 1');
-    assert.deepEqual(awakening.requires, ['tutorial']);
+    assert.ok(
+      !awakening.requires || awakening.requires.length === 0,
+      'The Awakening should not require the tutorial',
+    );
   });
 });
 
@@ -618,7 +621,7 @@ describe('GameState.gameOver is computed from winner', () => {
 import { readFileSync } from 'node:fs';
 import { HINT_SCRIPTS } from '../src/campaign/hint-scripts.js';
 import { CONDUCTOR_SCRIPTS, resolveConductorScript } from '../src/campaign/conductor-scripts.js';
-import { areHintsSuppressed, markHintsSeen } from '../src/mission-conductor.js';
+import { areHintsSuppressed, markHintsSeen, resetMissionHints, resetAllHintsForCampaign } from '../src/mission-conductor.js';
 
 const ALL_SCRIPTS = Object.entries(CONDUCTOR_SCRIPTS).map(([key, s]) => ({ key, ...s }));
 const MAX_BODY_CHARS = 230;
@@ -864,6 +867,125 @@ describe('hint suppression', () => {
     }
     // Without localStorage at all, both helpers are silent no-ops.
     assert.doesNotThrow(() => { markHintsSeen('x'); areHintsSuppressed('x'); });
+  });
+
+  test('resetMissionHints clears a single mission; mark → reset → suppressed=false', () => {
+    const prev = globalThis.localStorage;
+    const store = new Map();
+    globalThis.localStorage = {
+      getItem: (k) => store.get(k) ?? null,
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: (k) => store.delete(k),
+    };
+    try {
+      markHintsSeen('prologue');
+      markHintsSeen('gathering_survivors');
+      assert.equal(areHintsSuppressed('prologue'), true);
+      resetMissionHints('prologue');
+      assert.equal(areHintsSuppressed('prologue'), false, 'reset re-enables hints');
+      assert.equal(areHintsSuppressed('gathering_survivors'), true, 'other missions untouched');
+    } finally {
+      if (prev === undefined) delete globalThis.localStorage;
+      else globalThis.localStorage = prev;
+    }
+    assert.doesNotThrow(() => resetMissionHints('x')); // safe without storage
+  });
+
+  test('resetAllHintsForCampaign clears every mission and reports the count', () => {
+    const prev = globalThis.localStorage;
+    const store = new Map();
+    globalThis.localStorage = {
+      getItem: (k) => store.get(k) ?? null,
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: (k) => store.delete(k),
+    };
+    const campaignDef = { id: 'c', missions: [{ id: 'm1' }, { id: 'm2' }, { id: 'm3' }] };
+    try {
+      markHintsSeen('m1');
+      markHintsSeen('m3');
+      const cleared = resetAllHintsForCampaign(campaignDef);
+      assert.equal(cleared, 2, 'reports how many were suppressed before the reset');
+      for (const m of campaignDef.missions) {
+        assert.equal(areHintsSuppressed(m.id), false, `${m.id} re-enabled`);
+      }
+    } finally {
+      if (prev === undefined) delete globalThis.localStorage;
+      else globalThis.localStorage = prev;
+    }
+  });
+});
+
+// ── Shared-button listener teardown (Bug: chronicle "Got It" kicked you out) ──
+//
+// The tooltip's Next/Got-It button is a single DOM element reused by every
+// mission's conductor. A scripted (tutorial) conductor that completes used to
+// leave its click listener attached after destroy(); the next mission's hints
+// conductor shared the same button, so clicking "Got It" on a hint re-fired the
+// dead tutorial conductor's onComplete — bouncing the player back to the menu.
+describe('MissionConductor shared-button listener teardown', () => {
+  function _fakeEl() {
+    const listeners = {};
+    return {
+      style: {}, className: '', textContent: '', innerHTML: '', title: '',
+      addEventListener(t, fn) { (listeners[t] ??= []).push(fn); },
+      removeEventListener(t, fn) {
+        const a = listeners[t]; if (!a) return;
+        const i = a.indexOf(fn); if (i >= 0) a.splice(i, 1);
+      },
+      _dispatch(t) { (listeners[t] ?? []).slice().forEach(fn => fn({ preventDefault() {} })); },
+      _count(t) { return (listeners[t] ?? []).length; },
+    };
+  }
+
+  function _withSharedDom(run) {
+    const prevDoc = globalThis.document;
+    const nextBtn = _fakeEl(), skipLink = _fakeEl(), voiceBtn = _fakeEl();
+    const titleEl = _fakeEl(), bodyEl = _fakeEl();
+    const tooltip = { style: {}, className: '', querySelector: (sel) => ({
+      '.tut-title': titleEl, '.tut-body': bodyEl, '.tut-next-btn': nextBtn,
+      '.tut-skip-link': skipLink, '.tut-voice-btn': voiceBtn })[sel] ?? null };
+    globalThis.document = {
+      getElementById: (id) => id === 'tutorial-tooltip' ? tooltip : null,
+      querySelector: () => null,
+    };
+    try { run({ nextBtn, skipLink, voiceBtn }); }
+    finally { globalThis.document = prevDoc; }
+  }
+
+  test('destroy() removes the Next-button listener it added', () => {
+    _withSharedDom(({ nextBtn }) => {
+      const c = new MissionConductor({ round: 1, entities: [] }, {}, {}, null,
+        [{ id: 'complete', title: 'T', body: 'b', trigger: 'complete' }], {});
+      assert.equal(nextBtn._count('click'), 1);
+      c.destroy();
+      assert.equal(nextBtn._count('click'), 0, 'listener detached on destroy');
+    });
+  });
+
+  test('a completed scripted conductor does not re-fire onComplete via a later hints button', () => {
+    _withSharedDom(({ nextBtn }) => {
+      let onCompleteCount = 0;
+      // 1) Scripted tutorial conductor reaches its 'complete' step and finishes.
+      const scripted = new MissionConductor({ round: 1, entities: [] }, {}, {}, null,
+        [{ id: 'complete', title: 'Ready', body: 'go', trigger: 'complete' }],
+        { onComplete: () => { onCompleteCount++; } });
+      scripted.start();
+      nextBtn._dispatch('click');                     // "Continue to Caleb's Hollow"
+      assert.equal(onCompleteCount, 1, 'tutorial completes once');
+
+      // 2) Next mission's hints conductor shares the same button.
+      const ui = { tutorialClickBlocked: false, tutorialSubmitBlocked: false };
+      const hints = new MissionConductor({ round: 3, entities: [] }, ui, {}, null,
+        [{ id: 'm1_chronicle', title: 'The Chronicle', body: 'open it', trigger: 'click' }],
+        { mode: 'hints', roundStepMap: { 3: 'm1_chronicle' }, onSkipHints: () => {} });
+      hints.onPlanningPhaseStart();
+      assert.equal(hints.currentStepId, 'm1_chronicle');
+
+      nextBtn._dispatch('click');                     // player clicks "Got It"
+      assert.equal(hints.currentStepId, null, 'hint dismissed');
+      assert.equal(onCompleteCount, 1,
+        'stale tutorial onComplete must NOT fire again — the player stays in the mission');
+    });
   });
 });
 

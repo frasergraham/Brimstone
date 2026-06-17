@@ -9,6 +9,7 @@
 import { createCombatTester, battleWrapupPair, UNIT_FACTORIES, SPEED_MODES, ATTACK_MODES } from './combat-tester.js';
 import { UNIT_TYPES } from '../unit-types.js';
 import { ITEMS } from '../items.js';
+import { rangeOf, getEquippedWeaponIdOf } from '../entities.js';
 import { Renderer } from '../renderer.js';
 import { Renderer3D, BLOCK_WORD_VARIANTS } from '../renderer-3d.js';
 import { buildWrapupCombatsHtml, wrapupIconHtml, wrapupUnitCellHtml } from '../wrapup-summary.js';
@@ -569,7 +570,8 @@ function _snap(e) {
   return {
     id: e.id, col: e.col, row: e.row,
     owner: e.owner, type: e.type, title: e.title ?? null,
-    range: e.range ?? 1,
+    range: rangeOf(e),
+    weapon: getEquippedWeaponIdOf(e.items),
   };
 }
 

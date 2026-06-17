@@ -25,7 +25,8 @@ before(async () => {
 });
 
 function makeUI(budget = 4, food = 0) {
-  const state    = makeState({ inventory: { hero: { food } } });
+  // Phase-2 inventory shape: resources are `{ id: { count } }`.
+  const state    = makeState({ inventory: { hero: { food: { count: food } } } });
   const renderer = makeFakeRenderer();
   const els      = createElementsBag();
   const ui = new UIController(fakeCanvas, state, renderer, null, () => {}, null, false, els);

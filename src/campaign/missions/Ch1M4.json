@@ -766,6 +766,10 @@
         "fortifyLevel": 1,
         "resource": null,
         "hiddenSurvivor": true,
+        "exploreOverride": {
+          "kind": "horn",
+          "id": "horn"
+        },
         "roadDirs": [
           "14,3"
         ],

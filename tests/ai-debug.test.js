@@ -5,7 +5,12 @@
 import { describe, test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { Phase } from '../src/game.js';
-import { EntityType } from '../src/entities.js';
+import { EntityType, normalizeItems } from '../src/entities.js';
+
+// Phase-2 inventory: normalize each side's flat `{ id: N }` seed to the
+// canonical dict-of-objects shape `{ id: { count: N } }` the runtime uses.
+const normSidesInv = (inv) =>
+  Object.fromEntries(Object.entries(inv ?? {}).map(([s, m]) => [s, normalizeItems(m)]));
 import { TileType, ResourceType } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
 import { PlanActionType } from '../src/planner.js';
@@ -63,10 +68,10 @@ function makeFakeState(overrides = {}) {
     ],
     nodeScore: overrides.nodeScore ?? { hero: 0, witch: 0 },
     fogOfWar: 'none',
-    inventory: overrides.inventory ?? {
+    inventory: normSidesInv(overrides.inventory ?? {
       witch: { [ResourceType.HERBS]: 1, [ResourceType.WOOD]: 2, [ResourceType.METAL]: 2 },
       hero: { [ResourceType.HERBS]: 1, [ResourceType.WOOD]: 0, [ResourceType.METAL]: 0 },
-    },
+    }),
     entities: overrides.entities ?? [witch, minion, hero],
   };
 }

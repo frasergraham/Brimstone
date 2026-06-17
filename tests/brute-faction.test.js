@@ -79,7 +79,7 @@ describe('BruteFaction — leader stats', () => {
     assert.equal(b.attack,   4);
     assert.equal(b.defense,  3);
     assert.equal(b.agility,  3);
-    assert.equal(b.range,    1);
+    assert.equal(b.getRange(), 1);
   });
 
   test('brute leader keeps the witch summon ability (innate)', () => {
@@ -94,7 +94,7 @@ describe('BruteFaction — leader stats', () => {
 describe('BruteFaction — minions-only summons', () => {
   test('getSummonOptions returns only MINION when affordable', () => {
     const f = getFaction('brute');
-    const inv = { wood: 2, metal: 2 };
+    const inv = { wood: { count: 2 }, metal: { count: 2 } };
     const opts = f.getSummonOptions(inv);
     assert.equal(opts.length, 1);
     assert.equal(opts[0].summonType, EntityType.MINION);
@@ -105,7 +105,7 @@ describe('BruteFaction — minions-only summons', () => {
     const f = getFaction('brute');
     assert.deepEqual(f.getSummonOptions({}), []);
     // Brute minion costs 1, so wood:1 IS enough — should return the option.
-    const opts = f.getSummonOptions({ wood: 1 });
+    const opts = f.getSummonOptions({ wood: { count: 1 } });
     assert.equal(opts.length, 1);
     assert.equal(opts[0].summonType, EntityType.MINION);
   });
@@ -117,19 +117,19 @@ describe('BruteFaction — minions-only summons', () => {
 
   test('executeSummon spends only 1 resource on a brute minion', () => {
     const { state, brute } = bruteState();
-    state.inventory.witch[ResourceType.METAL] = 1;
-    state.inventory.witch[ResourceType.WOOD]  = 0;
+    state.inventory.witch[ResourceType.METAL] = { count: 1 };
+    state.inventory.witch[ResourceType.WOOD] = { count: 0 };
     const r = executeSummon(state, brute, EntityType.MINION);
     assert.equal(r.success, true);
-    assert.equal(state.inventory.witch[ResourceType.METAL], 0,
+    assert.equal((state.inventory.witch[ResourceType.METAL]?.count ?? 0), 0,
       'brute should pay only 1 metal for a minion');
     assert.deepEqual(r.spent, [{ type: ResourceType.METAL, amount: 1 }]);
   });
 
   test('SUMMON action surfaces only the minion option for the brute', () => {
     const { state, brute } = bruteState();
-    state.inventory.witch[ResourceType.METAL] = 4;
-    state.inventory.witch[ResourceType.WOOD]  = 4;
+    state.inventory.witch[ResourceType.METAL] = { count: 4 };
+    state.inventory.witch[ResourceType.WOOD] = { count: 4 };
     const summons = getValidActions(state, brute).filter(a => a.type === ActionType.SUMMON);
     assert.equal(summons.length, 1);
     assert.equal(summons[0].summonType, EntityType.MINION);
@@ -141,8 +141,8 @@ describe('BruteFaction — minions-only summons', () => {
     // WOOD_GOLEM at this stage, even when the probe is flooded with
     // resources.
     const opts = getFaction('brute').getSummonOptions({
-      [ResourceType.METAL]: 99,
-      [ResourceType.WOOD]: 99,
+      [ResourceType.METAL]: { count: 99 },
+      [ResourceType.WOOD]: { count: 99 },
     });
     const types = opts.map(o => o.summonType);
     assert.deepEqual(types, [EntityType.MINION]);
@@ -150,8 +150,8 @@ describe('BruteFaction — minions-only summons', () => {
 
   test('executeSummon with no requested type spawns a minion (not a golem)', () => {
     const { state, brute } = bruteState();
-    state.inventory.witch[ResourceType.METAL] = 4;
-    state.inventory.witch[ResourceType.WOOD]  = 4;
+    state.inventory.witch[ResourceType.METAL] = { count: 4 };
+    state.inventory.witch[ResourceType.WOOD] = { count: 4 };
     const before = state.entities.length;
     const r = executeSummon(state, brute, null);
     assert.equal(r.success, true);
@@ -162,7 +162,7 @@ describe('BruteFaction — minions-only summons', () => {
 
   test('executeSummon ignores a request for IRON_GOLEM and falls back to MINION', () => {
     const { state, brute } = bruteState();
-    state.inventory.witch[ResourceType.METAL] = 4;
+    state.inventory.witch[ResourceType.METAL] = { count: 4 };
     const r = executeSummon(state, brute, EntityType.IRON_GOLEM);
     assert.equal(r.success, true);
     const summoned = state.entities[state.entities.length - 1];
