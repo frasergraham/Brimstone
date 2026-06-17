@@ -4511,10 +4511,12 @@ function initScenario(def) {
   if (typeof window !== 'undefined') {
     window.__scenarioState = state;
     window.__renderer3d = renderer;
-    // Expose the UIController too — verifier-browser drivers click into the
-    // arc action popup and the list-mode picker (e.g. Sent To…), which need
-    // the UI handle to drive _selectEntity / _showActionPopup directly.
-    window.__scenarioUI = ui;
+    // ui isn't created yet (set inside _setupLocalUI's async path) — bind a
+    // lazy getter so verifier-browser drivers can grab the live UIController
+    // whenever it exists. Used by both turn-card-scroll tests (via __ui) and
+    // arc-action-popup / list-mode-picker drivers (via __scenarioUI).
+    Object.defineProperty(window, '__ui',         { configurable: true, get: () => ui });
+    Object.defineProperty(window, '__scenarioUI', { configurable: true, get: () => ui });
   }
 
   if (def.resolve) {
