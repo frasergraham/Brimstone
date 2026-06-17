@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { GameState } from '../src/game.js';
 import { getValidActions, ActionType } from '../src/actions.js';
 import { EntityType, createMinion, rangeOf, applyProjectedEquip } from '../src/entities.js';
-import { PlanActionType, projectEquippedWeaponId } from '../src/planner.js';
+import { PlanActionType, projectEquippedWeaponId, computeGhostState } from '../src/planner.js';
 import { hexDistance } from '../src/hex.js';
 
 function freshState() {
@@ -160,5 +160,66 @@ describe('getValidActions reflects the projected weapon range for plan highlight
     const afterBattle = getValidActions(state, projected).find(a => a.type === ActionType.BATTLE);
     assert.ok(afterBattle?.targets.some(t => t.id === minion.id),
       'after a queued switch to a bow the distance-2 minion must become attackable');
+  });
+});
+
+// ── Revert: clearing the queued equip restores the live weapon for highlights ───
+//
+// The complement of the "add an equip" cases above: when the user UNDOES the
+// queued EQUIP_WEAPON, the projected weapon (and thus the highlighted range)
+// must fall back to the unit's previously-equipped LIVE weapon. The projection
+// is seeded from the live weapon and only LAYERS queued equips, so dropping the
+// equip action is exactly what reverts it.
+
+describe('removing a queued EQUIP_WEAPON reverts the projected weapon to the live one', () => {
+  test('projectEquippedWeaponId: empty plan keeps the live weapon, equip layers over it', () => {
+    const live  = 'bow';   // W_live: ranged, the unit's currently-equipped weapon
+    const melee = 'sword'; // W_melee queued by the equip action
+    const equipAction = { type: PlanActionType.EQUIP_WEAPON, entityId: 'h', weapon: melee };
+
+    // With the equip queued the projection is the melee weapon …
+    assert.equal(projectEquippedWeaponId([equipAction], 'h', live), melee);
+    // … and with the equip removed (empty plan) it reverts to the live weapon.
+    assert.equal(projectEquippedWeaponId([], 'h', live), live,
+      'clearing the queued equip must revert the projection to the live weapon');
+  });
+
+  test('computeGhostState: dropping the EQUIP_WEAPON reverts weapons map to the live weapon', () => {
+    const state = freshState();
+    const hero  = state.hero;
+    hero.equipWeapon('bow'); // W_live: ranged, range 3
+    assert.equal(hero.getEquippedWeaponId(), 'bow');
+
+    // Plan WITH the equip → last step projects the post-equip melee weapon.
+    const withEquip = computeGhostState(state, [
+      { type: PlanActionType.EQUIP_WEAPON, entityId: hero.id, weapon: 'sword' },
+    ]);
+    const lastWithEquip = withEquip[withEquip.length - 1];
+    assert.equal(lastWithEquip.weapons.get(hero.id), 'sword',
+      'with the equip queued the projected weapon is the post-equip melee weapon');
+
+    // Plan with the equip REMOVED (a non-equip step remains so a step is emitted)
+    // → the weapons map reverts to the unit's live equipped weapon.
+    const withoutEquip = computeGhostState(state, [
+      { type: PlanActionType.MOVE, entityId: hero.id, toCol: hero.col + 1, toRow: hero.row },
+    ]);
+    const lastWithoutEquip = withoutEquip[withoutEquip.length - 1];
+    assert.equal(lastWithoutEquip.weapons.get(hero.id), 'bow',
+      'after the queued equip is cleared the projected weapon reverts to the live weapon');
+  });
+
+  test('computeGhostState: re-adding the live weapon after a switch is a no-op revert', () => {
+    const state = freshState();
+    const hero  = state.hero;
+    hero.equipWeapon('bow'); // W_live
+
+    // Switch to sword then switch back to bow: net projection is the live weapon.
+    const roundTrip = computeGhostState(state, [
+      { type: PlanActionType.EQUIP_WEAPON, entityId: hero.id, weapon: 'sword' },
+      { type: PlanActionType.EQUIP_WEAPON, entityId: hero.id, weapon: 'bow' },
+    ]);
+    const last = roundTrip[roundTrip.length - 1];
+    assert.equal(last.weapons.get(hero.id), 'bow',
+      'switching back to the live weapon must leave the projection at the live weapon');
   });
 });
