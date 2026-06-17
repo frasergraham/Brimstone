@@ -99,6 +99,61 @@ describe('Renderer3D._syncGuardZone — perimeter outline build', () => {
       'a queued GUARD should preview the outline during planning');
   });
 
+  test('planning: a queued ranged→melee equip shrinks the previewed guard zone', () => {
+    // A unit currently wielding a bow (reach 3) queues a switch to a melee
+    // weapon, then guards. The previewed zone must use the POST-equip melee
+    // reach (the 6-neighbour ring), not the live bow reach — otherwise the
+    // highlight lies about what the guard will actually cover.
+    const r = makeRenderer();
+    const state = new GameState(true, true);
+    const guard = state.hero;
+    guard.equipWeapon('bow');           // live: ranged, reach 3
+    guard.guarding = 0; guard.col = 7; guard.row = 5;
+    clearBand(state);
+    state.planningPhase = true;
+    r.state = state;
+
+    // Baseline: guard with the live bow → ranged disc (more than 24 tubes).
+    r.planGhostSteps = computeGhostState(state,
+      [{ type: PlanActionType.GUARD, entityId: guard.id }]);
+    r._syncGuardZone();
+    const bowCount = (r._guardZoneMeshes ?? []).length;
+    assert.ok(bowCount > 24, `bow guard should draw a ranged disc (got ${bowCount})`);
+
+    // Now queue a melee equip BEFORE the guard. The projected weapon is melee,
+    // so the zone collapses to the 6-neighbour ring (24 perimeter tubes).
+    r._guardZoneSig = null; // force rebuild
+    r.planGhostSteps = computeGhostState(state, [
+      { type: PlanActionType.EQUIP_WEAPON, entityId: guard.id, weapon: 'sword' },
+      { type: PlanActionType.GUARD,        entityId: guard.id },
+    ]);
+    r._syncGuardZone();
+    const meleeCount = (r._guardZoneMeshes ?? []).length;
+    assert.equal(meleeCount, 24,
+      `after a queued switch to a melee sword the guard zone must be the melee ring (got ${meleeCount}, bow was ${bowCount})`);
+  });
+
+  test('planning: a queued melee→ranged equip grows the previewed guard zone', () => {
+    const r = makeRenderer();
+    const state = new GameState(true, true);
+    const guard = state.hero;
+    guard.equipWeapon('sword');         // live: melee, reach 1
+    guard.guarding = 0; guard.col = 7; guard.row = 5;
+    clearBand(state);
+    state.planningPhase = true;
+    r.state = state;
+
+    // Queue a bow equip before guarding → projected reach 3 → ranged disc.
+    r.planGhostSteps = computeGhostState(state, [
+      { type: PlanActionType.EQUIP_WEAPON, entityId: guard.id, weapon: 'bow' },
+      { type: PlanActionType.GUARD,        entityId: guard.id },
+    ]);
+    r._syncGuardZone();
+    const rangedCount = (r._guardZoneMeshes ?? []).length;
+    assert.ok(rangedCount > 24,
+      `after a queued switch to a bow the guard zone must grow past the melee ring (got ${rangedCount})`);
+  });
+
   test('melee guard outlines its six-neighbour ring', () => {
     const r = makeRenderer();
     const state = new GameState(true, true);

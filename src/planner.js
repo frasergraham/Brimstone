@@ -2,7 +2,7 @@
 import { hexKey, getNeighbors } from './hex.js';
 import { getReachableHexes, getVisiblePositions } from './actions.js';
 import { ResourceType, isRiver } from './tiles.js';
-import { EntityType, normalizeItems, getItemCountOf, removeItemInItems } from './entities.js';
+import { EntityType, normalizeItems, getItemCountOf, removeItemInItems, getEquippedWeaponIdOf } from './entities.js';
 import { ITEMS } from './items.js';
 import { effectsBlockActions } from './effects.js';
 
@@ -112,17 +112,48 @@ export function snapEntity(entity) {
 //   {
 //     action,           // the PlanAction
 //     positions,        // Map<entityId, {col,row}> after this step
+//     weapons,          // Map<entityId, weaponId> equipped after this step
 //     arrow,            // {entityId, fromCol, fromRow, toCol, toRow} | null
 //     stepNumber,       // 1-based index among MOVE steps only (for rendering)
 //     attackArrow,      // {fromCol, fromRow, toCol, toRow} | null  (for BATTLE_* steps)
 //     summonInfo,       // {col, row, type: EntityType} | null      (for SUMMON steps)
 //   }
 
+/**
+ * Project the weapon a unit will have EQUIPPED after running its queued plan.
+ * Scans `plan` for the entity's EQUIP_WEAPON actions and returns the LAST one's
+ * weapon (the equip resolves before later steps), falling back to
+ * `currentWeaponId` when no switch is queued. Pure — used by plan-mode highlight
+ * code so attack-range / guard-zone projections reflect the post-equip weapon,
+ * the analog of `_getProjectedPos` projecting position through queued MOVEs.
+ *
+ * @param {Array<{type:string, entityId:*, weapon?:string}>} plan
+ * @param {*} entityId
+ * @param {string|null} currentWeaponId  the unit's live equipped weapon id
+ * @returns {string|null} the projected equipped weapon id
+ */
+export function projectEquippedWeaponId(plan, entityId, currentWeaponId = null) {
+  let weaponId = currentWeaponId;
+  for (const a of (plan ?? [])) {
+    if (a.type === PlanActionType.EQUIP_WEAPON && a.entityId === entityId && a.weapon) {
+      weaponId = a.weapon;
+    }
+  }
+  return weaponId;
+}
+
 export function computeGhostState(state, plan) {
   // Seed projected positions from the current live state.
   const positions = new Map();
+  // Seed projected equipped weapons so range-driven highlights (attack targets,
+  // guard zone) reflect a queued EQUIP_WEAPON — the weapon analog of `positions`.
+  const weapons = new Map();
   for (const e of state.entities) {
-    if (e.alive) positions.set(e.id, { col: e.col, row: e.row });
+    if (e.alive) {
+      positions.set(e.id, { col: e.col, row: e.row });
+      const w = getEquippedWeaponIdOf(e.items);
+      if (w) weapons.set(e.id, w);
+    }
   }
 
   const steps = [];
@@ -179,11 +210,16 @@ export function computeGhostState(state, plan) {
       // Give the new unit a temporary id for ghost rendering.
       const ghostId = `ghost-summon-${steps.length}`;
       positions.set(ghostId, { col: spawnCol, row: spawnRow });
+    } else if (action.type === PlanActionType.EQUIP_WEAPON) {
+      // Project the weapon switch so range-driven highlights for THIS and later
+      // steps reflect the post-equip weapon (mirrors how MOVE advances position).
+      if (action.weapon) weapons.set(action.entityId, action.weapon);
     }
 
     steps.push({
       action,
       positions: new Map(positions),
+      weapons:   new Map(weapons),
       arrow,
       stepNumber,
       attackArrow,

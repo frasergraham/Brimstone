@@ -2,7 +2,7 @@
 import { hexKey, hexToPixel, hexDistance, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, FORTIFY_HP_PER_LEVEL, getFortifyCombatBonus, legacyTileType } from './tiles.js';
 import { ITEMS } from './items.js';
-import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf, rangeOf, getEquippedWeaponIdOf, getItemCountOf, totalItemCount } from './entities.js';
+import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf, rangeOf, getEquippedWeaponIdOf, getItemCountOf, totalItemCount, applyProjectedEquip } from './entities.js';
 import { DAMAGE_SCALE } from './balance.js';
 import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
@@ -1837,17 +1837,21 @@ export class UIController {
     hideActionPopup(this);
 
     // In planning mode, valid actions and highlights must use the entity's
-    // projected position (after earlier MOVE steps in the plan), not the real one.
+    // projected position (after earlier MOVE steps) AND projected weapon (after
+    // a queued EQUIP_WEAPON switch), not the live ones — otherwise attack-range
+    // highlights use the current weapon's range, not the one being switched to.
     let effectiveEntity = entity;
     if (this._planMode) {
-      const proj = this._getProjectedPos(entity.id);
-      if (proj && (proj.col !== entity.col || proj.row !== entity.row)) {
-        // Re-parent the spread to Entity.prototype so methods like
-        // hasAbility / getAttack still resolve; plain spread loses them.
-        effectiveEntity = Object.setPrototypeOf(
-          { ...entity, col: proj.col, row: proj.row },
-          Object.getPrototypeOf(entity)
-        );
+      const proj      = this._getProjectedPos(entity.id);
+      const projWeapon = this._getProjectedWeaponId(entity.id);
+      const posChanged = proj && (proj.col !== entity.col || proj.row !== entity.row);
+      const weaponChanged = projWeapon && projWeapon !== entity.getEquippedWeaponId();
+      if (posChanged || weaponChanged) {
+        // applyProjectedEquip re-parents to Entity.prototype (so hasAbility /
+        // getAttack / getRange still resolve) and equips the projected weapon
+        // on a deep-copied backpack without touching the live entity.
+        effectiveEntity = applyProjectedEquip(entity, weaponChanged ? projWeapon : null);
+        if (posChanged) { effectiveEntity.col = proj.col; effectiveEntity.row = proj.row; }
       }
     }
 
@@ -1860,8 +1864,9 @@ export class UIController {
     const hasMoveAction = this._validActions.some(a => a.type === ActionType.MOVE);
     const actionsOk = this._planMode || this.state.actionsAvailable > 0;
     if (hasMoveAction && actionsOk) {
-      // Store the real entity in actor so that actor.alive (a prototype getter) works correctly.
-      // effectiveEntity is a plain spread-copy used only for position; it loses prototype methods.
+      // Store the real entity in actor: effectiveEntity is a prototype-preserving
+      // projection clone (position + projected weapon) used for highlight range,
+      // but the live entity is what the rest of the planning flow expects.
       this._awaitingTarget = { actionType: ActionType.MOVE, actor: entity, isDefault: true };
     } else {
       this._awaitingTarget = null;
@@ -1900,6 +1905,14 @@ export class UIController {
     const steps = this.renderer?.planGhostSteps;
     if (!steps || steps.length === 0) return null;
     return steps[steps.length - 1].positions.get(entityId) ?? null;
+  }
+
+  /** Return the equipped weapon id projected for an entity after its plan runs
+   *  (reflects a queued EQUIP_WEAPON switch), or null if no ghost steps exist. */
+  _getProjectedWeaponId(entityId) {
+    const steps = this.renderer?.planGhostSteps;
+    if (!steps || steps.length === 0) return null;
+    return steps[steps.length - 1].weapons?.get?.(entityId) ?? null;
   }
 
   /**
@@ -2030,9 +2043,14 @@ export class UIController {
       }
       // Odds show only for enemies the unit could attack from where its plan
       // LEAVES it — a queued move out of range hides the percentages (and a
-      // deselect clears them: no actor → this branch never runs).
+      // deselect clears them: no actor → this branch never runs). Range is read
+      // from the weapon the plan LEAVES equipped (a queued ranged→melee switch
+      // shrinks the reach), not the live weapon.
       const projPos = this._getProjectedPos(actor.id) ?? { col: actor.col, row: actor.row };
-      const range = rangeOf(actor);
+      const projWeapon = this._getProjectedWeaponId(actor.id);
+      const rangeSrc = (projWeapon && projWeapon !== actor.getEquippedWeaponId())
+        ? applyProjectedEquip(actor, projWeapon) : actor;
+      const range = rangeOf(rangeSrc);
       targets = targets.filter(t =>
         hexDistance(projPos.col, projPos.row, t.col, t.row) <= range);
       for (const t of targets) {
@@ -4149,13 +4167,20 @@ export class UIController {
     try {
       let effActor = actor;
       if (this._planMode) {
-        const proj = this._getProjectedPos(actor.id);
-        if (proj && (proj.col !== actor.col || proj.row !== actor.row)) {
-          // Re-parent so getRange()/getAttack() still resolve on the clone.
-          effActor = Object.setPrototypeOf(
-            { ...actor, col: proj.col, row: proj.row },
-            Object.getPrototypeOf(actor)
-          );
+        const proj       = this._getProjectedPos(actor.id);
+        const projWeapon = this._getProjectedWeaponId(actor.id);
+        const posChanged    = proj && (proj.col !== actor.col || proj.row !== actor.row);
+        const weaponChanged = projWeapon && projWeapon !== actor.getEquippedWeaponId();
+        // Both the attack modifier AND isRanged are read from the attacker's
+        // equipped weapon inside computeBattleContext, so a queued EQUIP_WEAPON
+        // must reach the odds source too — not just the range filter in
+        // _computeUnitInfoCards. applyProjectedEquip re-parents to Entity.prototype
+        // (so getRange/getAttack resolve) and equips the projected weapon on a
+        // deep-copied backpack without touching the live entity; the projected
+        // position is then re-applied onto that local clone.
+        if (posChanged || weaponChanged) {
+          effActor = applyProjectedEquip(actor, weaponChanged ? projWeapon : null);
+          if (posChanged) { effActor.col = proj.col; effActor.row = proj.row; }
         }
       }
       return computeCombatOdds(this.state, effActor, target);
