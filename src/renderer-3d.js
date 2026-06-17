@@ -47,7 +47,10 @@ export const FOREST_TREES_MIN     = _FOREST_TREES_MIN;
 export const FOREST_TREES_MAX     = _FOREST_TREES_MAX;
 export const FOREST_DENSITY_SCALE = _FOREST_DENSITY_SCALE;
 export const scaledForestTreeCount = _scaledForestTreeCount;
-import { EntityType, isLeaderType, ADVANTAGE_CAP } from './entities.js';
+import {
+  EntityType, isLeaderType, ADVANTAGE_CAP,
+  factionHasMultipleLeaders, leaderColorFor,
+} from './entities.js';
 import {
   buildingRenderHex,
   buildingFacingYaw,
@@ -10114,8 +10117,9 @@ export class Renderer3D {
           outline.thick.isVisible = true;
         }
       } else {
-        // Recolour if the entity's owner colour changed (e.g. side-flip).
-        const ownerKey = unitHexOutlineColor(e);
+        // Recolour if the entity's owner colour changed (e.g. side-flip OR a
+        // leader joined/died and the MP multi-leader predicate flipped).
+        const ownerKey = unitHexOutlineColor(e, this.state.entities);
         if (outline.ownerKey !== ownerKey) {
           outline.thin.material  = this._thinOutlineMaterialFor(ownerKey);
           outline.thick.material = this._thickOutlineMaterialFor(ownerKey);
@@ -10155,7 +10159,7 @@ export class Renderer3D {
     const path    = unitHexOutlineRingPath().map(
       p => new BABYLON.Vector3(p.x, p.y, p.z),
     );
-    const ownerKey = unitHexOutlineColor(entity);
+    const ownerKey = unitHexOutlineColor(entity, this.state?.entities ?? null);
 
     const thin = BABYLON.MeshBuilder.CreateTube(`unitOutlineThin_${entity.id}`, {
       path,
@@ -12017,6 +12021,7 @@ export class Renderer3D {
         portraitRect: portraitSource.hasPortrait ? portraitSource.rect : null,
         hp:    live?.hp ?? 0,
         maxHp: live?.maxHp ?? 1,
+        ownerColor: unitIconOwnerColor(live ?? entity, this.state?.entities ?? null),
       });
     };
     const repaintIcon = (value, color) => {
@@ -12247,6 +12252,7 @@ export class Renderer3D {
       portraitImg:  portraitSource.hasPortrait ? portraitSource.img  : null,
       portraitRect: portraitSource.hasPortrait ? portraitSource.rect : null,
       hp, maxHp,
+      ownerColor: unitIconOwnerColor(entity, this.state?.entities ?? null),
     });
     paintIconCombatReadout(iconEntry.tex.getContext(), {
       size:  UNIT_ICON_TEX_SIZE,
@@ -12818,19 +12824,27 @@ export class Renderer3D {
       const infoSig = info
         ? `${info.hitPct ?? ''}|${info.crushPct ?? ''}|${info.attackCount ?? 0}`
         : '';
+      // MP multi-leader colour propagation: only paints a rim + tints the
+      // portrait background when the faction has > 1 live leader (in solo /
+      // single-leader play this returns null and the legacy look is byte-
+      // identical). Mid-game leader joins/deaths flip the predicate and the
+      // signature change forces a repaint.
+      const ownerColor = unitIconOwnerColor(e, this.state.entities);
       if (entry.lastHp === e.hp
           && entry.lastMax === e.maxHp
           && entry.lastAssetId === assetId
           && entry.lastHadPortrait === portraitSource.hasPortrait
-          && entry.lastInfoSig === infoSig) {
+          && entry.lastInfoSig === infoSig
+          && entry.lastOwnerColor === ownerColor) {
         continue;
       }
-      this._repaintUnitIconBadge(entry, e, portraitSource, info);
+      this._repaintUnitIconBadge(entry, e, portraitSource, info, ownerColor);
       entry.lastHp           = e.hp;
       entry.lastMax          = e.maxHp;
       entry.lastAssetId      = assetId;
       entry.lastHadPortrait  = portraitSource.hasPortrait;
       entry.lastInfoSig      = infoSig;
+      entry.lastOwnerColor   = ownerColor;
     }
     // Dispose badges for entities that no longer exist or just died.
     // G1 v2: skip entities mid-combat-readout — the readout drives the icon
@@ -12902,6 +12916,11 @@ export class Renderer3D {
       plane, mat, tex,
       leader: !!standee.leader,
       lastHp: -1, lastMax: -1, lastAssetId: '__pending__', lastInfoSig: '__pending__',
+      // Tracks the last owner-rim colour painted so the diff in
+      // _syncEntityIconBillboards repaints when a leader joins/dies and the
+      // MP multi-leader predicate flips. '__pending__' guarantees the first
+      // tick repaints regardless of solo vs MP.
+      lastOwnerColor: '__pending__',
       // Track whether the last paint actually drew the portrait sprite. The
       // race we're guarding against: badge created before `loadImages()`
       // resolves → first paint goes out with `hasPortrait=false` (gray
@@ -12915,7 +12934,7 @@ export class Renderer3D {
     return entry;
   }
 
-  _repaintUnitIconBadge(entry, entity, portraitSource, info = null) {
+  _repaintUnitIconBadge(entry, entity, portraitSource, info = null, ownerColor = null) {
     const ctx = entry.tex.getContext();
     paintUnitIconBadge(ctx, {
       size:  UNIT_ICON_TEX_SIZE,
@@ -12925,6 +12944,7 @@ export class Renderer3D {
       hp: entity.hp,
       maxHp: entity.maxHp,
       info,
+      ownerColor,
     });
     entry.tex.update();
   }
@@ -13323,7 +13343,7 @@ export class Renderer3D {
       const glow = !!ov.style?.glow;
       let rgb, alpha;
       if (entity) {
-        rgb = cssHexToRgb01(unitHexOutlineColor(entity));
+        rgb = cssHexToRgb01(unitHexOutlineColor(entity, this.state?.entities ?? null));
         alpha = 1;
       } else {
         const css = ov.style?.color || (glow ? '#f5c842' : 'rgba(255,255,255,0.3)');
@@ -13459,7 +13479,7 @@ export class Renderer3D {
       if (!step.arrow) continue;
       const { entityId, fromCol, fromRow, toCol, toRow } = step.arrow;
       const ent = this.state?.entities?.find?.(e => e.id === entityId);
-      const ownerColor = entityBaseColor(ent ?? {});
+      const ownerColor = entityBaseColor(ent ?? {}, this.state?.entities ?? null);
       const stepNumber = step.stepNumber ?? 0;
       const id = `plan-move-${entityId}-${stepNumber}`;
       this.setOverlay(id, makeOverlay({
@@ -15786,9 +15806,24 @@ export function entityStandeeWorldPosition(col, row, radius = HEX_RADIUS_WORLD) 
 }
 
 /** Choose the base disc colour for an entity. Mirrors `_ownerColorFor` so it
- *  can be unit-tested without instantiating the renderer. */
-export function entityBaseColor(entity) {
+ *  can be unit-tested without instantiating the renderer.
+ *
+ *  Multiplayer / multi-leader propagation: when `entityList` is passed AND the
+ *  entity's faction has more than one live leader, every unit owned by a given
+ *  leader (via `entity.ownerId`) takes its OWNING LEADER's per-player colour
+ *  rather than the faction primary — so allied survivors / minions / golems
+ *  are distinguishable by player at a glance. In solo / single-leader play the
+ *  predicate is false and behaviour is byte-identical to the legacy lookup.
+ *
+ *  `entity.color` set on the entity itself (the leader's own per-player tint)
+ *  still wins outright — that branch is hit before the propagation lookup. */
+export function entityBaseColor(entity, entityList = null) {
   if (entity?.color) return entity.color;
+  if (entityList && entity?.owner && entity?.ownerId
+      && factionHasMultipleLeaders(entityList, entity.owner)) {
+    const leaderColor = leaderColorFor(entityList, entity.ownerId);
+    if (leaderColor) return leaderColor;
+  }
   if (entity?.owner) {
     const theme = getFactionTheme(entity.owner);
     if (theme?.primary) return theme.primary;
@@ -15870,9 +15905,26 @@ export function unitHexOutlineRingPath(
 
 /** Resolve the owner colour for a unit's hex outline. Pure delegation to
  *  `entityBaseColor` so the outline and standee token are guaranteed to use
- *  the same tint — exported so tests can lock the linkage in place. */
-export function unitHexOutlineColor(entity) {
-  return entityBaseColor(entity);
+ *  the same tint — exported so tests can lock the linkage in place. The
+ *  optional `entityList` enables the MP multi-leader colour propagation
+ *  (see `entityBaseColor`); omitting it preserves the legacy lookup. */
+export function unitHexOutlineColor(entity, entityList = null) {
+  return entityBaseColor(entity, entityList);
+}
+
+/** Resolve the owning-leader colour for the floating unit-icon billboard
+ *  outer rim + portrait background. Returns the owning leader's colour ONLY
+ *  in the qualifying MP scenario (faction has > 1 live leader) — in solo /
+ *  single-leader play returns `null` so the badge stays in its legacy look
+ *  (no rim, neutral cream portrait background). Pure / DOM-free / exported
+ *  for tests. */
+export function unitIconOwnerColor(entity, entityList) {
+  if (!entity || !entity.owner) return null;
+  if (!Array.isArray(entityList) || entityList.length === 0) return null;
+  if (!factionHasMultipleLeaders(entityList, entity.owner)) return null;
+  // Leader takes its own colour; non-leaders walk to their owning leader.
+  if (isLeaderType(entity.type) && entity.color) return entity.color;
+  return leaderColorFor(entityList, entity.ownerId);
 }
 
 /** Derive a darker / desaturated variant of a player colour for dead-unit
@@ -18276,6 +18328,13 @@ export const UNIT_ICON_TEX_SIZE   = 256;
  *  to read as a clean line at the icon edge without crowding the portrait.
  *  Halved from the old 0.14 per operator request for a thinner HP border. */
 export const UNIT_ICON_RING_THICKNESS_FRAC = 0.07;
+/** Owning-leader colour rim thickness (fraction of icon texture half-size).
+ *  Drawn just inside the plane edge so the badge reads as an owner-tinted
+ *  rim around the HP ring. Slightly thicker than the HP ring so it carries
+ *  the colour at zoom-out distances where the HP arc reads as a thin hairline.
+ *  Painted only when `paintUnitIconBadge` is called with an `ownerColor`
+ *  (MP multi-leader propagation only — see `entityBaseColor`). */
+export const UNIT_ICON_OWNER_RIM_THICKNESS_FRAC = 0.09;
 /** Plane material alpha — fully opaque. Transparency was tried at 0.8 but
  *  reads as washed-out on the bright icon textures. */
 export const UNIT_ICON_PLANE_ALPHA = 1.0;
@@ -19305,6 +19364,11 @@ export function paintUnitIconBadge(ctx, opts) {
     portraitRect = null, // { x, y, size } when drawing from a tilemap
     hp,
     maxHp,
+    // Optional owning-leader colour for the MP multi-leader propagation:
+    // when set, an outer rim ring is drawn just inside the plane edge AND
+    // the portrait disc's background fills with `ownerColor` instead of the
+    // neutral cream. Null / undefined preserves the legacy single-leader look.
+    ownerColor = null,
     // Per-unit planning info (unit info card). All optional:
     //   hitPct / crushPct — attack-odds percentages (0–100) drawn
     //     right-justified in the left margin; crush omitted when 0/null.
@@ -19317,12 +19381,32 @@ export function paintUnitIconBadge(ctx, opts) {
   const cx = W / 2;
   const cy = H / 2;
   const ringThickness = Math.max(2, Math.round(size * UNIT_ICON_RING_THICKNESS_FRAC));
-  // Outer ring radius is just inside the plane edge; inner radius is the
-  // icon disc radius. The icon image is clipped to the inner disc.
-  const outerR = (size / 2) - 2;
+  // Owner rim sits just inside the plane edge when present; the HP ring
+  // shifts inward by (ownerRimThickness + small gap) so the two read as
+  // nested bands rather than overlapping.
+  const hasOwnerRim = !!ownerColor;
+  const ownerRimThickness = hasOwnerRim
+    ? Math.max(2, Math.round(size * UNIT_ICON_OWNER_RIM_THICKNESS_FRAC))
+    : 0;
+  const ownerRimGap = hasOwnerRim ? Math.max(1, Math.round(size * 0.012)) : 0;
+  // Outer ring radius (HP arc) sits inside the plane edge minus the owner
+  // rim; inner radius is the icon disc radius. The icon image is clipped to
+  // the inner disc.
+  const outerR = (size / 2) - 2 - ownerRimThickness - ownerRimGap;
   const innerR = outerR - ringThickness;
 
   ctx.clearRect(0, 0, W, H);
+
+  // Outer owner-colour rim (only in qualifying MP scenarios).
+  if (hasOwnerRim) {
+    const rimRadius = (size / 2) - 2 - ownerRimThickness / 2;
+    ctx.lineWidth = ownerRimThickness;
+    ctx.strokeStyle = ownerColor;
+    ctx.lineCap = 'butt';
+    ctx.beginPath();
+    ctx.arc(cx, cy, rimRadius, 0, Math.PI * 2);
+    ctx.stroke();
+  }
 
   // Dark track behind the arc — so a low-HP unit still shows a full ring
   // outline against the bright terrain.
@@ -19345,15 +19429,16 @@ export function paintUnitIconBadge(ctx, opts) {
     ctx.stroke();
   }
 
-  // Icon disc: portrait clipped to a circle. Neutral pale fill behind the
-  // image so the disc reads as a solid sticker even before the portrait
-  // pixels paint (and as a fallback when no portrait is available).
+  // Icon disc: portrait clipped to a circle. Background fills with the owning
+  // leader's colour in MP multi-leader play (so the disc reads as the player's
+  // colour before/behind the portrait image), and falls back to the legacy
+  // neutral cream in solo / single-leader play.
   ctx.save();
   ctx.beginPath();
   ctx.arc(cx, cy, innerR, 0, Math.PI * 2);
   ctx.closePath();
   ctx.clip();
-  ctx.fillStyle = 'rgba(225,220,210,1)';
+  ctx.fillStyle = hasOwnerRim ? ownerColor : 'rgba(225,220,210,1)';
   ctx.fillRect(0, 0, W, H);
   if (portraitImg && portraitRect) {
     ctx.drawImage(
@@ -19769,7 +19854,7 @@ export function planArrowsSignature(steps, entities) {
     const ids = [...seenIds].sort();
     for (const id of ids) {
       const ent = entities.find(e => e?.id === id);
-      out += `${id}=${entityBaseColor(ent ?? {})}|`;
+      out += `${id}=${entityBaseColor(ent ?? {}, entities)}|`;
     }
   }
   return out;

@@ -899,6 +899,47 @@ export function isLeaderType(type) {
   return _LEADER_TYPES.has(type);
 }
 
+/**
+ * Predicate: does the given faction (`owner` string: 'hero' | 'witch' | …) have
+ * MORE THAN ONE LIVE LEADER on the field? Used by the renderer to decide
+ * whether to tint a non-leader unit with its owning leader's per-player colour
+ * instead of the faction primary — in solo / single-leader play, returning
+ * `false` preserves the legacy "faction colour everywhere" appearance.
+ *
+ * Counts only entities that are `.alive`, share `.owner === factionOwner`, and
+ * carry a leader entity type. Pure / DOM-free / testable.
+ */
+export function factionHasMultipleLeaders(entityList, factionOwner) {
+  if (!factionOwner || !Array.isArray(entityList)) return false;
+  let count = 0;
+  for (const e of entityList) {
+    if (!e || !e.alive) continue;
+    if (e.owner !== factionOwner) continue;
+    if (!isLeaderType(e.type)) continue;
+    if (++count >= 2) return true;
+  }
+  return false;
+}
+
+/**
+ * Walk `entityList` and return the colour assigned to the LIVE leader whose
+ * `ownerId` matches `ownerId` (per-player tint set when seats are claimed).
+ * Returns `null` if no qualifying leader is found or `ownerId` is missing.
+ * Used by the renderer to propagate the owning leader's tint to every unit
+ * they own (survivors, summons, golems) once the multi-leader predicate fires.
+ * Pure / DOM-free / testable.
+ */
+export function leaderColorFor(entityList, ownerId) {
+  if (!ownerId || !Array.isArray(entityList)) return null;
+  for (const e of entityList) {
+    if (!e || !e.alive) continue;
+    if (e.ownerId !== ownerId) continue;
+    if (!isLeaderType(e.type)) continue;
+    if (e.color) return e.color;
+  }
+  return null;
+}
+
 // Default display name per entity type. Used by Entity.displayName on the
 // server and re-used by MirrorEntity.displayName on the client so the two
 // never drift. Survivors override `.name` at creation time, so the lookup
