@@ -3041,8 +3041,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             await _showDiscoveryOnCard(s, i, action.entityId);
           }
         } else if (result.log?.length) {
-          // No survivor — show the "nothing found" result dialog
-          await new Promise(resolve => ui._showResultDialog(result.log, resolve));
+          // No survivor answered — surface the "NO RESPONSE" outcome inline on
+          // the action card (built by buildStepDigest) instead of popping a
+          // result dialog. Matches EXPLORE's silent-on-the-card convention.
+          ui?.revealReplayEntryOutcome?.(i, action.entityId);
+          redrawFn();
+          await playbackDelay(700);
         }
       }
     }
@@ -4436,6 +4440,11 @@ function _scenarioPlan(planDefs, byRef) {
     } else if (p.explore) {
       // Pair with a tile-level `exploreOverride` for a deterministic loot roll.
       out.push({ type: PlanActionType.EXPLORE, entityId: actor.id });
+    } else if (p.soundHorn) {
+      // Sound Horn — the actor needs the `horn` item (granted via the
+      // `heroHorn: true` scenario flag in initScenario). With no hidden
+      // survivors in range the result is the "no response" inline card.
+      out.push({ type: PlanActionType.SOUND_HORN, entityId: actor.id });
     } else if (p.sentTo) {
       // Free action: a SURVIVOR is sent to another leader. The action now
       // lives on the survivor (the survivor is the actor). `p.sentTo`
@@ -4491,6 +4500,9 @@ function initScenario(def) {
     if (typeof ef === 'string') applyEffect(state.hero, ef);
     else if (ef?.id) applyEffect(state.hero, ef.id, ef);
   }
+  // Grant the hero leader the Horn key item so a `{ ref:'hero', soundHorn:true }`
+  // heroPlan step is valid (the Sound Horn action gates on hasItem('horn')).
+  if (def.heroHorn && state.hero && !state.hero.hasItem('horn')) state.hero.addItem('horn');
   for (const ef of def.witchEffects ?? []) {
     if (!state.witch) break;
     if (typeof ef === 'string') applyEffect(state.witch, ef);

@@ -298,6 +298,35 @@ describe('buildStepDigest — move/explore notes', () => {
     assert.equal(d[0].entries[0].note.text, 'FOUND 3 SURVIVORS');
   });
 
+  test('horn that finds nothing shows "NO RESPONSE" inline on the card, no discovery (t-horn-no-response)', () => {
+    const h = snap('h1', 'hero', 'hero', 1, 1);
+    const ev = {
+      type: ResEventType.ACTION_OK, faction: 'hero',
+      action: { type: PlanActionType.SOUND_HORN, entityId: 'h1' },
+      // No survivor answered — empty encounter list, but the action succeeded.
+      result: { success: true, encounterSurvivors: [], log: ['📯 sounds the horn', 'No hidden souls stir within earshot.'] },
+    };
+    const d = buildStepDigest([step([ev], [h])], [], DEPS);
+    const e = d[0].entries[0];
+    // The "no one answered" outcome lives in the action card's note, NOT a popup.
+    assert.deepEqual(e.note, { text: 'NO RESPONSE', kind: 'info' });
+    assert.equal(e.discovered, null);
+    assert.equal(e.actionType, PlanActionType.SOUND_HORN);
+    assert.equal(e.label, 'HORN');
+  });
+
+  test('horn with neither encounterSurvivors nor encounterSurvivor still gets NO RESPONSE', () => {
+    const h = snap('h1', 'hero', 'hero', 1, 1);
+    const ev = {
+      type: ResEventType.ACTION_OK, faction: 'hero',
+      action: { type: PlanActionType.SOUND_HORN, entityId: 'h1' },
+      result: { success: true, log: ['📯 sounds the horn'] },   // fields absent
+    };
+    const d = buildStepDigest([step([ev], [h])], [], DEPS);
+    assert.equal(d[0].entries[0].note.text, 'NO RESPONSE');
+    assert.equal(d[0].entries[0].discovered, null);
+  });
+
   test('explore with no loot shows EXPLORED', () => {
     const h = snap('h1', 'hero', 'hero', 1, 1);
     const ev = {
