@@ -6830,6 +6830,82 @@ body.spectator-mode #game-screen   { display: flex !important; }
   background: rgba(212,167,44,0.06);
 }
 
+/* ── ⚰ Fallen memorial ─────────────────────────────────────────────────── */
+/* Tombstone cards for survivors lost to permadeath. Desaturated + greyed,
+   reusing the .campaign-party-card layout patterns. */
+
+.fallen-section {
+  margin-top: 0.85rem;
+  padding-top: 0.6rem;
+  border-top: 1px dashed rgba(255,255,255,0.12);
+}
+
+.fallen-heading {
+  font-size: 0.9rem;
+  color: #9aa0a6;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.4rem;
+}
+
+.fallen-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: center;
+}
+
+.fallen-card {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.45rem;
+  background: rgba(120,120,130,0.06);
+  border: 1px solid rgba(150,150,160,0.16);
+  border-radius: 5px;
+  min-width: 150px;
+  flex: 1 1 calc(50% - 0.35rem);
+  max-width: calc(50% - 0.18rem);
+  filter: grayscale(1) opacity(0.8);
+}
+
+.fallen-glyph {
+  font-size: 1.1rem;
+  color: #b0b4ba;
+  flex-shrink: 0;
+}
+
+.fallen-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.fallen-name {
+  font-size: 0.85rem;
+  color: #c4c8cd;
+  text-decoration: line-through;
+  text-decoration-color: rgba(196,200,205,0.5);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fallen-title {
+  font-size: 0.72rem;
+  color: #8b8f95;
+  font-style: italic;
+}
+
+.fallen-where {
+  font-size: 0.72rem;
+  color: #80858b;
+}
+
+.fallen-level {
+  font-size: 0.7rem;
+  color: #80858b;
+  flex-shrink: 0;
+}
+
 .cp-portrait {
   width: 24px;
   height: 24px;

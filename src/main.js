@@ -52,7 +52,7 @@ import { nodeController } from './game.js';
 import { MissionConductor, areHintsSuppressed, markHintsSeen, resetAllHintsForCampaign } from './mission-conductor.js';
 import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel, getEquippedWeaponIdOf, normalizeItems, flattenItemCounts } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
-import { Campaign, CAMPAIGN_SLOT_COUNT, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
+import { Campaign, CAMPAIGN_SLOT_COUNT, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
 import { processStoryTriggers } from './campaign/missions.js';
 import { MissionLogicEngine } from './mission-logic/engine.js';
@@ -73,7 +73,7 @@ import {
   campaignCardHTML as _campaignCardHTML, survivorCardHTML as _survivorCardHTML,
   campaignPartyHTML as _campaignPartyHTML, objectiveDescription as _objectiveDescription,
   partyPaneHTML as _partyPaneHTML, missionListPaneHTML as _missionListPaneHTML,
-  progressSquadCap as _progressSquadCap,
+  progressSquadCap as _progressSquadCap, fallenSectionHTML as _fallenSectionHTML,
   missionRows as _missionRows,
   departureMessage as _departureMessage, arrivalMessage as _arrivalMessage,
 } from './campaign/campaign-ui.js';
@@ -3762,6 +3762,28 @@ let _campaignUnlocked = false; // Admin: bypass mission prerequisites
 let _activeRosterIndices = []; // Indices into _activeCampaign.roster that are "active" (will deploy)
 let _progressPane = 'party';   // Campaign Progress mobile pane toggle: 'party' | 'missions'
 
+// START-only party cap: a mission may deploy at most PARTY_CAP survivors from
+// the roster (+ the hero = ≤4 total starting units). The roster/bench may hold
+// MORE — the rest stay benched. This clamps the STARTING party only; mid-mission
+// survivor discovery is NOT capped by it (the field count may exceed 3).
+const PARTY_CAP = 3;
+
+/** A mission's effective START survivor cap: its authored value clamped to
+ *  PARTY_CAP. Console-warns once per mission when the authored value is clamped
+ *  so over-cap mission JSON surfaces in dev. */
+function _effectivePartyCap(value, missionId, field) {
+  const authored = value ?? PARTY_CAP;
+  if (authored > PARTY_CAP) {
+    if (!_partyCapWarned.has(`${missionId}:${field}`)) {
+      _partyCapWarned.add(`${missionId}:${field}`);
+      console.warn(`[campaign] ${missionId}: ${field}=${authored} exceeds the start party cap of ${PARTY_CAP} — clamping to ${PARTY_CAP}.`);
+    }
+    return PARTY_CAP;
+  }
+  return authored;
+}
+const _partyCapWarned = new Set();
+
 // ── Campaign mid-mission save/resume ──────────────────────────────────────────
 
 
@@ -4041,14 +4063,15 @@ function _renderCampaignProgressScreen() {
     .filter(i => i >= 0 && i < _activeCampaign.roster.length)
     .slice(0, maxActive);
 
-  // Party pane.
+  // Party pane — surviving roster, then the ⚰ Fallen memorial (whole campaign).
   const partyEl = document.getElementById('campaign-progress-party');
   if (partyEl) {
+    const missionTitleResolver = (id) => _activeCampaign.getMissionDef(id)?.title ?? id;
     partyEl.innerHTML = _partyPaneHTML(
       _activeCampaign.heroStats, _activeCampaign.roster,
       _activeRosterIndices, maxActive,
       { resources: _activeCampaign.resources, weapons: _activeCampaign.weapons },
-    );
+    ) + _fallenSectionHTML(_activeCampaign.fallen, missionTitleResolver);
   }
 
   // Mission pane.
@@ -4376,8 +4399,10 @@ function _showMissionBriefing(missionId) {
     <div class="campaign-obj"><span class="campaign-obj-icon">💀</span> <strong>Defeat:</strong> ${loseDesc}</div>
   `;
 
-  // Switch roster summary into Active/Reserve deploy mode.
-  const maxActive = missionDef.maxSurvivorsFromRoster ?? 0;
+  // Switch roster summary into Active/Reserve deploy mode. The deploy cap is the
+  // mission's authored value clamped to the START-only PARTY_CAP (≤3 survivors),
+  // so the picker can never select more than 3 — the rest stay benched.
+  const maxActive = Math.min(missionDef.maxSurvivorsFromRoster ?? 0, PARTY_CAP);
   // Preserve a squad already chosen on the Progress screen; otherwise default to
   // front-filling the active slots. Either way clamp to this mission's cap and
   // drop any indices that fall outside the current roster.
@@ -4647,6 +4672,12 @@ function _initCampaignMission(missionDef) {
   if (missionDef.maxDiscoverableSurvivors != null) {
     mapData.maxDiscoverableSurvivors = missionDef.maxDiscoverableSurvivors;
   }
+  // Campaign permadeath: exclude fallen survivors from this mission's discovery
+  // pool so a permadead survivor can never be re-found. (This is the ONLY
+  // discovery change — discovery counts/flow are otherwise untouched.)
+  if (_activeCampaign?.fallen?.length) {
+    mapData.fallenSurvivorNames = _activeCampaign.fallen.map(f => f.name);
+  }
 
   // Hide setup, show game
   document.getElementById('setup-screen').style.display = 'none';
@@ -4724,9 +4755,12 @@ function _initCampaignMission(missionDef) {
     state.inventory.hero = normalizeItems(res);
   }
 
-  // Deploy carried-over survivors from roster (uses active/reserve selection)
-  if (_activeCampaign && missionDef.maxSurvivorsFromRoster > 0) {
-    const toDeploy = _activeRosterIndices.slice(0, missionDef.maxSurvivorsFromRoster);
+  // Deploy carried-over survivors from roster (uses active/reserve selection).
+  // The deploy count is the mission's authored cap clamped to the START-only
+  // PARTY_CAP (≤3), so no mission can START with more than 3 roster survivors.
+  const _maxFromRoster = _effectivePartyCap(missionDef.maxSurvivorsFromRoster, missionDef.id, 'maxSurvivorsFromRoster');
+  if (_activeCampaign && _maxFromRoster > 0) {
+    const toDeploy = _activeRosterIndices.slice(0, _maxFromRoster);
     // Place survivors at explicit start positions if the mission specifies
     // them; otherwise fall back to neighbors of the hero's start tile.
     const heroStart = mapData.heroStart;
@@ -4777,12 +4811,15 @@ function _initCampaignMission(missionDef) {
   }
 
   // ── Roster balancing: enforce min/max survivor count ──────────────────────
+  // Both bounds are clamped to the START-only PARTY_CAP (≤3): a mission can
+  // neither require nor allow more than 3 starting survivors, so the mission can
+  // never START with >4 total player units (hero + 3).
   if (missionDef.minSurvivors != null || missionDef.maxSurvivors != null) {
     const heroSurvivors = state.entities.filter(
       e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR
     );
-    const min = missionDef.minSurvivors ?? 0;
-    const max = missionDef.maxSurvivors ?? Infinity;
+    const min = Math.min(missionDef.minSurvivors ?? 0, PARTY_CAP);
+    const max = _effectivePartyCap(missionDef.maxSurvivors, missionDef.id, 'maxSurvivors');
 
     // Too many — some leave with a narrative reason
     if (heroSurvivors.length > max) {
@@ -4814,6 +4851,23 @@ function _initCampaignMission(missionDef) {
         state.entities.push(s);
         state.addLog(_arrivalMessage(s.name));
       }
+    }
+  }
+
+  // ── Final START-cap guard ─────────────────────────────────────────────────
+  // Belt-and-suspenders: regardless of which path placed them (roster deploy,
+  // min/max balancing, or any future scripted start spawn), no mission may START
+  // with more than PARTY_CAP survivors. Trim any excess so the starting party is
+  // always ≤4 total units (hero + ≤3). Mid-mission discovery is unaffected — this
+  // runs once at start and the on-field count may grow past 3 via discovery.
+  const _startingSurvivors = state.entities.filter(
+    e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR && !e.isNpc
+  );
+  if (_startingSurvivors.length > PARTY_CAP) {
+    console.warn(`[campaign] ${missionDef.id}: ${_startingSurvivors.length} starting survivors exceeds the cap of ${PARTY_CAP} — trimming to ${PARTY_CAP}.`);
+    for (const s of _startingSurvivors.slice(PARTY_CAP)) {
+      state.entities.splice(state.entities.indexOf(s), 1);
+      state.addLog(_departureMessage(s.name));
     }
   }
 
@@ -4978,15 +5032,24 @@ function _handleCampaignMissionEnd() {
   }
 
   let survivors;
+  // Survivors who fell THIS mission, added to the memorial only on a WIN.
+  // Computed before the debrief render so the Fallen card can list this run's
+  // casualties even before they exist in Campaign.fallen.
+  let newlyFallen = [];
   if (won) {
     // Gather surviving survivors for roster (permadeath: dead ones are lost).
     // Roster members who were deployed and died are dropped; undeployed
     // members are preserved; alive deployed members are snapshotted.
     survivors = reconcileRosterAfterMission(_activeCampaign.roster, state.entities);
+    // Permadeath: a deployed survivor who died on this COMPLETED mission is
+    // mourned forever — recorded into Campaign.fallen and removed from the
+    // discovery pool. Only on a WIN; a loss restores the party (else-branch).
+    newlyFallen = collectFallenAfterMission(state.entities, missionDef.id);
 
     _activeCampaign.applyMissionResult(missionDef.id, {
       won,
       survivors,
+      fallen: newlyFallen,
       // Campaign.resources is a flat numeric map; flatten the live
       // dict-of-objects faction inventory back down on the way out.
       resources: flattenItemCounts(state.inventory.hero),
@@ -5038,8 +5101,13 @@ function _handleCampaignMissionEnd() {
     items: normalizeItems(state.hero.items),
   } : _activeCampaign.heroStats;
   const rosterHeading = won ? 'Surviving Roster' : 'Party Restored';
+  // ⚰ Fallen memorial — this run's casualties on a win. The whole campaign's
+  // fallen are shown on the Progress screen; the debrief focuses on who was lost
+  // THIS mission so the loss lands. Empty → no section.
+  const missionTitleResolver = (id) => _activeCampaign.getMissionDef(id)?.title ?? id;
   rosterEl.innerHTML = `<h3>${rosterHeading}</h3>` +
-    _campaignPartyHTML(heroSnap, survivors);
+    _campaignPartyHTML(heroSnap, survivors) +
+    _fallenSectionHTML(newlyFallen, missionTitleResolver);
 
   // Clean up game state — destroy the UIController and conductor first so their
   // event listeners don't leak onto the shared DOM and double-fire in the next game.
