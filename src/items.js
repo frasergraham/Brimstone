@@ -191,6 +191,20 @@ export const ITEMS = Object.freeze({
     noLoot: true,
     label: '✨ Magic Bolt (+1 ATK, range 2)',
   },
+
+  // ── Key items ────────────────────────────────────────────────────────────
+  // `kind: 'key'` items are persistent enablers, not weapons or consumables:
+  // holding one unlocks an action and using it never decrements the count.
+  // They live in a unit's personal `items` pack (NOT the shared faction
+  // inventory) and round-trip through normalizeItems / state-sync like any
+  // other entry. The Horn enables the Sound Horn action — see executeSoundHorn
+  // and the getValidActions gate in src/actions.js.
+  horn: {
+    id: 'horn',
+    kind: 'key',
+    label: '📯 Horn',
+    noLoot: true,        // never rolls on a random loot table; placed by hand
+  },
 });
 
 export function getItem(id) {

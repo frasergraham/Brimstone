@@ -346,6 +346,12 @@ export class Faction {
       if (!e.abilities.includes(id)) e.abilities.push(id);
     }
     if (this.innateLeaderWeapon) e.equipWeapon(this.innateLeaderWeapon);
+    // A horn-trained leader (sound_horn) is issued a Horn — the reusable key
+    // item the Sound Horn action gates on (see getValidActions /
+    // executeSoundHorn). Factions that strip sound_horn (e.g. Rogue) get none.
+    // In campaigns this innate horn is replaced by the carried backpack at
+    // mission start (applyCarriedHeroLoadout), so the hero re-finds it in Ch1 M4.
+    if (e.hasAbility('sound_horn') && !e.hasItem('horn')) e.addItem('horn');
     return e;
   }
 
@@ -548,9 +554,10 @@ export class HeroFaction extends Faction {
   getUnitTypes() { return [EntityType.SURVIVOR]; }
   _buildLeader(col, row, ownerId, state = null) { return createHero(col, row, ownerId, state); }
 
-  // Phase 5: day-side leaders carry sound_horn innately. The action-type
-  // gate at src/actions.js no longer checks isLeaderType + owner — it
-  // reads actor.hasAbility('sound_horn').
+  // Day-side leaders are horn-trained (sound_horn). The ability marks who is
+  // trained to wield a horn — and so who Faction.createLeader issues the Horn
+  // key item to — but the Sound Horn action itself gates on holding the item
+  // (getValidActions / executeSoundHorn read actor.hasItem('horn')).
   get innateLeaderAbilities() { return ['sound_horn']; }
 
   // The Paladin starts with a sword (melee, +2 ATK over base 2).

@@ -532,6 +532,15 @@ export class GameState {
     // abilities the leader had picked up at runtime (none today, but
     // this is the natural extension point).
     leader.abilities = [...(fresh.abilities || [])];
+    // Keep the Horn key item in lockstep with horn-training: a swap to a
+    // horn-trained faction issues one, a swap away (e.g. paladin → rogue)
+    // takes it back, so the Sound Horn gate (hasItem('horn')) matches the
+    // new faction. Swaps happen at setup before any horn is looted.
+    if (leader.hasAbility('sound_horn')) {
+      if (!leader.hasItem('horn')) leader.addItem('horn');
+    } else if (leader.hasItem('horn')) {
+      leader.removeItem('horn');
+    }
     // Clear the constructor-assigned name ('Ishmael Charger' for the day
     // side default, 'Witch' for night) so Entity.displayName falls through
     // to the new type's default (e.g. 'Mercy Sloane' for ROGUE).

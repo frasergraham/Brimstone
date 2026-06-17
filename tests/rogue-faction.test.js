@@ -95,6 +95,13 @@ describe('RogueFaction — innate abilities', () => {
     assert.equal(r.hasAbility('summon'),     false);
   });
 
+  test('a freshly-created rogue leader is NOT issued a horn', () => {
+    // Horn issuance tracks horn-training (sound_horn): the rogue strips the
+    // ability, so it never gets the key item that gates the Sound Horn action.
+    const r = getFaction('rogue').createLeader(0, 0, 'p1');
+    assert.ok(!r.hasItem('horn'), 'rogue should not hold a horn');
+  });
+
   test('SOUND_HORN action is NOT surfaced for the rogue', () => {
     const { state, rogue } = rogueState();
     state.inventory.hero.food = { count: 5 };

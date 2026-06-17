@@ -282,7 +282,7 @@ describe('mission-editor — hidden-survivor picker (specific roster char)', () 
 describe('mission-editor — exploration override picker (M4)', () => {
   const findDef = (map, col, row) => map.tiles.find(t => t.col === col && t.row === row);
 
-  test('picker offers nothing + every resource + every weapon + horse', () => {
+  test('picker offers nothing + every resource + every weapon + horse + horn', () => {
     const opts = exploreOverridePickerOptions();
     const values = opts.map(o => o.value);
     assert.equal(values[0], 'nothing');           // leads with the empty result
@@ -291,12 +291,13 @@ describe('mission-editor — exploration override picker (M4)', () => {
     assert.ok(values.includes('weapon:sword'));
     assert.ok(values.includes('weapon:staff'));
     assert.ok(values.includes('horse'));
+    assert.ok(values.includes('horn'));
     // Every option carries a human label.
     assert.ok(opts.every(o => typeof o.label === 'string' && o.label.length));
   });
 
   test('parseExploreOverrideKey round-trips with exploreOverrideKeyFor', () => {
-    for (const key of ['nothing', 'horse', 'resource:metal', 'weapon:axe']) {
+    for (const key of ['nothing', 'horse', 'horn', 'resource:metal', 'weapon:axe']) {
       const ov = parseExploreOverrideKey(key);
       assert.equal(exploreOverrideKeyFor(ov), key);
     }
@@ -311,14 +312,16 @@ describe('mission-editor — exploration override picker (M4)', () => {
     assert.deepEqual(def.exploreOverride, { kind: ExploreOverrideKind.RESOURCE, id: 'metal' });
   });
 
-  test('a weapon, horse, and nothing each store their kind + id', () => {
+  test('a weapon, horse, horn, and nothing each store their kind + id', () => {
     const map = createDefaultMapDef();
     setExploreOverride(map, { col: 1, row: 1 }, 'weapon:sword');
     setExploreOverride(map, { col: 2, row: 2 }, 'horse');
     setExploreOverride(map, { col: 3, row: 3 }, 'nothing');
+    setExploreOverride(map, { col: 4, row: 4 }, 'horn');
     assert.deepEqual(findDef(map, 1, 1).exploreOverride, { kind: 'weapon', id: 'sword' });
     assert.deepEqual(findDef(map, 2, 2).exploreOverride, { kind: 'horse', id: 'horse' });
     assert.deepEqual(findDef(map, 3, 3).exploreOverride, { kind: 'nothing', id: null });
+    assert.deepEqual(findDef(map, 4, 4).exploreOverride, { kind: 'horn', id: 'horn' });
   });
 
   test('amount > 1 is recorded; default 1 is omitted from the def', () => {

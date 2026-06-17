@@ -152,6 +152,7 @@ export const RESOURCE_LABEL = {
   [ResourceType.FOOD]:      '🍞 Food',
   [ResourceType.SCRIPTURE]: '📜 Scripture',
   'horse':                  '🐴 Horse',
+  'horn':                   '📯 Horn',
 };
 
 // Loot tables — sourced from loot.config.js (edit that file to tune rates).

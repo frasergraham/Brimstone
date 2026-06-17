@@ -7,7 +7,7 @@ import { GameState, Phase, Player } from '../src/game.js';
 import {
   executeMove, executeExplore, executeBattle, executeFortify,
   executeSummon, executeHeal, executeUseItem, executeUseAbility,
-  executeFortAssault, isFortBlocking,
+  executeSoundHorn, executeFortAssault, isFortBlocking,
   getReachableHexes, sightRange, survivorFindMultiplier,
   getValidActions, ActionType,
 } from '../src/actions.js';
@@ -529,6 +529,27 @@ describe('executeExplore', () => {
     t.exploreOverride = { kind: 'horse', id: 'horse' };
     executeExplore(state, hero);
     assert.equal(hero.getItemCount('horse'), 1);
+  });
+
+  test('exploreOverride horn grants the horn key item (Ch1 M4 church pickup)', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.removeItem('horn');               // a campaign hero arrives without one
+    const t = plainTileUnder(state, hero);
+    t.exploreOverride = { kind: 'horn', id: 'horn' };
+    executeExplore(state, hero);
+    assert.equal(hero.getItemCount('horn'), 1, 'searching the church yields a horn');
+    assert.ok(hero.hasItem('horn'));
+  });
+
+  test('exploreOverride horn does not stack a horn already held', () => {
+    const state = freshState();
+    const hero = state.hero;                // Paladin already holds one innately
+    assert.ok(hero.hasItem('horn'));
+    const t = plainTileUnder(state, hero);
+    t.exploreOverride = { kind: 'horn', id: 'horn' };
+    executeExplore(state, hero);
+    assert.equal(hero.getItemCount('horn'), 1, 'horn pickup is idempotent');
   });
 
   test('exploreOverride nothing finds nothing (no inventory change)', () => {
@@ -2715,5 +2736,61 @@ describe('getValidActions on a ghost-position effective entity', () => {
       actions.some(a => a.type === ActionType.SUMMON),
       'summon must be in actions for a ghost-position night-side leader'
     );
+  });
+});
+
+// ── Sound Horn gated on the horn ITEM (not the sound_horn ability) ─────────
+// The horn became a reusable "key item" living in the leader's `items`. The
+// action surfaces only while the unit holds a horn; sounding it never consumes
+// the horn. The Paladin is issued one innately (so standard games are
+// unchanged); campaign heroes find theirs at the river church in Ch1 M4.
+
+describe('Sound Horn gated on the horn item', () => {
+  test('the Paladin hero carries a horn innately', () => {
+    const state = freshState();
+    assert.ok(state.hero.hasItem('horn'),
+      'a freshly-created hero leader should hold the horn');
+  });
+
+  test('hero WITH the horn surfaces SOUND_HORN', () => {
+    const state = freshState();
+    const actions = getValidActions(state, state.hero);
+    assert.ok(actions.some(a => a.type === ActionType.SOUND_HORN),
+      'SOUND_HORN must appear when the hero holds a horn');
+  });
+
+  test('hero WITHOUT the horn does NOT surface SOUND_HORN', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.removeItem('horn');
+    assert.ok(!hero.hasItem('horn'), 'precondition: horn removed');
+    const actions = getValidActions(state, hero);
+    assert.ok(!actions.some(a => a.type === ActionType.SOUND_HORN),
+      'SOUND_HORN must be hidden when the hero lacks a horn');
+  });
+
+  test('sounding the horn fires its effect but keeps the horn (reusable)', () => {
+    const state = freshState();
+    const hero = state.hero;
+    state.inventory.hero[ResourceType.FOOD] = { count: 2 };
+    const countBefore = hero.getItemCount('horn');
+    assert.ok(countBefore >= 1, 'precondition: hero holds a horn');
+
+    const res = executeSoundHorn(state, hero);
+    assert.ok(res.success, 'horn should fire when held and food is available');
+    assert.ok(state.heroRevealedByHorn, 'sounding the horn reveals the hero');
+    // Reusable key item: count unchanged, item still present.
+    assert.equal(hero.getItemCount('horn'), countBefore,
+      'horn count must be unchanged after sounding it');
+    assert.ok(hero.hasItem('horn'), 'horn item must NOT be removed on use');
+  });
+
+  test('executeSoundHorn refuses when the hero lacks a horn', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.removeItem('horn');
+    state.inventory.hero[ResourceType.FOOD] = { count: 2 };
+    const res = executeSoundHorn(state, hero);
+    assert.ok(!res.success, 'cannot sound a horn you do not hold');
   });
 });
