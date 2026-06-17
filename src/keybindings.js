@@ -16,6 +16,9 @@
  * keyboard for gameplay controls. Escape deselects the current unit.
  */
 
+import { MAP_SIZES } from './map.js';
+import { toggleAllyLunge } from './debug-flags.js';
+
 // AppModes during which the camera / unit controls are meaningful. MENU is
 // excluded — there is no map to drive there.
 const IN_GAME = new Set(['PLANNING', 'SUBMITTED', 'RESOLVING', 'SUMMARY', 'PLAYBACK', 'SPECTATING']);
@@ -85,7 +88,38 @@ export const COMMANDS = Object.freeze({
       return '🤖 AI-assist off.';
     },
   },
+  seed: {
+    describe: 'Show the current map seed + size (for bug repro)',
+    run: (ctx) => formatSeedLine(ctx.ui?.state),
+  },
+  lunge: {
+    describe: 'Toggle the ally gang-up lunge animation in battle replays',
+    run: () => {
+      const on = toggleAllyLunge();
+      return on
+        ? '🤺 Ally lunge ON — gang-up allies slide in during battle replays.'
+        : '🚫 Ally lunge OFF — gang-up allies stay put (presentation only).';
+    },
+  },
 });
+
+/**
+ * Format the `/seed` status line from a live GameState. Pure — no DOM — so it
+ * is unit-tested directly. Reads `state.mapSeed` / `state.mapSize` and the
+ * MAP_SIZES dimensions; handles the no-active-game and override-map cases.
+ * @param {{mapSeed?:number|null, mapSize?:string}|null|undefined} state
+ * @returns {string}
+ */
+export function formatSeedLine(state) {
+  if (!state) return 'No active game — start a mission first.';
+  const size = state.mapSize ?? 'standard';
+  const cfg = MAP_SIZES[size];
+  const dims = cfg ? `${cfg.cols}×${cfg.rows}` : '?×?';
+  const seed = (state.mapSeed === null || state.mapSeed === undefined)
+    ? 'n/a (pre-built map)'
+    : state.mapSeed;
+  return `🌱 seed: ${seed} · size: ${size} (${dims})`;
+}
 
 /**
  * Parse and execute a console line. Accepts an optional leading `/`.
