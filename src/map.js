@@ -1173,16 +1173,16 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
     }
   }
 
-  // Post-gen invariant: every surviving bridge now has exactly two reciprocal
-  // road links spanning the river. Surface a regression loudly in dev/test;
-  // production degrades gracefully (a cosmetic bridge glitch must not crash the
-  // game) — the audit above guarantees the invariant holds.
-  const _bridgeViolations = findBridgeInvariantViolations(tiles);
-  if (_bridgeViolations.length) {
-    // eslint-disable-next-line no-console
-    console.warn(`[map] bridge invariant violated (${mapSize} seed=${seed}):`,
-      _bridgeViolations);
-  }
+  // Hard post-gen invariant: every surviving bridge now has exactly two
+  // reciprocal road links on opposite river banks. The 3D bridge model's
+  // plank orientation is derived from `roadDirs`, so any other count renders
+  // a broken / floating span — there's no graceful degrade for a wrong
+  // count. The cleanup pass above is supposed to guarantee this. If a
+  // future change reintroduces a hole, fail LOUDLY here rather than ship a
+  // broken-looking map; the regression suite (`tests/bridge-invariants.test.js`,
+  // `tests/map-bridges.test.js`) sweeps the seed range to keep this assert
+  // from ever firing in practice.
+  assertMapInvariants(tiles);
 
   // 5b. Derive sub-hex blocked slots now that forests, bridges, and the road
   //     network are final. Forest trees avoid the road faces; bridges block all
