@@ -760,6 +760,12 @@ input, textarea, select, [contenteditable], [contenteditable] * {
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  /* Sit above the replay-timeline overlay (z-index: 24) so a long, scrolling
+     turn card's earlier rows pass under the header instead of clipping
+     abruptly on the timeline-up (mobile/iOS) layout where the timeline rides
+     just under the header. */
+  position: relative;
+  z-index: 30;
 }
 
 #turn-info {
@@ -5405,7 +5411,29 @@ img.plan-step-avatar {
   border-radius: 10px;
   opacity: 0;                                     /* hidden outside the 3-card window */
   transition: opacity 0.3s ease, border-color 0.3s ease;
+  /* Long turn cards (busy resolution steps in big games) are scrollable: the
+     player can wheel/swipe; ui.js auto-scrolls the active action into the
+     upper third (`scroll-padding-top`) as resolution advances, unless the
+     player has just scrolled manually. `scroll-behavior: smooth` softens both
+     auto-scroll and user-initiated keyboard scrolls. */
+  max-height: calc(100vh - 110px);
+  overflow-y: auto;
+  scroll-behavior: smooth;
+  scroll-padding-top: 0.5rem;
+  /* Subtle top fade: as content scrolls up out of view it dissolves rather than
+     hard-clipping at the card border — matches the "slides behind the menu
+     bar" reading even when geometry can't truly overlap the header. */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+          mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+  pointer-events: auto;                          /* re-enable inside #replay-timeline (parent disables it) */
 }
+/* Active row sits in the upper third of the card after auto-scroll: the
+   `scroll-margin-top` is the gap reserved above it inside the scroll viewport
+   when `scrollIntoView({block: 'start'})` lands it. ≈ a third of a tall card. */
+.replay-step-entry { scroll-margin-top: 1.2rem; }
+.replay-step-col::-webkit-scrollbar { width: 6px; }
+.replay-step-col::-webkit-scrollbar-thumb { background: rgba(170, 130, 255, 0.35); border-radius: 3px; }
+.replay-step-col::-webkit-scrollbar-track { background: transparent; }
 .replay-step-col.is-current {
   opacity: 1;                                     /* opaque active card (left of screen) */
   border-color: rgba(200, 160, 255, 0.7);

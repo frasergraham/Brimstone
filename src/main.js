@@ -4464,6 +4464,11 @@ function initScenario(def) {
   if (typeof window !== 'undefined') {
     window.__scenarioState = state;
     window.__renderer3d = renderer;
+    // ui isn't created yet (it's set inside _setupLocalUI's async path) — bind a
+    // lazy getter so the verifier can grab the live UIController whenever it
+    // exists. Used by tests that drive `highlightReplayEntry` / `_autoScrollActiveEntry`
+    // to prove the turn-card scroll behavior without grinding a real game.
+    Object.defineProperty(window, '__ui', { configurable: true, get: () => ui });
   }
 
   if (def.resolve) {

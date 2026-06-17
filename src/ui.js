@@ -20,7 +20,7 @@ import { compileTurnBattleSummary, compileTurnXpSummary } from './battle-utils.j
 import { buildWrapupCombatsHtml, wrapupIconHtml } from './wrapup-summary.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
-import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos } from './ui-render.js';
+import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos, TurnCardAutoScroll, shouldAutoScrollToActive } from './ui-render.js';
 import {
   hideActionPopup, getEntityScreenPos, computeArcPositions,
   positionArcPopup, startArcTracking, positionPopup,
@@ -5358,10 +5358,53 @@ export class UIController {
     if (this._replayCollapsed === undefined) this._replayCollapsed = this._isMobileViewport();
     this._bindReplayCollapse();
     this._bindReplayHoverHighlights();
+    this._bindTurnCardScrollDetection();
+    // A fresh round's cards mount at the top — forget any prior manual scroll so
+    // auto-scroll resumes immediately for the new turn.
+    (this._turnCardAutoScroll ??= new TurnCardAutoScroll()).reset();
     this._applyReplayCollapse(this._replayCollapsed);
     if (typeof document !== 'undefined') document.body?.classList?.add('replay-timeline-up');
     this._el('replay-progress')?.classList.add('visible');
     this.setReplayTimelineStep(visible[0].stepIndex);
+  }
+
+  /** Wire manual-scroll detection on the (persistent) timeline container once.
+   *  A wheel / touch / key scroll inside a turn card flags the auto-scroll
+   *  controller so it suspends itself for a few seconds — we never yank the card
+   *  away while the player is reading. Programmatic scrollIntoView fires no
+   *  wheel/touch event, so it never trips this. */
+  _bindTurnCardScrollDetection() {
+    if (this._turnCardScrollBound) return;
+    const wrap = this._el('replay-timeline');
+    if (!wrap || typeof wrap.addEventListener !== 'function') return;
+    const onUserScroll = () => {
+      const now = (typeof Date !== 'undefined' && Date.now) ? Date.now() : 0;
+      (this._turnCardAutoScroll ??= new TurnCardAutoScroll()).notifyUserScroll(now);
+    };
+    wrap.addEventListener('wheel',     onUserScroll, { passive: true });
+    wrap.addEventListener('touchmove', onUserScroll, { passive: true });
+    wrap.addEventListener('keydown',   onUserScroll, { passive: true });
+    this._turnCardScrollBound = true;
+  }
+
+  /** Keep the action currently resolving inside the visible upper portion of a
+   *  long, scrollable turn card. Targets the first `.is-acting` row and aligns
+   *  it to the card's top + `scroll-margin-top` (set in CSS), landing it above
+   *  the middle of the screen. Stands down while the player has scrolled
+   *  manually (TurnCardAutoScroll) and on collapsed cards (only the active row
+   *  shows — scrolling would just jump). */
+  _autoScrollActiveEntry(col) {
+    if (!col || typeof col.querySelector !== 'function') return;
+    const now = (typeof Date !== 'undefined' && Date.now) ? Date.now() : 0;
+    const suspended = (this._turnCardAutoScroll ??= new TurnCardAutoScroll()).isSuspended(now);
+    const active = col.querySelector('.replay-step-entry.is-acting');
+    if (!shouldAutoScrollToActive({
+      suspended,
+      collapsed: !!this._replayCollapsed,
+      hasActive: !!active,
+    })) return;
+    if (typeof active.scrollIntoView !== 'function') return;
+    active.scrollIntoView({ block: 'start', behavior: 'smooth' });
   }
 
   /** Wire the per-card +/- toggle once. Cards are re-rendered every round, so
@@ -5426,7 +5469,15 @@ export class UIController {
     this._replayCollapsed = !!collapsed;
     const wrap = this._el('replay-timeline');
     if (!wrap) return;
+    // Collapsing hides every non-active row (the card shrinks to one row, so its
+    // scrollTop clamps to 0); expanding restores them. Snapshot the active card's
+    // scroll offset and restore it after the toggle so flipping +/- never jumps
+    // the player's reading position. Auto-scroll is deliberately NOT triggered
+    // here — only resolution advancing moves the card.
+    const current = wrap.querySelector?.('.replay-step-col.is-current');
+    const savedTop = current ? current.scrollTop : 0;
     wrap.classList.toggle('collapsed', this._replayCollapsed);
+    if (current && !this._replayCollapsed && savedTop) current.scrollTop = savedTop;
     const glyph = this._replayCollapsed ? '+' : '−';
     const label = this._replayCollapsed ? 'Expand turn card' : 'Collapse turn card';
     wrap.querySelectorAll?.('.replay-collapse-btn').forEach(b => {
@@ -5674,6 +5725,7 @@ export class UIController {
     col.querySelectorAll('.replay-step-entry').forEach(e => e.classList.remove('is-acting'));
     col.querySelectorAll(`.replay-step-entry[data-entity="${entityId}"]`)
       .forEach(e => e.classList.add('is-acting'));
+    this._autoScrollActiveEntry(col);
   }
 
   /**
@@ -5687,6 +5739,7 @@ export class UIController {
     const set = new Set(types);
     col.querySelectorAll('.replay-step-entry').forEach(e =>
       e.classList.toggle('is-acting', set.has(e.getAttribute('data-action'))));
+    this._autoScrollActiveEntry(col);
   }
 
   /** Reveal one ACTION's rolls + outcome once that action has resolved. */

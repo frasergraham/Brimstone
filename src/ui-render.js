@@ -94,6 +94,78 @@ export function describePlanAction(action, entities, index = 0) {
   }
 }
 
+// ── Turn-card auto-scroll (replay timeline) ───────────────────────────────────
+//
+// A long turn card (a big game's busy resolution step) overflows the screen.
+// The card is CSS-scrollable; as resolution advances we auto-scroll the active
+// action into the upper portion of the card so the player always sees what's
+// happening — UNLESS the player has just scrolled manually, in which case we
+// stand down so we don't fight them.
+//
+// This module owns only the *decision* logic (DOM-free, unit-testable); the
+// wiring (scroll listeners, scrollIntoView) lives in ui.js.
+
+/** How long (ms) a manual scroll suppresses auto-scroll before it resumes. */
+export const TURN_CARD_AUTOSCROLL_SUSPEND_MS = 4000;
+
+/**
+ * Tracks whether the player has manually scrolled a turn card recently, so the
+ * auto-scroll-to-active logic can suspend itself and not yank the card away
+ * while the player is reading.
+ *
+ * Pure + DOM-free: callers feed it a millisecond timestamp (`Date.now()`); it
+ * owns no timers and touches no DOM, so it unit-tests without a browser.  A
+ * manual scroll is recorded via {@link notifyUserScroll}; it then reports
+ * `isSuspended(now) === true` for `windowMs` after that scroll, then resumes.
+ */
+export class TurnCardAutoScroll {
+  constructor({ windowMs = TURN_CARD_AUTOSCROLL_SUSPEND_MS } = {}) {
+    this.windowMs = windowMs;
+    this._lastUserScrollTs = null;   // null → the player has never scrolled
+  }
+
+  /** Record a manual user scroll (wheel / touch / key) at time `now` (ms). */
+  notifyUserScroll(now) {
+    this._lastUserScrollTs = now;
+  }
+
+  /** True while a recent manual scroll should suppress auto-scroll. */
+  isSuspended(now) {
+    if (this._lastUserScrollTs == null) return false;
+    return (now - this._lastUserScrollTs) < this.windowMs;
+  }
+
+  /** Convenience inverse of {@link isSuspended} — auto-scroll may run now. */
+  shouldAutoScroll(now) {
+    return !this.isSuspended(now);
+  }
+
+  /** Forget any recent scroll (e.g. when a fresh round's cards mount). */
+  reset() {
+    this._lastUserScrollTs = null;
+  }
+}
+
+/**
+ * Decide whether the active turn-card entry should be auto-scrolled into view.
+ *
+ * Pure gate shared by ui.js's `_autoScrollActiveEntry`.  Auto-scroll runs only
+ * when: there IS an active step to target, the card isn't collapsed (a collapsed
+ * card shows just the active row — scrolling it would only cause a jump), and
+ * the player hasn't scrolled manually inside the suspend window.
+ *
+ * @param {object} opts
+ * @param {boolean} [opts.suspended]  Player scrolled recently (TurnCardAutoScroll.isSuspended).
+ * @param {boolean} [opts.collapsed]  Card is in its collapsed (active-row-only) state.
+ * @param {boolean} [opts.hasActive]  An `.is-acting` entry exists to scroll to.
+ * @returns {boolean}
+ */
+export function shouldAutoScrollToActive({ suspended = false, collapsed = false, hasActive = true } = {}) {
+  if (suspended) return false;   // don't fight a player who just scrolled
+  if (collapsed) return false;   // collapsed card shows only the active row → nothing to scroll, no jump
+  return !!hasActive;            // only scroll when there's an active action to follow
+}
+
 // ── Plan steps list HTML ──────────────────────────────────────────────────────
 
 const RES_ICON = {
