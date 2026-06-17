@@ -22,6 +22,7 @@ import {
 
 import {
   STORY_BEAT_MIN_DWELL_MS,
+  STORY_BEAT_MAX_DWELL_MS,
   storyBeatHoldMs,
   runStoryBeatGate,
 } from '../../src/story-beat-cinematic.js';
@@ -95,6 +96,52 @@ describe('storyBeatHoldMs', () => {
 
   test('default dwell is a readable 4s+', () => {
     assert.ok(STORY_BEAT_MIN_DWELL_MS >= 4000, 'beats stay up long enough to read');
+  });
+
+  // Text-length scaling — long beats need more reading time than the 4s floor.
+  // Mirrors conversation-player's conversationReadingMs(): a short beat sits at
+  // the floor, longer beats add per-character time, all capped at a ceiling so a
+  // ridiculously long beat can't hang autoplay forever.
+  test('short text holds for the min dwell floor (no extra reading time)', () => {
+    const hold = storyBeatHoldMs({ autoplay: true, paused: false, text: 'Hi.' });
+    assert.equal(hold, STORY_BEAT_MIN_DWELL_MS, 'short beat = floor');
+  });
+
+  test('long text scales the hold above the floor', () => {
+    const longText = 'A'.repeat(300);   // ~300 chars > the floor's char budget
+    const hold = storyBeatHoldMs({ autoplay: true, paused: false, text: longText });
+    assert.ok(hold > STORY_BEAT_MIN_DWELL_MS,
+      `long beat (~300 chars) should hold > floor; got ${hold}`);
+  });
+
+  test('absurdly long text is capped at the max dwell ceiling', () => {
+    const insane = 'B'.repeat(10_000);
+    const hold = storyBeatHoldMs({ autoplay: true, paused: false, text: insane });
+    assert.ok(hold <= STORY_BEAT_MAX_DWELL_MS,
+      `unbounded reading time would hang autoplay; got ${hold}`);
+    assert.equal(hold, STORY_BEAT_MAX_DWELL_MS, 'pinned to the ceiling');
+  });
+
+  test('manual stepping (paused) ignores text length — still gates on NEXT', () => {
+    const longText = 'C'.repeat(500);
+    assert.equal(
+      storyBeatHoldMs({ autoplay: false, paused: true, text: longText }), 0,
+      'paused human play uses the manual NEXT gate, not a timed hold',
+    );
+  });
+
+  test('title is included in reading time when present', () => {
+    // A long title + short text still earns extra reading time.
+    const title = 'D'.repeat(200);
+    const text  = 'short.';
+    const hold = storyBeatHoldMs({ autoplay: true, paused: false, title, text });
+    assert.ok(hold > STORY_BEAT_MIN_DWELL_MS,
+      `title length should count; got ${hold}`);
+  });
+
+  test('max dwell ceiling is sensible (10s window)', () => {
+    assert.ok(STORY_BEAT_MAX_DWELL_MS >= 8000 && STORY_BEAT_MAX_DWELL_MS <= 20000,
+      `ceiling should be a reasonable max-read time; got ${STORY_BEAT_MAX_DWELL_MS}`);
   });
 });
 

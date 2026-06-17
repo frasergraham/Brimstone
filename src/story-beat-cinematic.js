@@ -21,9 +21,19 @@ import { startContinueCountdown } from './combat-cinematic.js';
 // up for slower readers, down for snappier auto-runs.
 export const STORY_BEAT_MIN_DWELL_MS = 4000;
 
+// Per-character reading budget — mirrors conversation-player's reading time
+// (~40ms/char ≈ 25 chars/sec ≈ 300wpm, a fast read), so a long beat sits up
+// longer than a short one without making the operator stare at it forever.
+export const STORY_BEAT_MS_PER_CHAR = 40;
+
+// Hard ceiling for any single beat's auto-hold. Even an authored 1000-char wall
+// of text can't hang autoplay past this — an operator who needs longer can pause
+// (the replay AutoPlay toggle) and re-read at their own pace.
+export const STORY_BEAT_MAX_DWELL_MS = 10000;
+
 /**
  * How long to hold a story beat before auto-advancing, given the current
- * playback state. Returns `minDwellMs` whenever resolution is auto-advancing
+ * playback state. Returns a scaled dwell whenever resolution is auto-advancing
  * (so the beat is readable), or 0 when a human is stepping manually — in which
  * case the caller keeps the normal NEXT-gate instead of a timed hold.
  *
@@ -31,14 +41,34 @@ export const STORY_BEAT_MIN_DWELL_MS = 4000;
  *   - replay "AutoPlay" toggle on: playback is NOT paused → hold.
  *   - manual stepping: playback IS paused → 0 (gate on NEXT).
  *
+ * The hold is `max(minDwellMs, length × msPerChar)` capped at `maxDwellMs` —
+ * a short toast sits at the floor, a long beat earns more reading time, an
+ * absurdly long beat is pinned to the ceiling so it can't hang the auto-run.
+ * Title and text are summed so a long title still counts.
+ *
  * @param {object}  o
  * @param {boolean} o.autoplay  the AI-vs-AI `_autoplay` game flag
  * @param {boolean} o.paused    the playback manual-step pause flag
+ * @param {string}  [o.text]    beat body — drives per-character reading time
+ * @param {string}  [o.title]   beat title — counted toward reading time
  * @param {number}  [o.minDwellMs]
+ * @param {number}  [o.maxDwellMs]
+ * @param {number}  [o.msPerChar]
  * @returns {number} ms to hold (0 ⇒ no timed hold; gate on NEXT)
  */
-export function storyBeatHoldMs({ autoplay, paused, minDwellMs = STORY_BEAT_MIN_DWELL_MS }) {
-  return (autoplay || !paused) ? minDwellMs : 0;
+export function storyBeatHoldMs({
+  autoplay,
+  paused,
+  text = '',
+  title = '',
+  minDwellMs = STORY_BEAT_MIN_DWELL_MS,
+  maxDwellMs = STORY_BEAT_MAX_DWELL_MS,
+  msPerChar  = STORY_BEAT_MS_PER_CHAR,
+} = {}) {
+  if (!(autoplay || !paused)) return 0;
+  const chars = String(title ?? '').length + String(text ?? '').length;
+  const scaled = Math.max(minDwellMs, chars * msPerChar);
+  return Math.min(maxDwellMs, scaled);
 }
 
 /**

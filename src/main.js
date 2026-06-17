@@ -800,7 +800,12 @@ async function _presentStoryBeatCard(beat, afterStepIndex) {
   const col = buildStoryBeatDigest(beat, `${afterStepIndex}:${_beatCardSeq++}`);
   ui.insertReplayTimelineCol(col, afterStepIndex);
   ui.setReplayTimelineStep?.(col.stepIndex);
-  const holdMs = storyBeatHoldMs({ autoplay: _autoplay, paused: playback.paused });
+  const holdMs = storyBeatHoldMs({
+    autoplay: _autoplay,
+    paused:   playback.paused,
+    title:    beat?.title,
+    text:     beat?.text,
+  });
   if (holdMs > 0) {
     await playbackDelay(holdMs);
     // A NEXT press during the hold (replay AutoPlay) collapsed the dwell to skip
@@ -1035,7 +1040,16 @@ async function _showAutoplayStorySequence(events) {
   if (!ui) return;
   for (const ev of events) {
     if (ev.conversation) continue;
-    await ui.showStoryModal(ev.title, ev.text, { autoDismissMs: STORY_BEAT_MIN_DWELL_MS });
+    // Scale the hold by beat text length (same model as the mid-replay card and
+    // the conversation player's reading time) so long beats actually stay up
+    // long enough to read instead of auto-dismissing at the bare floor.
+    const autoDismissMs = storyBeatHoldMs({
+      autoplay: true,
+      paused:   false,
+      title:    ev.title,
+      text:     ev.text,
+    });
+    await ui.showStoryModal(ev.title, ev.text, { autoDismissMs });
   }
 }
 
