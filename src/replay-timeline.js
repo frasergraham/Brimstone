@@ -185,6 +185,10 @@ function unitRef(snap) {
     name,
     color:    snap.color || ENTITY_COLOR[snap.type] || '#888',
     glyph:    GLYPHS[snap.type] ?? '?',
+    // Faction owner: used by the timeline compactor to break uneventful runs at
+    // faction boundaries (a quiet hero stretch never collapses into a quiet
+    // witch stretch). Null for neutral actors.
+    owner:    snap.owner ?? null,
   };
 }
 
@@ -723,6 +727,165 @@ export function buildOutcomeSummary(entry) {
       : `\u{1F4A2} ${sh.name ?? 'A bystander'} takes ${sh.damage ?? 1} splash.`);
   }
   return { kind, headline, reason, lines };
+}
+
+// ── Replay timeline compaction: consecutive uneventful turns ─────────────────
+//
+// In long games, multi-turn quiet stretches (a party of survivors trudging
+// across the map round after round, or a witch's minions all on guard) leave
+// the player clicking NEXT, NEXT, NEXT through near-identical move/guard cards
+// for no payoff. compactUneventfulTurns folds runs of N ≥ MIN_COMPACT_RUN
+// adjacent "uneventful" turns from the same faction into a single timeline
+// card holding all their entries — NEXT then advances past the whole block in
+// one click.
+//
+// Hard rules:
+//   • Pure presentation, on top of buildStepDigest output — never touches the
+//     resolver / step records / round history. Online MP / replay / spectate /
+//     reconnect parity is by construction.
+//   • Anything that produced a state-changing event is a HARD boundary that
+//     splits the run: battles (outcomeKind), deaths (killed, *Dmg), summons,
+//     blocked moves (note), discoveries (discovered, FOUND/EXPLORED note),
+//     story beats, conversations, special cards (col.kind). The detector errs
+//     on the safe side — any entry that isn't a plain move/guard breaks it.
+//   • Faction changes break the run (hero quiet → witch quiet stays two cards).
+//   • Single uneventful turn never collapses (MIN_COMPACT_RUN = 2).
+
+/** Minimum adjacent uneventful turn count for compaction. A single quiet turn
+ *  stays as a single card; runs of 2+ collapse. */
+export const MIN_COMPACT_RUN = 2;
+
+/** Plain-move + guard are the only inherently uneventful action types — every
+ *  other action (battle / summon / explore / fortify / heal / use-item /
+ *  equip-weapon / use-ability / sound-horn) produces a state-changing event or
+ *  a presentational outcome worth its own NEXT click. */
+const UNEVENTFUL_ACTION_TYPES = Object.freeze(new Set([
+  'move',   // PlanActionType.MOVE
+  'guard',  // PlanActionType.GUARD
+]));
+
+/**
+ * Is this digest entry "uneventful" — i.e. a plain move or guard with no
+ * outcome, note, discovery, damage, or kill? Pure, defensive against absent
+ * fields so it works against the older digest shapes too.
+ */
+function _isUneventfulEntry(e) {
+  if (!e) return false;
+  if (!UNEVENTFUL_ACTION_TYPES.has(e.actionType)) return false;
+  if (e.outcomeKind) return false;         // any battle outcome
+  if (e.note) return false;                // BLOCKED / loot / FOUND / EXPLORED / NO TARGET
+  if (Array.isArray(e.discovered) && e.discovered.length) return false;
+  if ((e.targetDmg ?? 0) > 0) return false;
+  if ((e.actorDmg ?? 0) > 0) return false;
+  if (e.killed) return false;
+  return true;
+}
+
+/**
+ * Is this whole column compactable? It must be a regular step column (no
+ * conversation / storyBeat kind), have at least one entry, and every entry
+ * must be uneventful (plain move/guard, no event).
+ */
+function _isUneventfulCol(col) {
+  if (!col || col.kind) return false;          // conversation / story beat / wrapup
+  const entries = col.entries ?? [];
+  if (!entries.length) return false;           // empty (fogged) → already a no-card slot
+  return entries.every(_isUneventfulEntry);
+}
+
+/** Owner of a single entry — null when the actor is neutral / owner-less. */
+function _entryOwner(e) {
+  return e?.actor?.owner ?? null;
+}
+
+/** Set of distinct owner factions across a column's entries — used to break
+ *  the run on a faction change between consecutive turns. */
+function _colOwners(col) {
+  const out = new Set();
+  for (const e of col.entries ?? []) out.add(_entryOwner(e));
+  return out;
+}
+
+/** Do two owner sets share at least one faction? (A mixed-faction column —
+ *  unusual but possible if NPCs queue alongside player units — joins a run
+ *  only when its faction set overlaps the run's.) */
+function _ownersCompatible(a, b) {
+  if (!a.size || !b.size) return true;
+  for (const f of a) if (b.has(f)) return true;
+  return false;
+}
+
+/**
+ * Fold adjacent uneventful columns from the same faction into compacted cards.
+ *
+ * Returns a NEW digest array — never mutates the input. Each compacted column
+ * carries:
+ *   • stepIndex   — the LEADER step's index (so existing setReplayTimelineStep
+ *                   / _replayCol(leaderIdx) keep working unchanged)
+ *   • kind        — 'compacted'
+ *   • memberStepIndices — every original step index folded in, in order
+ *                         (the UI maps follower step → leader for highlight /
+ *                         reveal / step-advance lookups, and main.js's manual
+ *                         NEXT gate suppresses follower-step holds)
+ *   • count       — memberStepIndices.length (display: "Turns N–M")
+ *   • entries     — concatenated entries from every member column
+ *
+ * Single uneventful turns (run length < MIN_COMPACT_RUN) pass through
+ * unchanged. Eventful columns (battles / summons / discoveries / story beats /
+ * conversations / blocked moves / etc.) always pass through unchanged.
+ *
+ * @param {Array} digest          — buildStepDigest output (or a digest with
+ *                                  story beat / conversation columns spliced in)
+ * @param {Object} [opts]
+ * @param {number} [opts.minRun]  — minimum adjacent uneventful columns to
+ *                                  collapse. Default MIN_COMPACT_RUN (= 2).
+ * @returns {Array} new digest
+ */
+export function compactUneventfulTurns(digest, { minRun = MIN_COMPACT_RUN } = {}) {
+  if (!Array.isArray(digest) || digest.length === 0) return digest ?? [];
+  const out = [];
+  let i = 0;
+  while (i < digest.length) {
+    const col = digest[i];
+    if (!_isUneventfulCol(col)) {
+      out.push(col);
+      i += 1;
+      continue;
+    }
+    // Begin a candidate run. Extend while the NEXT column is also uneventful
+    // AND its faction set overlaps the run's faction set.
+    let j = i + 1;
+    let runOwners = _colOwners(col);
+    while (j < digest.length) {
+      const next = digest[j];
+      if (!_isUneventfulCol(next)) break;
+      const nextOwners = _colOwners(next);
+      if (!_ownersCompatible(runOwners, nextOwners)) break;
+      // Union the run's owners with the new column (so a {hero}+{hero,null} run
+      // doesn't accidentally accept a pure-null column later — overlap is still
+      // required at each step).
+      for (const f of nextOwners) runOwners.add(f);
+      j += 1;
+    }
+    const runLen = j - i;
+    if (runLen < minRun) {
+      // Single uneventful turn — pass through unchanged.
+      out.push(col);
+      i += 1;
+      continue;
+    }
+    // Collapse [i, j) into a single compacted column.
+    const members = digest.slice(i, j);
+    out.push({
+      stepIndex: col.stepIndex,
+      kind: 'compacted',
+      memberStepIndices: members.map(m => m.stepIndex),
+      count: runLen,
+      entries: members.flatMap(m => m.entries ?? []),
+    });
+    i = j;
+  }
+  return out;
 }
 
 // ── Turn-card hover highlights ───────────────────────────────────────────────
