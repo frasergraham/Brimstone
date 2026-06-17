@@ -575,10 +575,13 @@ describe('Tutorial folded into Chapter 1', async () => {
     assert.equal(m.objectives.lose, null);
   });
 
-  test('The Awakening now requires the tutorial', () => {
+  test('The Awakening has no prereqs — playable from the start', () => {
     const awakening = chapter1.missions.find(m => m.id === 'prologue');
     assert.ok(awakening, 'The Awakening (prologue) is part of Chapter 1');
-    assert.deepEqual(awakening.requires, ['tutorial']);
+    assert.ok(
+      !awakening.requires || awakening.requires.length === 0,
+      'The Awakening should not require the tutorial',
+    );
   });
 });
 
