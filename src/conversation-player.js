@@ -212,6 +212,15 @@ export async function playConversation(opts) {
   // bubble stays fully visible and close enough to read even if the camera
   // drifts between lines — unless the player has taken FIXED camera control.
 
+  // ── Snapshot prior facings so we can restore them when the card dismisses.
+  // Conversation orientation is a *presentation pose* — once the player
+  // continues, units that aren't acting this round should NOT stay frozen
+  // mid-look across the map. A subsequent move/lunge re-asserts facing on its
+  // own; this snapshot covers the units that don't act. Captured BEFORE the
+  // first line orients so the saved yaws are pre-conversation. No-op when the
+  // renderer doesn't expose captureFacings (e.g. headless tests, 2D editor). */
+  const priorFacings = renderer?.captureFacings?.(participantIds) ?? null;
+
   // ── Dialog lines ───────────────────────────────────────────────────────────
   let presenting = true;
   try {
@@ -281,6 +290,15 @@ export async function playConversation(opts) {
     // the step loop's gate.
     playback.stepRequested = prevStepRequested;
   }
+
+  // ── Restore prior facings ─────────────────────────────────────────────────
+  // Conversation pose is dismissed: any participant that isn't about to MOVE
+  // or attack would otherwise stay frozen staring at its conversation partner
+  // (a real bug for units that don't act this round). The onComplete walk-off
+  // below issues its own facing through addMoveAnim, so this is harmless for
+  // units that DO act — it gets stomped by their move's _faceModelInstant.
+  // No-op when capture was a no-op (no renderer hook, or no models loaded). */
+  if (priorFacings) renderer?.restoreFacings?.(priorFacings);
 
   // ── onComplete scripted actions (e.g. the NPC walks away) ─────────────────
   // AFTER the CONTINUE gate and card teardown: the conversation card should
