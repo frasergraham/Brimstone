@@ -1,6 +1,6 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
 import { hexKey, hexToPixel, hexDistance, MAP_COLS, MAP_ROWS } from './hex.js';
-import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus, legacyTileType } from './tiles.js';
+import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, FORTIFY_HP_PER_LEVEL, getFortifyCombatBonus, legacyTileType } from './tiles.js';
 import { ITEMS } from './items.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf, rangeOf, getEquippedWeaponIdOf, getItemCountOf, totalItemCount } from './entities.js';
 import { DAMAGE_SCALE } from './balance.js';
@@ -4305,7 +4305,9 @@ export class UIController {
         outcome.textContent = `💀 ${targetSnap.name} is slain!${dmgNote}`;
         outcome.className   = 'battle-outcome kill';
       } else if (result.hit) {
-        const fortNote = result.fortDamaged ? ` (-${result.fortDamaged} fortifications)` : '';
+        const fortNote = result.fortHpDamage
+          ? ` (-${result.fortHpDamage} fort HP${result.fortDamaged ? `, -${result.fortDamaged} lvl` : ''})`
+          : '';
         const tier = result.breakdown?.dmgTier ?? 1;
         if (tier >= 2) {
           const word = tier >= 3 ? 'Great crushing hit!' : 'Crushing hit!';
@@ -4609,10 +4611,13 @@ export class UIController {
     if (tile.explored && tile.fortifyLevel) {
       const { attack: fAtk, defense: fDef } = getFortifyCombatBonus(tile.fortifyLevel);
       const bonusStr = fAtk > 0 ? `+${fAtk} ATT, +${fDef} DEF` : `+${fDef} DEF`;
-      const fl = tile.fortifyLevel >= 5 ? `⚙⚙⚙ Bastion (lvl ${tile.fortifyLevel}: ${bonusStr})`
-               : tile.fortifyLevel >= 3 ? `⚙⚙ Heavily Reinforced (lvl ${tile.fortifyLevel}: ${bonusStr})`
-               : tile.fortifyLevel >= 2 ? `⚙ Metal Reinforced (lvl ${tile.fortifyLevel}: ${bonusStr})`
-               : `🪵 Fortified (lvl ${tile.fortifyLevel}: ${bonusStr})`;
+      const hp     = tile.fortifyHP ?? tile.fortifyLevel * FORTIFY_HP_PER_LEVEL;
+      const lvlMax = tile.fortifyLevel * FORTIFY_HP_PER_LEVEL;
+      const hpStr  = `${hp}/${lvlMax} HP`;
+      const fl = tile.fortifyLevel >= 5 ? `⚙⚙⚙ Bastion (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`
+               : tile.fortifyLevel >= 3 ? `⚙⚙ Heavily Reinforced (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`
+               : tile.fortifyLevel >= 2 ? `⚙ Metal Reinforced (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`
+               : `🪵 Fortified (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`;
       linesHtml += `<div class="tile-zoom-info-line fortified">${fl}</div>`;
     }
     if (!tile.explored) linesHtml += `<div class="tile-zoom-info-line">— unexplored —</div>`;
@@ -6341,7 +6346,13 @@ function _buildTerrainBadge(tile, nodeBadge = '') {
     parts.push('<span class="usb-terrain-explored">Explored</span>');
   }
   if (tile.fortifyLevel) {
-    parts.push(`<span class="usb-terrain-fort">⚙ Fort lvl ${tile.fortifyLevel}</span>`);
+    // Show the fort HP within its current level band, e.g. "L2 · 34/40 HP".
+    // The pool maxes at level × per-level; a unit attacked here chips this pool
+    // every swing, downgrading the level the moment it crosses a threshold.
+    const lvl    = tile.fortifyLevel;
+    const hp     = tile.fortifyHP ?? lvl * FORTIFY_HP_PER_LEVEL;
+    const lvlMax = lvl * FORTIFY_HP_PER_LEVEL;
+    parts.push(`<span class="usb-terrain-fort">⚙ Fort L${lvl} · ${hp}/${lvlMax} HP</span>`);
   }
   if (nodeBadge) {
     parts.push(nodeBadge);

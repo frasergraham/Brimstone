@@ -35,6 +35,11 @@ export function serializeState(state) {
       type:           legacyTileType(tile),
       building:       tile.building       ?? null,
       resource:       tile.resource       ?? null,
+      // Fortification HP pool is the source of truth; fortifyLevel is DERIVED
+      // (a getter). We emit BOTH: fortifyHP round-trips losslessly, fortifyLevel
+      // stays for legacy readers / the schema-guard allowlist and as a fallback
+      // when restoring a pre-HP-model save (deserialize rebuilds HP from level).
+      fortifyHP:      tile.fortifyHP      ?? 0,
       fortifyLevel:   tile.fortifyLevel   ?? 0,
       explored:       tile.explored       ?? false,
       hiddenSurvivor: tile.hiddenSurvivor ?? false,
@@ -251,7 +256,15 @@ export function deserializeState(snap) {
     }
     tile.building       = t.building       ?? null;
     tile.resource       = t.resource       ?? null;
-    tile.fortifyLevel   = t.fortifyLevel   ?? 0;
+    // Restore the fort HP pool (source of truth; fortifyLevel is a derived
+    // getter on Tile). New saves carry fortifyHP directly. Legacy saves predate
+    // the HP model and carry only fortifyLevel — assigning to the `fortifyLevel`
+    // setter converts it to the equivalent full-level HP pool (N × per-level).
+    if (t.fortifyHP != null) {
+      tile.fortifyHP = t.fortifyHP | 0;
+    } else {
+      tile.fortifyLevel = t.fortifyLevel ?? 0;
+    }
     tile.explored       = t.explored       ?? false;
     tile.hiddenSurvivor = t.hiddenSurvivor ?? false;
     // Authored hidden-encounter payload (see serialize side). Legacy saves that

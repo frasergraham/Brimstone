@@ -21,6 +21,54 @@ function makeExploreEvent(lootItems) {
   };
 }
 
+describe('_serializeEvents — fortification HP fields preservation', () => {
+  // The fort-HP rework surfaces new combat-result fields that the client's
+  // playback fort-ring rewind reads. _serializeEvents is a strict allowlist —
+  // any of these dropped on the wire desyncs the online fort ring.
+  test('battle fort-HP fields survive the allowlist', () => {
+    const ev = {
+      type:    ResEventType.ACTION_OK,
+      faction: 'hero',
+      action:  { type: PlanActionType.BATTLE_UNIT, entityId: 'h1' },
+      result:  {
+        success: true, log: [], hit: true, damage: 14,
+        fortDamaged: 1, fortHpDamage: 14, fortHpBefore: 60, fortHpAfter: 46,
+      },
+    };
+    const [out] = serializeEventsForTest([ev]);
+    assert.equal(out.result.fortDamaged, 1);
+    assert.equal(out.result.fortHpDamage, 14);
+    assert.equal(out.result.fortHpBefore, 60);
+    assert.equal(out.result.fortHpAfter, 46);
+  });
+
+  test('fortify and assault fort fields survive the allowlist', () => {
+    const fortify = {
+      type: ResEventType.ACTION_OK, faction: 'hero',
+      action: { type: PlanActionType.FORTIFY, entityId: 'h1' },
+      result: { success: true, log: [], defGain: 2, defHpGain: 40 },
+    };
+    const assault = {
+      type: ResEventType.ACTION_OK, faction: 'witch',
+      action: { type: PlanActionType.BATTLE_HEX, entityId: 'w1' },
+      result: {
+        success: true, log: [], fortAssault: true, crush: true,
+        targetCol: 5, targetRow: 4, fortLevelBefore: 3, fortLevelAfter: 2,
+        fortHpBefore: 60, fortHpAfter: 40, fortHpDamage: 20,
+      },
+    };
+    const [f, a] = serializeEventsForTest([fortify, assault]);
+    assert.equal(f.result.defGain, 2);
+    assert.equal(f.result.defHpGain, 40);
+    assert.equal(a.result.fortAssault, true);
+    assert.equal(a.result.targetCol, 5);
+    assert.equal(a.result.targetRow, 4);
+    assert.equal(a.result.fortHpBefore, 60);
+    assert.equal(a.result.fortHpAfter, 40);
+    assert.equal(a.result.fortHpDamage, 20);
+  });
+});
+
 describe('_serializeEvents — lootItems preservation', () => {
   test('lootItems array is preserved when resources were found', () => {
     const ev = makeExploreEvent(['+🪵', '+⚙']);
