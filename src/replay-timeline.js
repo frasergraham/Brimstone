@@ -699,6 +699,11 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
           text: found.length > 1 ? `FOUND ${found.length} ${kind}S` : `FOUND ${kind}`,
           kind: found[0].type === 'zombie' ? 'kill' : 'gain',
         };
+      } else if (a.type === PA.SOUND_HORN && ev.result?.success && !found.length) {
+        // Horn sounded but no survivor answered — the outcome belongs inline on
+        // the action card (like EXPLORED), NOT in a popup result dialog. Public
+        // action, so this shows to both factions.
+        note = { text: 'NO RESPONSE', kind: 'info' };
       }
 
       // Hover highlight: the actor's hex, plus — for moves — every hex the
