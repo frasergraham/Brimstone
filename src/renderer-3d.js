@@ -74,6 +74,11 @@ export {
 };
 import { Renderer } from './renderer.js';
 import { BLOCK_WORD_VARIANTS, pickBlockWord } from './combat-words.js';
+import {
+  FACE_TURN_MS, FACING_EPSILON,
+  bearingTo, shortestYawDelta, isWithinFacingEpsilon,
+  planConversationOrientation,
+} from './facing-math.js';
 export { BLOCK_WORD_VARIANTS };   // re-exported for existing importers (main.js)
 import { getFactionTheme } from './theme.js';
 import { hexKey, hexDistance, getNeighbors, hexRange } from './hex.js';
@@ -10639,14 +10644,12 @@ export class Renderer3D {
     const mesh = standee?.paladinClone?.mesh;
     const pos = standee?.plane?.position;
     if (!mesh || !pos) return Promise.resolve(false);
-    const dx = targetX - pos.x;
-    const dz = targetZ - pos.z;
-    if (Math.abs(dx) < 1e-4 && Math.abs(dz) < 1e-4) return Promise.resolve(false);
-    const desired = Math.atan2(dx, dz);
+    const desired = bearingTo(pos.x, pos.z, targetX, targetZ);
+    if (desired === null) return Promise.resolve(false);   // degenerate dir
     const from = mesh.rotation.y;
     // Shortest signed turn into (-π, π] so a wrap-around never spins the long way.
-    const delta = Math.atan2(Math.sin(desired - from), Math.cos(desired - from));
-    if (Math.abs(delta) < FACING_EPSILON) return Promise.resolve(false);
+    const delta = shortestYawDelta(from, desired);
+    if (isWithinFacingEpsilon(delta)) return Promise.resolve(false);
     const BABYLON = this._babylon;
     this._scene.stopAnimation(mesh);
     const speedMul = this._playbackSpeedMul ?? 1.0;
@@ -10685,6 +10688,58 @@ export class Renderer3D {
     if (c) turns.push(this.faceEntityTowardPoint(speakerId, c.x, c.z, durMs));
     for (const id of others) turns.push(this.faceEntityTowardEntity(id, speakerId, durMs));
     return Promise.all(turns);
+  }
+
+  /** Snapshot the current model yaw of each given entity, so a presentation
+   *  pass (a conversation, a cinematic pose) can RESTORE the prior facing
+   *  afterward via `restoreFacings`. Skips ids whose model isn't loaded —
+   *  they had no observable facing to restore. Returns a plain object so
+   *  the caller can stash it in a local variable. Render-only. */
+  captureFacings(entityIds) {
+    const out = {};
+    if (!Array.isArray(entityIds)) return out;
+    for (const id of entityIds) {
+      if (id == null) continue;
+      const standee = this._entityStandees?.get(id);
+      const mesh = standee?.paladinClone?.mesh;
+      if (mesh) out[id] = mesh.rotation.y;
+    }
+    return out;
+  }
+
+  /** Smoothly turn each entity back to the yaw recorded by an earlier
+   *  `captureFacings` call. Used to clear a conversation's pose so the units
+   *  don't keep staring at each other across the map after the card dismisses
+   *  (a subsequent move/lunge would override anyway, but a unit that doesn't
+   *  act would stay frozen mid-look). No-op for entries whose model isn't
+   *  loaded or whose yaw is already within FACING_EPSILON of the recorded
+   *  value. Returns a Promise that settles once every turn completes. */
+  restoreFacings(snapshot, durMs = FACE_TURN_MS) {
+    if (!snapshot || typeof snapshot !== 'object') return Promise.resolve();
+    const turns = [];
+    for (const [rawId, yaw] of Object.entries(snapshot)) {
+      if (!Number.isFinite(yaw)) continue;
+      // Try id as-stored, then coerced — entity ids in this codebase are
+      // sometimes strings ('e1') and sometimes numbers depending on map type.
+      let standee = this._entityStandees?.get(rawId);
+      let key = rawId;
+      if (!standee) {
+        const num = Number(rawId);
+        if (Number.isFinite(num)) {
+          standee = this._entityStandees?.get(num);
+          key = num;
+        }
+      }
+      const mesh = standee?.paladinClone?.mesh;
+      const pos = standee?.plane?.position;
+      if (!mesh || !pos) continue;
+      // Project a unit vector at the recorded yaw and ride
+      // `faceEntityTowardPoint` so we reuse its tween-cancel + epsilon-skip.
+      const tx = pos.x + Math.sin(yaw);
+      const tz = pos.z + Math.cos(yaw);
+      turns.push(this.faceEntityTowardPoint(key, tx, tz, durMs));
+    }
+    return Promise.all(turns).then(() => {});
   }
 
   /** Ease the camera to FRAME one or more entities — fit their collective
@@ -17839,16 +17894,11 @@ export const RUN_HEX_MS = 750;
  *  and is kept short so the attack reads as a quick snap, not a glide. */
 export const LUNGE_ANIM_MS = 400;
 
-/** Duration (ms) of a "turn to face" yaw slerp used at presentation gates —
- *  conversation participants turning to the active speaker, and combatants
- *  meeting each other before the strike. Short and ease-in-out so it reads as
- *  a deliberate look, not a movement. Render-only; scaled by playback speed. */
-export const FACE_TURN_MS = 260;
-
-/** "Already facing" threshold (radians, ≈4.6°). A requested turn smaller than
- *  this is treated as a no-op so we never fire a one-frame animation for a unit
- *  that is effectively already on-target. */
-export const FACING_EPSILON = 0.08;
+// Facing constants + pure helpers live in `./facing-math.js` so unit tests can
+// verify the rotation math without dragging Babylon (a heavy WebGL/UMD dep)
+// into the Node test process. Re-exported here so existing import paths
+// (which read these as renderer-3d exports) keep working.
+export { FACE_TURN_MS, FACING_EPSILON };
 
 /** Real-time the punch clip is compressed to play across (ms) when it
  *  accompanies a lunge. Picked a touch longer than LUNGE_ANIM_MS=400 so the
