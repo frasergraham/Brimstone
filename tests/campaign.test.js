@@ -963,7 +963,7 @@ describe('Wave spawner', () => {
     const z = state.entities.find(e => e.owner === 'witch');
     assert.ok(z, 'leveled zombie spawned');
     assert.equal(z.level, 3);
-    assert.equal(z.maxHp, 28);          // zombie base 14 → L3 ×2.0
+    assert.equal(z.maxHp, 21);          // zombie base 14 → L3 ×1.5
     assert.equal(z.getAttack(), 4);     // base 2 + (3−1)
     assert.equal(z.getDefense(), 1);    // base 0 + floor((3−1)/2)
   });

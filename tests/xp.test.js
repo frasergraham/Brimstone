@@ -125,7 +125,7 @@ describe('awardXP — accumulation + level-up', () => {
     assert.equal(r.newLevel, 2);
     assert.equal(r.xpGained, 1);
     // applyLevel rescaled HP + exposed the ATK/DEF bonus via the getters.
-    assert.equal(z.maxHp, hpForLevel(14, 2)); // 21
+    assert.equal(z.maxHp, hpForLevel(14, 2)); // 18
     assert.equal(z.getAttack(), 3);           // 2 + 1
   });
 
@@ -153,7 +153,7 @@ describe('awardXP — multi-level jump applies once with the final level', () =>
     assert.equal(r.newLevel, 5);
     assert.equal(r.leveledUp, true);
     // HP scaled once from the true L1 base (14), not iteratively/compounded.
-    assert.equal(z.maxHp, hpForLevel(14, 5)); // round(14 × 3.0) = 42
+    assert.equal(z.maxHp, hpForLevel(14, 5)); // round(14 × 2.0) = 28
     assert.equal(z._baseMaxHp, 14, 'base snapshot is the L1 maxHp, never an intermediate');
     assert.equal(z.getAttack(), 6); // 2 + (5−1)
     assert.equal(z.getDefense(), 2); // 0 + floor((5−1)/2)
@@ -164,7 +164,7 @@ describe('applyLevel regression — ATK/DEF/maxHp per balance.js curves', () => 
   test('boosts intrinsic stats (confirms the static-level path still works)', () => {
     const z = leveler(); // base 14hp atk2 def0
     applyLevel(z, 3);
-    assert.equal(z.maxHp, hpForLevel(14, 3)); // 28
+    assert.equal(z.maxHp, hpForLevel(14, 3)); // 21
     assert.equal(z.getAttack(), 4);  // 2 + 2
     assert.equal(z.getDefense(), 1); // 0 + floor(2/2)
   });

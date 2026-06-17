@@ -23,11 +23,13 @@ export const DEFAULT_ATTACK_DAMAGE = Object.freeze({ count: 2, sides: 6, flat: 0
 // weapon damage (that stays weapon-driven; higher ATK simply lands more/bigger
 // crushes, which multiply the rolled weapon damage). Used by campaign authoring
 // to ramp difficulty without new unit types (Zombie L1/L2/L3…). "Standard" curve:
-//   HP  × (1 + LEVEL_HP_PER·(L−1))   → L1 ×1, L2 ×1.5, L3 ×2.0
+//   HP  × (1 + LEVEL_HP_PER·(L−1))   → L1 ×1, L2 ×1.25, L3 ×1.5
 //   ATK + (L−1)                      → +1 per level
 //   DEF + floor((L−1)/2)             → +1 every two levels
 // See applyLevel() in src/entities.js (HP) and getAttack/getDefense (ATK/DEF).
-export const LEVEL_HP_PER = 0.5;
+// HP growth was halved from 0.5 → 0.25: at 0.5 a unit DOUBLED its HP by L3
+// (paladin 98→196), which made the campaign hero an unstoppable tank past L3.
+export const LEVEL_HP_PER = 0.25;
 // `level` may be undefined/NaN on plain stat mocks or AI sim copies — coerce to 1.
 function _lvl(level) { return Math.max(1, Math.floor(level) || 1); }
 export function hpForLevel(baseMaxHp, level) {
