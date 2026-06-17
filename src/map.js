@@ -1229,7 +1229,7 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
 
   const season = SEASONS[Math.floor(rand() * SEASONS.length)];
 
-  return { tiles, witchObjectives, heroStart, witchStart, mapSize, season, survivorCounts: cfg.survivorCounts, buildingRollbacks };
+  return { tiles, witchObjectives, heroStart, witchStart, mapSize, seed, season, survivorCounts: cfg.survivorCounts, buildingRollbacks };
 }
 
 // ── Multiple start positions (multiplayer) ───────────────────────────────────

@@ -19,6 +19,8 @@
 // All optional renderer methods are guarded so a partial mock (used by
 // the combat tester's renderer hooks and by unit tests) won't crash.
 
+import { isAllyLungeEnabled } from './debug-flags.js';
+
 /**
  * @param {object} opts
  * @param {object} opts.renderer        Live Renderer3D instance
@@ -126,8 +128,13 @@ export async function run3DCombatCardHold({
   // `_playAttackIntroAnim`. Allies are looked up in state by id so the helper
   // gets accurate current hexes (mid-step moves landed already).
   const bd = result?.breakdown || {};
-  const atkAllyIds = Array.isArray(bd.atkAllyIds) ? bd.atkAllyIds : [];
-  const defAllyIds = Array.isArray(bd.defAllyIds) ? bd.defAllyIds : [];
+  // Show-side debug toggle: when the ally lunge is disabled, the gang-up allies
+  // stay on their own hexes (empty ally arrays ⇒ no slide). The defender still
+  // re-centres and the attacker still reserves its edge — only the ally
+  // animation is suppressed; combat resolution is unaffected.
+  const allyLunge = isAllyLungeEnabled();
+  const atkAllyIds = allyLunge && Array.isArray(bd.atkAllyIds) ? bd.atkAllyIds : [];
+  const defAllyIds = allyLunge && Array.isArray(bd.defAllyIds) ? bd.defAllyIds : [];
   const lookupAlly = (id) => {
     if (id === actorSnap.id || id === targetSnap.id) return null;
     const ally = state?.entities?.find(e => e.id === id && e.alive);

@@ -189,6 +189,7 @@ export function serializeState(state) {
     mapCols,
     mapRows,
     mapSize:              state.mapSize ?? 'standard',
+    mapSeed:              state.mapSeed ?? null,
     season:               state.season ?? null,
     campaignAIBudgetBonus: state.campaignAIBudgetBonus ?? 0,
     aiDifficulty:         state.aiDifficulty ?? 'normal',
@@ -445,6 +446,7 @@ export function deserializeState(snap) {
     }
   }
   state.mapSize              = snap.mapSize   ?? 'standard';
+  state.mapSeed              = snap.mapSeed   ?? null;
   state.season               = snap.season    ?? null;
   state.winner               = snap.winner    ?? null;
   state.winReason            = snap.winReason ?? null;

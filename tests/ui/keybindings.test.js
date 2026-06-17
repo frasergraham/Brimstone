@@ -9,9 +9,15 @@ import assert from 'node:assert/strict';
 import {
   resolveKeyAction,
   executeConsoleCommand,
+  formatSeedLine,
   COMMANDS,
   SHORTCUTS,
 } from '../../src/keybindings.js';
+import {
+  isAllyLungeEnabled,
+  setAllyLungeEnabled,
+  toggleAllyLunge,
+} from '../../src/debug-flags.js';
 
 // Build a synthetic keydown-like object.
 function ev(key, mods = {}) {
@@ -211,6 +217,80 @@ describe('executeConsoleCommand', () => {
     const res = executeConsoleCommand('/inspector', { renderer });
     assert.equal(res.ok, false);
     assert.match(res.message, /boom/);
+  });
+});
+
+describe('formatSeedLine + /seed command', () => {
+  test('formats a live state seed + size with dimensions', () => {
+    const line = formatSeedLine({ mapSeed: 12345, mapSize: 'standard' });
+    assert.equal(line, '🌱 seed: 12345 · size: standard (14×14)');
+  });
+
+  test('reflects the actual map size dimensions (skirmish 10×10)', () => {
+    const line = formatSeedLine({ mapSeed: 7, mapSize: 'skirmish' });
+    assert.match(line, /size: skirmish \(10×10\)/);
+    assert.match(line, /seed: 7/);
+  });
+
+  test('a pre-built (override) map has no numeric seed', () => {
+    const line = formatSeedLine({ mapSeed: null, mapSize: 'standard' });
+    assert.match(line, /n\/a \(pre-built map\)/);
+    assert.match(line, /size: standard/);
+  });
+
+  test('unknown map size falls back to ?×? rather than throwing', () => {
+    const line = formatSeedLine({ mapSeed: 1, mapSize: 'nonsense' });
+    assert.match(line, /size: nonsense \(\?×\?\)/);
+  });
+
+  test('no active game is handled gracefully', () => {
+    assert.match(formatSeedLine(null), /No active game/);
+    assert.match(formatSeedLine(undefined), /No active game/);
+  });
+
+  test('/seed reads ui.state and echoes the seed line', () => {
+    const res = executeConsoleCommand('/seed', { ui: { state: { mapSeed: 999, mapSize: 'standard' } } });
+    assert.equal(res.ok, true);
+    assert.match(res.message, /seed: 999/);
+    assert.match(res.message, /standard \(14×14\)/);
+  });
+
+  test('/seed without a loaded game reports no active game', () => {
+    const res = executeConsoleCommand('/seed', { ui: null });
+    assert.equal(res.ok, true);
+    assert.match(res.message, /No active game/);
+  });
+});
+
+describe('ally-lunge debug flag + /lunge command', () => {
+  test('the flag defaults to ON (lunge enabled)', () => {
+    // Reset to the documented default first (other tests toggle it).
+    setAllyLungeEnabled(true);
+    assert.equal(isAllyLungeEnabled(), true);
+  });
+
+  test('setAllyLungeEnabled / toggleAllyLunge return the new state', () => {
+    assert.equal(setAllyLungeEnabled(false), false);
+    assert.equal(isAllyLungeEnabled(), false);
+    assert.equal(toggleAllyLunge(), true);
+    assert.equal(isAllyLungeEnabled(), true);
+    assert.equal(toggleAllyLunge(), false);
+    assert.equal(isAllyLungeEnabled(), false);
+    // Restore the default so test order can't leak into other suites.
+    setAllyLungeEnabled(true);
+  });
+
+  test('/lunge flips the flag and reports the new state', () => {
+    setAllyLungeEnabled(true);
+    let res = executeConsoleCommand('/lunge', {});
+    assert.equal(res.ok, true);
+    assert.match(res.message, /OFF/);
+    assert.equal(isAllyLungeEnabled(), false);
+
+    res = executeConsoleCommand('/lunge', {});
+    assert.equal(res.ok, true);
+    assert.match(res.message, /ON/);
+    assert.equal(isAllyLungeEnabled(), true);
   });
 });
 

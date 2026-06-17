@@ -236,6 +236,9 @@ export class GameState {
     };
 
     this.mapSize       = mapData.mapSize;
+    // Procedural map seed (for `/seed` debug command + bug-repro). Pre-built
+    // override maps (campaign/tutorial) have no seed — null is fine.
+    this.mapSeed       = mapData.seed ?? null;
     this.season        = mapData.season ?? null;
     this._survivorCounts = mapData.survivorCounts;
     this.witchObjectives = mapData.witchObjectives;
