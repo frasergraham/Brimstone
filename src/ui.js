@@ -1066,8 +1066,7 @@ export class UIController {
     if (this._planSubmitted) return;
 
     // ── Plan cap: 1.5× (budget + food) — prevent runaway queues ────────
-    const isFreeAction = action.type === PlanActionType.EQUIP_WEAPON
-                      || action.type === PlanActionType.USE_ITEM;
+    const isFreeAction = !actionCosts(action.type);
     if (!isFreeAction) {
       const flatPlan = interleavePlan(this._unitPlans);
       const currentCost = flatPlan.filter(a => actionCosts(a.type)).length;
@@ -1226,8 +1225,7 @@ export class UIController {
     // Annotate each step with whether it exceeds the action budget
     let runningCost = 0;
     for (const step of steps) {
-      const isFree = step.action.type === PlanActionType.EQUIP_WEAPON
-                  || step.action.type === PlanActionType.USE_ITEM;
+      const isFree = !actionCosts(step.action.type);
       if (!isFree) runningCost++;
       step.overBudget = !isFree && runningCost > this._planBudget;
     }
@@ -1478,9 +1476,7 @@ export class UIController {
 
     // Count budget-consuming actions across all unit queues
     const flatPlan = interleavePlan(this._unitPlans);
-    const budgetCost = flatPlan.filter(a =>
-      a.type !== PlanActionType.EQUIP_WEAPON && a.type !== PlanActionType.USE_ITEM
-    ).length;
+    const budgetCost = flatPlan.filter(a => actionCosts(a.type)).length;
     const remaining = this._planBudget - budgetCost;
 
     if (budgeEl) budgeEl.textContent = `${Math.max(0, remaining)} left`;
@@ -2372,6 +2368,16 @@ export class UIController {
             attrs: `data-action="use_ability" data-ability="${action.ability}"` });
           break;
         }
+        case ActionType.SENT_TO:
+          // Multiplayer free action — only added by getValidActions when the
+          // faction has >1 live leader AND this leader owns ≥1 survivor.
+          // Clicking opens a list-mode picker (Survivor → Leader). The free
+          // tag mirrors USE_ITEM / EQUIP_WEAPON styling.
+          arcItems.push({ group: 'items', label: 'Sent To…', fullLabel: 'Sent To… — transfer a survivor to another leader',
+            desc: 'Hand a survivor over to another leader on your faction. Free.',
+            color: '#b0b0b0', dis: false, free: true, cost: 0,
+            attrs: 'data-action="sent_to"' });
+          break;
       }
     }
 
@@ -2961,7 +2967,7 @@ export class UIController {
       const faction = this._planFaction;
       const glyph   = faction === 'hero' ? '⚔' : '✦';
       const budget  = this._planBudget;
-      const used    = interleavePlan(this._unitPlans).filter(a => a.type !== PlanActionType.EQUIP_WEAPON && a.type !== PlanActionType.USE_ITEM).length;
+      const used    = interleavePlan(this._unitPlans).filter(a => actionCosts(a.type)).length;
       const capped  = Math.min(used, budget); // don't render more diamonds than budget
       const diamonds = '◆'.repeat(Math.max(0, budget - capped)) + '◇'.repeat(capped);
       if (this._planSubmitted) {
@@ -3417,7 +3423,72 @@ export class UIController {
         else this._clearSelection();
         this._updateSidebar(); this.onRedraw(); break;
       }
+
+      case 'sent_to': {
+        // Open the Sent To picker (survivor × destination-leader). This
+        // replaces the arc menu with a list-mode popup of "Survivor → Leader"
+        // rows; clicking one queues a free SENT_TO action on the leader.
+        this._openSentToPicker(entity);
+        break;
+      }
+
+      case 'sent_to_pick': {
+        // Picker row was clicked — payload carries the survivor + destination.
+        const targetId    = button.dataset.targetId;
+        const destOwnerId = button.dataset.destOwnerId;
+        if (targetId && destOwnerId) {
+          this._addToPlan({
+            type: PlanActionType.SENT_TO,
+            entityId: entity.id,
+            targetId,
+            destOwnerId,
+          });
+        }
+        hideActionPopup(this);
+        if (entity.alive) this._selectEntity(entity);
+        else this._clearSelection();
+        this._updateSidebar(); this.onRedraw(); break;
+      }
     }
+  }
+
+  // ── Sent To picker ──────────────────────────────────────────────────────────
+  // Renders a list-mode popup showing each (owned survivor × other leader)
+  // pair as a single row. Clicking a row queues a SENT_TO action. Uses the
+  // existing popup-list-mode CSS class so styling is shared with other
+  // list-mode popups (encounter dialog, no-actions message).
+  _openSentToPicker(actor) {
+    const popup = this._el('action-popup');
+    if (this._arcCloseTimer) { clearTimeout(this._arcCloseTimer); this._arcCloseTimer = null; }
+    popup.classList.remove('arc-open', 'arc-closing');
+    popup.classList.add('popup-list-mode');
+    this._popupVisible = true;
+
+    const validActions = getValidActions(this.state, actor);
+    const sentTo = validActions.find(a => a.type === ActionType.SENT_TO);
+    if (!sentTo || sentTo.targets.length === 0 || sentTo.destinations.length === 0) {
+      popup.innerHTML = `<div class="popup-unit-name">No survivors to send</div>`;
+      positionPopup(popup, this);
+      popup.style.display = 'block';
+      return;
+    }
+
+    let html = `<div class="popup-unit-name">Sent To…</div>`;
+    for (const target of sentTo.targets) {
+      for (const dest of sentTo.destinations) {
+        const survivorName = target.displayName ?? target.name ?? 'Survivor';
+        const destName     = dest.name ?? dest.leader.displayName ?? 'Leader';
+        html += `<button class="plan-btn"
+          data-action="sent_to_pick"
+          data-target-id="${target.id}"
+          data-dest-owner-id="${dest.ownerId}">${survivorName} → ${destName}</button>`;
+      }
+    }
+
+    popup.innerHTML = html;
+    positionPopup(popup, this);
+    popup.style.display = 'block';
+    attachPopupListeners(popup, this);
   }
 
   // ── Hazard flash animations ───────────────────────────────────────────────
