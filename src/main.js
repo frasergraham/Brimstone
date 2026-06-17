@@ -4511,6 +4511,10 @@ function initScenario(def) {
   if (typeof window !== 'undefined') {
     window.__scenarioState = state;
     window.__renderer3d = renderer;
+    // Expose the UIController too — verifier-browser drivers click into the
+    // arc action popup and the list-mode picker (e.g. Sent To…), which need
+    // the UI handle to drive _selectEntity / _showActionPopup directly.
+    window.__scenarioUI = ui;
   }
 
   if (def.resolve) {

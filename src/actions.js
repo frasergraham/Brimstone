@@ -48,6 +48,9 @@ export const ActionType = Object.freeze({
   USE_ABILITY:  'use_ability',
   GUARD:        'guard',
   SOUND_HORN:   'sound_horn',
+  // Multiplayer-only free action: a leader hands one of their survivors over
+  // to another leader on the same faction.
+  SENT_TO:      'sent_to',
 });
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -572,6 +575,17 @@ export function getValidActions(state, actor) {
         actions.push(abilityAction);
       }
     }
+  }
+
+  // Sent To — multiplayer free action: this leader can hand off one of their
+  // survivors to another leader on the same faction. Surfaced only when the
+  // faction has more than one live leader AND this leader owns at least one
+  // survivor (canUseSentTo). `destinations` and `targets` arrive pre-resolved
+  // so the UI doesn't have to recompute them.
+  if (canUseSentTo(state, actor)) {
+    const destinations = getSentToDestinations(state, actor);
+    const targets      = getOwnedSurvivors(state, actor);
+    actions.push({ type: ActionType.SENT_TO, destinations, targets });
   }
 
   return actions;
@@ -1744,6 +1758,123 @@ export function executeUseItem(state, actor, item) {
       break;
   }
   return { success: true, log, cost: 0 };
+}
+
+// ── Sent To ─────────────────────────────────────────────────────────────────
+// Multiplayer free action: a leader transfers control of one of their
+// survivors to another leader on the same faction. Used in N-player games
+// (e.g. 2v2 hero side with two human heroes) so survivors can be reassigned
+// when a leader's contingent grows unwieldy or another leader is better
+// positioned to fight with them next round. Costs 0 action points.
+//
+// Gate (authoritative):
+//  - The faction must have more than one leader (i.e. more than one player
+//    with a live leader on this side). This implicitly requires MP — in solo
+//    or 1v1 the faction has at most one leader, so the action is impossible.
+//  - The actor must be a leader (only leaders command survivors).
+//  - The destination must be ANOTHER leader (not the actor) on the SAME
+//    faction with a live leader entity.
+//  - The target must be a SURVIVOR currently owned by the actor.
+
+/**
+ * List the survivors the actor currently controls — eligible "Sent To" targets.
+ * @returns {Entity[]}
+ */
+export function getOwnedSurvivors(state, actor) {
+  if (!actor?.ownerId) return [];
+  return state.entities.filter(e =>
+    e.alive &&
+    e.type === EntityType.SURVIVOR &&
+    e.ownerId === actor.ownerId
+  );
+}
+
+/**
+ * List other live leaders on the same faction as `actor` (potential
+ * "Sent To" destinations). Excludes the actor.
+ * Returns array of { ownerId, leader: Entity, name: string }.
+ */
+export function getSentToDestinations(state, actor) {
+  if (!actor || !state.players) return [];
+  const out = [];
+  for (const p of state.players) {
+    if (p.faction !== actor.owner) continue;
+    if (p.id === actor.ownerId) continue;
+    const leader = state.entities.find(e => e.id === p.leaderId && e.alive);
+    if (!leader) continue;
+    out.push({ ownerId: p.id, leader, name: p.name ?? leader.displayName });
+  }
+  return out;
+}
+
+/**
+ * True iff the actor is eligible to use SENT_TO at all (faction has >1 live
+ * leader and the actor is one of them and owns at least one survivor).
+ */
+export function canUseSentTo(state, actor) {
+  if (!actor || !actor.ownerId) return false;
+  if (!isLeaderType(actor.type)) return false;
+  if (getSentToDestinations(state, actor).length === 0) return false;
+  if (getOwnedSurvivors(state, actor).length === 0) return false;
+  return true;
+}
+
+/**
+ * Transfer control of a survivor from `actor` (its current owner-leader) to
+ * the leader identified by `destOwnerId`.
+ *
+ * @param {object} state
+ * @param {Entity} actor       The leader issuing the order. Must own the survivor.
+ * @param {string} targetId    Entity id of the survivor being transferred.
+ * @param {string} destOwnerId Owner id (playerId) of the destination leader.
+ * @returns {{success, log, cost}}
+ */
+export function executeSentTo(state, actor, targetId, destOwnerId) {
+  if (!isLeaderType(actor.type)) {
+    return { success: false, log: [`${actor.displayName} cannot transfer survivors.`] };
+  }
+  if (!destOwnerId) {
+    return { success: false, log: ['No destination leader specified.'] };
+  }
+  if (destOwnerId === actor.ownerId) {
+    return { success: false, log: ['Cannot send a survivor to yourself.'] };
+  }
+  const target = state.entities.find(e => e.id === targetId && e.alive);
+  if (!target) return { success: false, log: ['Survivor not found.'] };
+  if (target.type !== EntityType.SURVIVOR) {
+    return { success: false, log: ['Only survivors can be transferred.'] };
+  }
+  if (target.ownerId !== actor.ownerId) {
+    return { success: false, log: ['You do not control that survivor.'] };
+  }
+  // Destination must be another live leader on the same faction.
+  const destPlayer = (state.players || []).find(p => p.id === destOwnerId);
+  if (!destPlayer || destPlayer.faction !== actor.owner) {
+    return { success: false, log: ['Destination leader is not on your faction.'] };
+  }
+  const destLeader = state.entities.find(e => e.id === destPlayer.leaderId && e.alive);
+  if (!destLeader) {
+    return { success: false, log: ['Destination leader is no longer alive.'] };
+  }
+
+  // Authoritative gate: faction must have >1 leader. Implicit from the
+  // destination check above (we found another live leader on this faction),
+  // but state-asserting it here makes the rule explicit for code-search.
+  // No additional check needed — destLeader IS a second leader.
+
+  const fromName = actor.displayName;
+  const toName   = destPlayer.name ?? destLeader.displayName;
+  target.ownerId = destOwnerId;
+
+  return {
+    success: true,
+    log: [`${fromName} sends ${target.displayName} to ${toName}.`],
+    cost: 0,
+    // Surface fields the replay/UI may want to consume. The online event
+    // serializer's `result` allowlist drops anything not explicitly listed;
+    // `log` already carries the human-readable string for replays, and
+    // `ownerIdFrom` / `ownerIdTo` ride on the action payload so they survive.
+  };
 }
 
 // Thin dispatcher — heavy lifting for each ability lives in

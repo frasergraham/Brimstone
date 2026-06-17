@@ -27,6 +27,10 @@ export const PlanActionType = Object.freeze({
   USE_ABILITY:  'use-ability',
   GUARD:        'guard',
   SOUND_HORN:   'sound-horn',
+  // Multiplayer-only free action: a leader transfers control of one of their
+  // own survivors to another leader on the same faction. Cost: 0.
+  // Plan-action shape: { type, entityId: leaderId, targetId: survivorId, destOwnerId: newLeaderOwnerId }
+  SENT_TO:      'sent-to',
 });
 
 // Maximum number of steps a player may place in their plan.
@@ -36,7 +40,9 @@ export const MAX_PLAN_LENGTH = 12;
 
 // Returns true if an action type normally costs 1 action point.
 export function actionCosts(type) {
-  return type !== PlanActionType.USE_ITEM && type !== PlanActionType.EQUIP_WEAPON;
+  return type !== PlanActionType.USE_ITEM
+      && type !== PlanActionType.EQUIP_WEAPON
+      && type !== PlanActionType.SENT_TO;
 }
 
 /**
@@ -360,6 +366,24 @@ export function validatePlanAction(state, action, projectedPositions = null) {
       // Equipping is a free action capped at once per round per unit.
       if (entity.equippedThisRound) {
         return { valid: false, reason: `${entity.displayName ?? 'Unit'} already equipped a weapon this round.` };
+      }
+      return { valid: true };
+    }
+
+    case PlanActionType.SENT_TO: {
+      // Free action: transfer control of a survivor to another leader on the
+      // same faction. Authoritative checks (faction has >1 leader, target owned
+      // by actor, destination is a live leader on the same faction) live in
+      // executeSentTo — this client-side gate catches obvious shape errors.
+      if (!action.targetId) return { valid: false, reason: 'No survivor specified.' };
+      if (!action.destOwnerId) return { valid: false, reason: 'No destination leader specified.' };
+      if (action.destOwnerId === entity.ownerId) {
+        return { valid: false, reason: 'Cannot send a survivor to yourself.' };
+      }
+      const target = state.entities.find(e => e.id === action.targetId && e.alive);
+      if (!target) return { valid: false, reason: 'Survivor not found.' };
+      if (target.ownerId !== entity.ownerId) {
+        return { valid: false, reason: 'You do not control that survivor.' };
       }
       return { valid: true };
     }

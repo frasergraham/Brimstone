@@ -8,6 +8,7 @@ import {
   executeMove, executeExplore, executeBattle,
   executeFortify, executeSummon, executeHeal, executeUseItem, executeUseAbility,
   executeGuard, executeSoundHorn, executeFortAssault,
+  executeSentTo,
   hasLineOfSight,
 } from '../src/actions.js';
 import { FORT_IMPASSABLE_THRESHOLD } from '../src/tiles.js';
@@ -330,6 +331,15 @@ function runAction(state, action, faction, playerId = null) {
       if (!r.success) return { kind: 'fail', reason: r.log[0] };
       // budgetBonus returned directly by executeUseAbility (e.g. Rally → +1)
       return { kind: 'ok', result: r, budgetBonus: r.budgetBonus ?? 0 };
+    }
+
+    case PlanActionType.SENT_TO: {
+      // Free action — transfer control of a survivor to another leader on
+      // the same faction. Authoritative checks live in executeSentTo so the
+      // same gate runs offline and online.
+      const r = executeSentTo(state, entity, action.targetId, action.destOwnerId);
+      if (!r.success) return { kind: 'fail', reason: r.log[0] };
+      return { kind: 'ok', result: r };
     }
 
     default:
