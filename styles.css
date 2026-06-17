@@ -3910,6 +3910,96 @@ body.renderer-3d.debug-counters #cam-counter { display: block; }
   padding: 0.4rem 0;
 }
 
+/* ── Main menu two-column layout (active games | menus) ──────────────────────
+   Desktop: two columns side by side (active games left, menus right).
+   Mobile: one column at a time with a left/right slide toggle that mirrors the
+   Campaign Progress pane toggle (.campaign-progress-toggle / show-party). */
+.mm-mode-card {
+  width: min(820px, 96vw);
+}
+.mm-columns {
+  display: flex;
+  gap: 1.75rem;
+  align-items: flex-start;
+  justify-content: center;
+  text-align: center;
+}
+.mm-col {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+/* The boxes stretch to fill their column on desktop (drop the 360px cap). */
+.mm-col-games #mm-games-section,
+.mm-col-games .mm-games-box {
+  max-width: 100%;
+}
+
+/* Mobile column toggle — hidden on desktop (both columns show side by side). */
+.mm-col-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.mm-col-arrow {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--clr-dim, #aaa);
+  border-radius: 5px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+  font-family: var(--font-serif);
+  cursor: pointer;
+}
+.mm-col-arrow.active {
+  color: var(--clr-gold, #d4a72c);
+  border-color: rgba(212, 167, 44, 0.4);
+  background: rgba(212, 167, 44, 0.1);
+}
+.mm-col-dots { display: flex; gap: 0.35rem; }
+.mm-col-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: rgba(255, 255, 255, 0.18);
+}
+.mm-col-dot.active { background: var(--clr-gold, #d4a72c); }
+
+/* Title swap spans — desktop always shows the "Caleb's Hollow" title. */
+.mm-title-text  { display: inline; }
+.mm-title-games { display: none; }
+
+@media (max-width: 760px) {
+  .mm-mode-card { width: min(440px, 92vw); }
+  .mm-col-toggle { display: flex; }
+  .mm-columns { flex-direction: column; gap: 0; }
+  .mm-col { flex: 1 1 100%; width: 100%; }
+
+  /* Show only the active column. */
+  .mm-mode-card.mm-show-menus .mm-col-games { display: none; }
+  .mm-mode-card.mm-show-games .mm-col-menus { display: none; }
+
+  /* Slide-in entrance for the incoming column. */
+  .mm-mode-card.mm-show-games .mm-col-games { animation: mmColSlideL 0.25s ease; }
+  .mm-mode-card.mm-show-menus .mm-col-menus { animation: mmColSlideR 0.25s ease; }
+
+  /* Title swaps with the active column. */
+  .mm-mode-card.mm-show-menus .mm-title-games { display: none; }
+  .mm-mode-card.mm-show-menus .mm-title-menus { display: inline; }
+  .mm-mode-card.mm-show-games .mm-title-menus { display: none; }
+  .mm-mode-card.mm-show-games .mm-title-games { display: inline; }
+}
+@keyframes mmColSlideL {
+  from { opacity: 0; transform: translateX(-18px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes mmColSlideR {
+  from { opacity: 0; transform: translateX(18px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
 /* Multiplayer badge on main menu button */
 .mp-badge {
   position: absolute; top: -6px; right: -6px;

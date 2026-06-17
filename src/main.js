@@ -3384,10 +3384,17 @@ const stepAsyncCreate  = document.getElementById('setup-step-async-create');
 const stepAsyncCreated = document.getElementById('setup-step-async-created');
 const stepAsyncJoin    = document.getElementById('setup-step-async-join');
 
+// Main-menu mobile column state: 'menus' (right, default) or 'games' (left).
+// Only meaningful on narrow viewports — desktop shows both columns at once.
+let _mmColumn = 'menus';
+
 function showStep(step) {
   // Refresh or tear down the main-menu games list depending on whether we're
   // entering or leaving the mode card.
   if (step === 'mode') {
+    // Default the mobile view to the menus column — a fresh player needs the
+    // mode buttons first. (No-op visual on desktop where both columns show.)
+    try { _setMmColumn?.('menus'); } catch {}
     // Fire-and-forget — each function handles its own loading/empty states.
     try { _fetchMainMenuGames?.(); } catch {}
     try { _renderReplaysList?.(); } catch {}
@@ -4978,6 +4985,25 @@ document.querySelectorAll('.cprog-toggle-btn').forEach(btn => {
     _renderCampaignProgressScreen();
   });
 });
+
+// ── Main-menu column slide toggle (mobile: active games ↔ menus) ──────────────
+// Mirrors the Campaign Progress pane toggle — a class on the mode card drives
+// which column shows, and the title bar swaps with it. Inert on desktop, where
+// both columns render side by side.
+function _setMmColumn(col) {
+  _mmColumn = col === 'games' ? 'games' : 'menus';
+  const card = document.getElementById('setup-step-mode');
+  if (card) {
+    card.classList.toggle('mm-show-games', _mmColumn === 'games');
+    card.classList.toggle('mm-show-menus', _mmColumn === 'menus');
+  }
+  document.querySelectorAll('.mm-col-arrow, .mm-col-dot').forEach(el => {
+    el.classList.toggle('active', el.dataset.col === _mmColumn);
+  });
+}
+document.querySelectorAll('.mm-col-arrow, .mm-col-dot').forEach(el => {
+  el.addEventListener('click', () => _setMmColumn(el.dataset.col));
+});
 document.getElementById('btn-delete-campaign')  .addEventListener('click', () => {
   if (confirm('Start over? All campaign progress, roster survivors, and resources will be lost. This cannot be undone.')) {
     const def = _activeCampaign.campaignDef;
@@ -5955,14 +5981,15 @@ async function _fetchMainMenuGames() {
 
   const { rows } = await _fetchAllGames();
 
-  // Hide the entire section when there are no games at all. (Signed-out users
-  // simply see no online games — the persistent footer "Sign In" button is the
-  // single sign-in entry point.)
-  if (section) section.style.display = rows.length ? '' : 'none';
+  // Keep the section visible even when empty so the active-games column never
+  // collapses to nothing on mobile — show a placeholder instead. (Signed-out
+  // users simply see no online games — the persistent footer "Sign In" button
+  // is the single sign-in entry point.)
+  if (section) section.style.display = '';
 
   _renderMmList(list, rows, {
     maxRows: 5,
-    emptyHtml: '',
+    emptyHtml: '<p class="mm-games-empty">No active games</p>',
     actionsFor: (row) => _mmGameListActions(row),
   });
 

@@ -16,52 +16,75 @@
   <div id="setup-screen">
 
     <!-- Welcome screen -->
-    <div id="setup-step-mode" class="setup-card">
-      <h1 class="title">CALEB'S HOLLOW</h1>
+    <!-- Welcome screen — two-column on desktop (active games | menus),
+         single column with a left/right slide toggle on mobile. -->
+    <div id="setup-step-mode" class="setup-card mm-mode-card mm-show-menus">
+      <h1 class="title mm-title">
+        <span class="mm-title-text mm-title-menus">CALEB'S HOLLOW</span>
+        <span class="mm-title-text mm-title-games">ACTIVE GAMES</span>
+      </h1>
 
-      <!-- Active games list — always shown, includes local + online -->
-      <div id="mm-games-section">
-        <div class="mm-games-header">
-          <span class="active-games-label">My Active Games</span>
+      <!-- Mobile column toggle — hidden on desktop (both columns show). -->
+      <div class="mm-col-toggle">
+        <button class="mm-col-arrow" data-col="games" aria-label="Show active games">&larr; Active Games</button>
+        <span class="mm-col-dots">
+          <span class="mm-col-dot" data-col="games"></span>
+          <span class="mm-col-dot active" data-col="menus"></span>
+        </span>
+        <button class="mm-col-arrow active" data-col="menus" aria-label="Show menus">Menus &rarr;</button>
+      </div>
+
+      <div class="mm-columns">
+        <!-- LEFT column: active games + replays -->
+        <div class="mm-col mm-col-games">
+          <!-- Active games list — always shown, includes local + online -->
+          <div id="mm-games-section">
+            <div class="mm-games-header">
+              <span class="active-games-label">My Active Games</span>
+            </div>
+            <div id="mm-games-list"></div>
+          </div>
+
+          <!-- Replays — completed games available for full playback -->
+          <div id="mm-replays-section" class="mm-games-box" style="margin-top:1.5rem">
+            <div class="mm-games-header">
+              <span class="active-games-label">Replays</span>
+            </div>
+            <div id="mm-replays-list"></div>
+          </div>
         </div>
-        <div id="mm-games-list"></div>
-      </div>
 
-      <!-- New-game mode buttons (flattened from the former New Game submenu) -->
-      <div class="ng-section-label" style="margin-top:0.75rem">Local Single Player</div>
-      <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.5rem;margin-top:0.4rem;margin-bottom:0">
-        <button id="btn-ng-campaign" class="setup-btn" style="width:260px;text-align:center">
-          Single Player Campaign
-          <span style="display:block;font-size:0.65rem;opacity:0.6;margin-top:2px">Story missions with persistent roster</span>
-        </button>
-        <button id="btn-ng-vsai"     class="setup-btn" style="width:260px;text-align:center">
-          vs. AI
-          <span style="display:block;font-size:0.65rem;opacity:0.6;margin-top:2px">Quick skirmish against the computer</span>
-        </button>
-      </div>
+        <!-- RIGHT column: menu cards (new-game modes) -->
+        <div class="mm-col mm-col-menus">
+          <!-- New-game mode buttons (flattened from the former New Game submenu) -->
+          <div class="ng-section-label">Local Single Player</div>
+          <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.5rem;margin-top:0.4rem;margin-bottom:0">
+            <button id="btn-ng-campaign" class="setup-btn" style="width:260px;text-align:center">
+              Single Player Campaign
+              <span style="display:block;font-size:0.65rem;opacity:0.6;margin-top:2px">Story missions with persistent roster</span>
+            </button>
+            <button id="btn-ng-vsai"     class="setup-btn" style="width:260px;text-align:center">
+              vs. AI
+              <span style="display:block;font-size:0.65rem;opacity:0.6;margin-top:2px">Quick skirmish against the computer</span>
+            </button>
+          </div>
 
-      <div class="ng-section-label" style="margin-top:1.25rem">Online Multiplayer</div>
-      <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.5rem;margin-top:0.4rem;margin-bottom:0">
-        <button id="btn-ng-battle"   class="setup-btn" style="width:260px;position:relative;text-align:center">
-          Join the Battle for Caleb's Hollow
-          <span style="display:block;font-size:0.65rem;opacity:0.6;margin-top:2px">Persistent large-scale multiplayer battle</span>
-        </button>
-        <button id="btn-ng-online"   class="setup-btn" style="width:260px;text-align:center">
-          Online Multiplayer
-          <span style="display:block;font-size:0.65rem;opacity:0.6;margin-top:2px">Play against humans online</span>
-        </button>
-      </div>
+          <div class="ng-section-label" style="margin-top:1.25rem">Online Multiplayer</div>
+          <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.5rem;margin-top:0.4rem;margin-bottom:0">
+            <button id="btn-ng-battle"   class="setup-btn" style="width:260px;position:relative;text-align:center">
+              Join the Battle for Caleb's Hollow
+              <span style="display:block;font-size:0.65rem;opacity:0.6;margin-top:2px">Persistent large-scale multiplayer battle</span>
+            </button>
+            <button id="btn-ng-online"   class="setup-btn" style="width:260px;text-align:center">
+              Online Multiplayer
+              <span style="display:block;font-size:0.65rem;opacity:0.6;margin-top:2px">Play against humans online</span>
+            </button>
+          </div>
 
-      <!-- Replays — completed games available for full playback -->
-      <div id="mm-replays-section" class="mm-games-box" style="margin-top:1.5rem">
-        <div class="mm-games-header">
-          <span class="active-games-label">Replays</span>
+          <div style="margin-top:1.25rem;text-align:center">
+            <a href="/admin" class="admin-link" id="admin-link" style="display:none">Admin</a>
+          </div>
         </div>
-        <div id="mm-replays-list"></div>
-      </div>
-
-      <div style="margin-top:1.25rem;text-align:center">
-        <a href="/admin" class="admin-link" id="admin-link" style="display:none">Admin</a>
       </div>
     </div>
 
