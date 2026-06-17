@@ -494,6 +494,9 @@ export class HeroFaction extends Faction {
                 level: s.level || 1,
                 abilityLabel: s.abilityLabel,
                 color: s.color,
+                // Faction tag — the round-summary wrap-up filters node spawns by
+                // viewer faction so the opposing player doesn't see this leak.
+                faction: 'hero',
               });
             } else {
               // No passable, unoccupied hex around the node — fail loudly

@@ -4758,8 +4758,12 @@ export class UIController {
         }
       }
 
-      // Include survivors spawned at power nodes during endRound
+      // Include survivors spawned at power nodes during endRound — but gate by
+      // viewer faction so a witch viewer doesn't see the hero's power-node
+      // procs (the wrap-up's other discoveries respect fog already, this
+      // legacy branch was missing the same gate).
       for (const s of (this.state.nodeSpawnedSurvivors ?? [])) {
+        if (humanFaction && s?.faction && s.faction !== humanFaction) continue;
         survivors.push(s);
       }
 
