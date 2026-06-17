@@ -148,3 +148,65 @@ describe('_spawnFloatingText stacking', () => {
     assert.ok(Math.abs(dyEnd - FLOAT_TEXT_STACK_DY) < 1e-9);
   });
 });
+
+// ─── clearFlashes() disposes loot flashes (explore loot does not stack) ───────
+//
+// Regression for t-4e9b1bf0: each round, the orchestrator calls
+// renderer.clearFlashes() before an explore step so loot labels from earlier
+// explores don't pile up on screen. The 3D clearFlashes() used to be a no-op,
+// so every exploration's loot floater accumulated within a round — the operator
+// saw "resources stacked across ALL explorations this round." The 2D-only fix
+// (commit fca7c0f) relied on this method, which never worked in the shipping 3D
+// renderer. clearFlashes() must now actually dispose the addFlash-spawned
+// floaters (loot / fortify / ability) while leaving combat HP-delta / death
+// floaters (addHpChangeFlash, variant 'damage') untouched.
+
+describe('clearFlashes disposes loot flashes', () => {
+  test('after clearFlashes, the next loot flash on the same hex spawns at base height', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst();
+    // Two explores' loot labels land on the same hex this round.
+    inst.addFlash(3, 4, '+🪵', null, 1800, 0.72, '#e8d48a');
+    inst.addFlash(3, 4, '+⚙',  null, 1800, 0.72, '#e8d48a');
+    assert.equal(inst._pendingEnds.length, 2, 'two loot floaters queued');
+    const base = inst._pendingEnds[0].target.position.y;
+
+    // Orchestrator clears stale flashes before the next explore step.
+    inst.clearFlashes();
+
+    // The next explore's loot label must reclaim slot 0 (base height) — proving
+    // the prior two floaters released their stack slots instead of piling up.
+    inst.addFlash(3, 4, '+🥈', null, 1800, 0.72, '#e8d48a');
+    const next = inst._pendingEnds[2];
+    assert.ok(Math.abs(next.target.position.y - base) < 1e-9,
+      'cleared floaters freed their slots; next flash spawns at base height');
+  });
+
+  test('clearFlashes disposes the floater meshes', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst();
+    inst.addFlash(3, 4, '+🪵', null, 1800, 0.72, '#e8d48a');
+    const plane = inst._pendingEnds[0].target;
+    let disposed = false;
+    const orig = plane.dispose.bind(plane);
+    plane.dispose = () => { disposed = true; orig(); };
+
+    inst.clearFlashes();
+    assert.ok(disposed, 'cleared loot floater plane disposed');
+  });
+
+  test('clearFlashes leaves combat damage floaters (addHpChangeFlash) untouched', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst();
+    // Damage floater goes through _spawnFloatingText WITHOUT register, so it is
+    // not a "flash" and survives clearFlashes.
+    inst._spawnFloatingText(3, 4, '-2', '#ff5050', 900, 0.7, { variant: 'damage' });
+    const plane = inst._pendingEnds[0].target;
+    let disposed = false;
+    const orig = plane.dispose.bind(plane);
+    plane.dispose = () => { disposed = true; orig(); };
+
+    inst.clearFlashes();
+    assert.equal(disposed, false, 'combat damage floater not disposed by clearFlashes');
+  });
+});

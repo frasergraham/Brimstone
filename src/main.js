@@ -4449,8 +4449,10 @@ function initScenario(def) {
 
   // Dev-loader probe: the browser-verification harness inspects live state
   // (entities, effects, HP) through this handle. Scenario mode only. The
-  // renderer is exposed too so verification can read presentation-only details
-  // (e.g. a model's facing yaw) that never touch game state.
+  // renderer is exposed too (window.__renderer3d) so verification can read
+  // presentation-only details (e.g. a model's facing yaw, or loot/flash
+  // floaters and clearFlashes between explore steps) that never touch game
+  // state — driven and screenshotted without grinding a full AI game.
   if (typeof window !== 'undefined') {
     window.__scenarioState = state;
     window.__renderer3d = renderer;
