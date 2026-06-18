@@ -167,6 +167,24 @@
 .lg-skirmish-start { display:flex; align-items:center; gap:14px; margin-top:18px; }
 .lg-skirmish-summary { font-size:13px; color:var(--lg-faint); font-style:italic; }
 
+/* Play With Others — rhythms + battle */
+.lg-rhythms { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px; }
+.lg-rhythm { border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.045); border-radius:5px; padding:14px 16px; cursor:pointer; }
+.lg-rhythm:hover { border-color:rgba(155,89,182,.45); background:rgba(155,89,182,.1); }
+.lg-rhythm-top { display:flex; justify-content:space-between; align-items:center; }
+.lg-rhythm-top .t { font-size:17px; color:var(--lg-ink); }
+.lg-rhythm-top .time { font-size:11px; color:var(--lg-dim); }
+.lg-rhythm .d { font-size:12px; color:#8a8270; margin-top:3px; }
+.lg-battle { background:rgba(22,14,26,.6); border:1px solid rgba(155,89,182,.4); border-radius:6px; padding:14px 18px; margin-bottom:16px; cursor:pointer; }
+.lg-battle:hover { border-color:var(--lg-purple); }
+.lg-battle-head { display:flex; justify-content:space-between; align-items:center; }
+.lg-battle-head .gthc { font-family:var(--lg-display); font-size:22px; color:#e6cdf2; }
+.lg-battle-live { font-size:12px; color:var(--lg-green); }
+.lg-battle-cta { font-size:13px; color:var(--lg-purple-lt); }
+.lg-battle-sub { font-size:12px; color:#8a8270; margin-top:6px; }
+.lg-btn-purple { border-color:var(--lg-purple); background:rgba(155,89,182,.2); color:#e6cdf2; }
+.lg-btn-purple:hover { background:rgba(155,89,182,.32); }
+
 /* ── MOBILE: rail → bottom bar ────────────────────────────────────────────── */
 @media (max-width:720px) {
   .ledger-frame { flex-direction:column; }

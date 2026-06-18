@@ -9781,6 +9781,27 @@ function _ledgerStartSkirmish(factionId, opts = {}) {
   init(/*witchIsAI*/ isDay, /*heroIsAI*/ !isDay, /*autoplay*/ false, factionId, opts);
 }
 
+// Bridge: hand back to the legacy setup-screen flow for online create / join /
+// lobby, which aren't native in the ledger yet. The ledger hides; the old menu
+// shows + runs the entry. (Temporary — removed when the lobby goes native.)
+function _ledgerBridgeToLegacy(showFn) {
+  document.getElementById('ledger-screen')?.classList.remove('is-active');
+  const ss = document.getElementById('setup-screen');
+  if (ss) ss.style.display = '';
+  showFn?.();
+}
+
+// Online snapshot for Play With Others: signed-in flag, live games, and the
+// active Battle row (if any). Derived from the same unified feed as Continue.
+async function _ledgerOnline() {
+  const { rows, signedIn } = await _fetchAllGames();
+  return {
+    signedIn,
+    games: rows.filter(r => r.kind === 'game'),
+    battle: rows.find(r => r.kind === 'battle' || r.kind === 'battle-invite') || null,
+  };
+}
+
 // The injected data/action surface the Ledger renders against.
 function _buildLedgerData() {
   return {
@@ -9791,6 +9812,10 @@ function _buildLedgerData() {
     startMission:     (slot, missionId, resume) => _ledgerStartCampaignMission(slot, missionId, resume),
     skirmishFactions: () => _ledgerSkirmishFactions(),
     startSkirmish:    (factionId, opts) => _ledgerStartSkirmish(factionId, opts),
+    online:           () => _ledgerOnline(),
+    openOnline:       () => _ledgerBridgeToLegacy(_showOnlineScreen),
+    openAsync:        () => _ledgerBridgeToLegacy(_showAsyncScreen),
+    openBattle:       () => _ledgerBridgeToLegacy(_showBattleScreen),
     activate:         (row) => _mmDefaultRowClick(row),   // resume / open / replay
     signIn:           (cb) => _showAuthDialog(cb),
   };

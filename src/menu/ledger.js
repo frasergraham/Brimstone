@@ -91,6 +91,7 @@ const PANELS = {
   continue: _panelContinue,
   campaign: _panelCampaign,
   skirmish: _panelSkirmish,
+  others:   _panelOthers,
   replays:  _panelReplays,
   account:  _panelAccount,
 };
@@ -225,6 +226,61 @@ function _updateSkirmishSummary() {
   const f = (_data?.skirmishFactions?.() ?? []).find((x) => x.id === _skFaction);
   const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
   el.textContent = [f?.name, cap(_skOpts.mapSize), `${_skOpts.nodeCount} nodes`, cap(_skOpts.aiDifficulty)].filter(Boolean).join(' · ');
+}
+
+/** Play With Others — the three rhythms (Live / Async / Battle) + your games.
+ *  Create/Join/Lobby bridge to the legacy flow for now (native lobby is next). */
+function _panelOthers(body) {
+  if (!_data?.online) return _placeholderPanel(body, { label: 'Play With Others' });
+  const token = ++_renderToken;
+  body.innerHTML = `<p class="ledger-placeholder">Reading the table…</p>`;
+  Promise.resolve(_data.online()).then(({ signedIn, games, battle }) => {
+    if (token !== _renderToken) return;
+    body.replaceChildren();
+
+    if (!signedIn) {
+      body.appendChild(_empty('Sign in to play with others — Live, Async, or the Battle.'));
+      const b = _button('Sign in', 'purple', () => _data?.signIn?.(() => select('others')));
+      b.style.marginTop = '14px';
+      body.appendChild(b);
+      return;
+    }
+
+    const rh = document.createElement('div');
+    rh.className = 'lg-rhythms';
+    rh.appendChild(_rhythmCard('⚡ Live match', '~15 min', 'Timed turns, one sitting. Quick-match or invite.', () => _data.openOnline?.()));
+    rh.appendChild(_rhythmCard('🌒 Async match', 'days', 'Play at your own pace; we notify you.', () => _data.openAsync?.()));
+    body.appendChild(rh);
+
+    const bf = document.createElement('div');
+    bf.className = 'lg-battle' + (battle ? ' is-live' : '');
+    bf.innerHTML =
+      `<div class="lg-battle-head"><span class="gthc">⚔ The Battle for Caleb's Hollow</span>` +
+      `${battle ? '<span class="lg-battle-live">● live</span>' : '<span class="lg-battle-cta">View ▸</span>'}</div>` +
+      `<div class="lg-battle-sub">Persistent 10v10 war — turns resolve at noon &amp; midnight.` +
+      `${battle && battle.round != null ? ' · Round ' + battle.round : ''}</div>`;
+    bf.addEventListener('click', () => _data.openBattle?.());
+    body.appendChild(bf);
+
+    body.appendChild(_cap('Your games'));
+    if (!games.length) {
+      body.appendChild(_empty('No live games yet — start one above.'));
+    } else {
+      const list = document.createElement('div');
+      list.className = 'lg-feed';
+      for (const r of mmSortRows(games)) list.appendChild(_feedRow(r));
+      body.appendChild(list);
+    }
+  }).catch(() => { if (token === _renderToken) body.replaceChildren(_empty('Could not reach the table.')); });
+}
+
+function _rhythmCard(title, time, desc, onClick) {
+  const el = document.createElement('div');
+  el.className = 'lg-rhythm';
+  el.innerHTML = `<div class="lg-rhythm-top"><span class="t">${esc(title)}</span><span class="time">${esc(time)}</span></div>` +
+    `<div class="d">${esc(desc)}</div>`;
+  el.addEventListener('click', onClick);
+  return el;
 }
 
 /** Replays — completed games (SP + MP), newest first, click to watch. */
