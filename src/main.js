@@ -9939,6 +9939,12 @@ function _buildLedgerData() {
     campaign:         () => _ledgerCampaignData(),
     startMission:     (slot, missionId, resume) => _ledgerStartCampaignMission(slot, missionId, resume),
     campaignParty:    (slot) => _ledgerCampaignParty(slot),
+    deleteCampaignSlot: (slot) => {
+      const camp = CAMPAIGNS.find(c => !c.disabled) || CAMPAIGNS[0];
+      if (!camp) return;
+      new Campaign(camp, slot).delete();
+      for (const m of camp.missions || []) deleteCampaignMissionSave(camp.id, m.id, slot);
+    },
     preloadPortraits: () => _loadCampaignPortraits?.(),
     partyAction:      (kind, target, weapon) => _ledgerPartyAction(kind, target, weapon),
     skirmishFactions: () => _ledgerSkirmishFactions(),

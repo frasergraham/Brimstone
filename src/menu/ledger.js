@@ -27,6 +27,7 @@ let _renderToken = 0;            // guards against out-of-order async panel rend
 let _campSlot = null;            // selected campaign slot (Campaign destination)
 let _campView = 'missions';      // Campaign sub-view: 'missions' | 'party'
 let _campBriefing = null;        // active mission briefing ({slot,missionId,resume,title,briefing,index})
+let _campConfirmDelete = null;   // slot index awaiting delete confirmation
 let _skFaction = null;           // selected Skirmish champion
 const _skOpts = { mapSize: 'standard', nodeCount: 3, aiDifficulty: 'normal' };
 let _othersView = 'landing';     // Play With Others sub-view: 'landing'|'find'|'lobby'|'battle'
@@ -64,7 +65,7 @@ function _renderRail() {
     item.className = 'ledger-rail-item';
     item.dataset.dest = d.id;
     item.innerHTML = `<span class="ic">${d.icon}</span><span class="lb">${d.label}</span>`;
-    item.addEventListener('click', () => { _campBriefing = null; select(d.id); });
+    item.addEventListener('click', () => { _campBriefing = null; _campConfirmDelete = null; select(d.id); });
     host.appendChild(item);
   }
 }
@@ -152,6 +153,26 @@ function _panelCampaign(body) {
   for (const s of data.slots) {
     const card = document.createElement('div');
     card.className = 'lg-slot' + (s.slot === sel.slot ? ' is-active' : '') + (s.started ? '' : ' is-new');
+
+    // Inline delete confirmation (replaces the card's body while pending).
+    if (_campConfirmDelete === s.slot) {
+      card.classList.add('is-confirm');
+      card.innerHTML = `<div class="lg-slot-tag">Slot ${roman(s.slot)}</div>` +
+        `<div class="lg-slot-confirm-q">Wipe this slot? This can't be undone.</div>`;
+      const btns = document.createElement('div');
+      btns.className = 'lg-slot-confirm';
+      btns.appendChild(_button('Delete', 'danger', () => {
+        _data?.deleteCampaignSlot?.(s.slot);
+        _campConfirmDelete = null;
+        if (_campSlot === s.slot) _campSlot = null;
+        select('campaign');
+      }));
+      btns.appendChild(_button('Cancel', 'ghost', () => { _campConfirmDelete = null; select('campaign'); }));
+      card.appendChild(btns);
+      slotRow.appendChild(card);
+      continue;
+    }
+
     card.innerHTML = s.started
       ? `<div class="lg-slot-tag">Slot ${roman(s.slot)}${s.slot === sel.slot ? ' · selected' : ''}</div>` +
         `<div class="lg-slot-title gthc">${s.isComplete ? 'Complete' : s.completedCount + ' cleared'}</div>` +
@@ -160,6 +181,17 @@ function _panelCampaign(body) {
         `<div class="lg-slot-title gthc">New</div>` +
         `<div class="lg-slot-sub">begin a playthrough</div>`;
     card.addEventListener('click', () => { _campSlot = s.slot; _campBriefing = null; select('campaign'); });
+
+    // Started slots get a ✕ to wipe them (asks for confirmation first).
+    if (s.started) {
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'lg-slot-del';
+      del.textContent = '✕';
+      del.title = 'Delete this slot';
+      del.addEventListener('click', (e) => { e.stopPropagation(); _campConfirmDelete = s.slot; select('campaign'); });
+      card.appendChild(del);
+    }
     slotRow.appendChild(card);
   }
   body.appendChild(slotRow);
