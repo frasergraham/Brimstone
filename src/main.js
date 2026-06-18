@@ -386,7 +386,7 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
   if (localHeroAI)  localHeroAI.onBattleResult  = battleCallback;
 }
 
-function init(witchIsAI, heroIsAI, autoplay = false, humanFactionId = null) {
+function init(witchIsAI, heroIsAI, autoplay = false, humanFactionId = null, opts = null) {
   _autoplay = autoplay;
   _gameStartTime = Date.now();
   _missionConductor?.destroy(); // clear any lingering tutorial/hint overlays
@@ -399,14 +399,18 @@ function init(witchIsAI, heroIsAI, autoplay = false, humanFactionId = null) {
   document.getElementById('setup-screen').style.display  = 'none';
   document.getElementById('game-screen').style.display   = 'flex';
 
-  const mapSize   = document.getElementById('select-map-size')?.value ?? 'standard';
-  const nodeCount = parseInt(document.getElementById('select-node-count')?.value ?? '3', 10);
+  // Options come from `opts` (the Ledger passes them explicitly) or fall back to
+  // the legacy setup-screen selects.
+  const mapSize   = opts?.mapSize ?? document.getElementById('select-map-size')?.value ?? 'standard';
+  const nodeCount = opts?.nodeCount != null
+    ? opts.nodeCount
+    : parseInt(document.getElementById('select-node-count')?.value ?? '3', 10);
   state    = new GameState(witchIsAI, heroIsAI, mapSize, nodeCount);
 
   // Difficulty applies to human-vs-AI only — AI-vs-AI (autoplay/balance) and
   // two-human games always run at the tuned 'normal' baseline.
   if ((witchIsAI || heroIsAI) && !(witchIsAI && heroIsAI)) {
-    state.aiDifficulty = document.getElementById('select-ai-difficulty')?.value ?? 'normal';
+    state.aiDifficulty = opts?.aiDifficulty ?? document.getElementById('select-ai-difficulty')?.value ?? 'normal';
   }
 
   // Apply the player's faction pick by swapping the side's default
@@ -9754,16 +9758,41 @@ async function _ledgerStartCampaignMission(slotIndex, missionId, resume = false)
   else _initCampaignMission(missionDef);
 }
 
+// The six selectable Skirmish champions, with portraits. The Day default
+// leader id is 'hero' (a Paladin); the rest are their own faction ids.
+function _ledgerSkirmishFactions() {
+  return [
+    { id: 'hero',        name: 'Paladin',     side: 'day',   img: 'assets/char-paladin.png' },
+    { id: 'rogue',       name: 'Rogue',       side: 'day',   img: 'assets/char-rogue.png' },
+    { id: 'captain',     name: 'Captain',     side: 'day',   img: 'assets/char-captain.png' },
+    { id: 'witch',       name: 'Witch',       side: 'night', img: 'assets/char-witch.png' },
+    { id: 'necromancer', name: 'Necromancer', side: 'night', img: 'assets/char-necromancer.png' },
+    { id: 'brute',       name: 'Brute',       side: 'night', img: 'assets/char-brute.png' },
+  ].filter(f => getFaction(f.id));
+}
+
+// Launch a Skirmish vs AI from the Ledger. Picking a Day champion ⇒ the witch
+// is AI; a Night champion ⇒ the hero is AI. Options pass straight to init().
+function _ledgerStartSkirmish(factionId, opts = {}) {
+  const def = getFaction(factionId);
+  if (!def) return;
+  const isDay = def.side === 'day';
+  document.getElementById('ledger-screen')?.classList.remove('is-active');
+  init(/*witchIsAI*/ isDay, /*heroIsAI*/ !isDay, /*autoplay*/ false, factionId, opts);
+}
+
 // The injected data/action surface the Ledger renders against.
 function _buildLedgerData() {
   return {
-    session:     () => loadSession(),
-    activeGames: async () => (await _fetchAllGames()).rows,
-    replays:     () => _collectReplayRows(),
-    campaign:    () => _ledgerCampaignData(),
-    startMission:(slot, missionId, resume) => _ledgerStartCampaignMission(slot, missionId, resume),
-    activate:    (row) => _mmDefaultRowClick(row),   // resume / open / replay
-    signIn:      (cb) => _showAuthDialog(cb),
+    session:          () => loadSession(),
+    activeGames:      async () => (await _fetchAllGames()).rows,
+    replays:          () => _collectReplayRows(),
+    campaign:         () => _ledgerCampaignData(),
+    startMission:     (slot, missionId, resume) => _ledgerStartCampaignMission(slot, missionId, resume),
+    skirmishFactions: () => _ledgerSkirmishFactions(),
+    startSkirmish:    (factionId, opts) => _ledgerStartSkirmish(factionId, opts),
+    activate:         (row) => _mmDefaultRowClick(row),   // resume / open / replay
+    signIn:           (cb) => _showAuthDialog(cb),
   };
 }
 

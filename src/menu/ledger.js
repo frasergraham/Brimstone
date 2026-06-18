@@ -25,6 +25,8 @@ let _activeId = null;
 let _data = null;
 let _renderToken = 0;            // guards against out-of-order async panel renders
 let _campSlot = null;            // selected campaign slot (Campaign destination)
+let _skFaction = null;           // selected Skirmish champion
+const _skOpts = { mapSize: 'standard', nodeCount: 3, aiDifficulty: 'normal' };
 
 export function initLedger({ playerName, start = 'continue', data = null } = {}) {
   _root = document.getElementById('ledger-screen');
@@ -88,6 +90,7 @@ function _renderPane(dest) {
 const PANELS = {
   continue: _panelContinue,
   campaign: _panelCampaign,
+  skirmish: _panelSkirmish,
   replays:  _panelReplays,
   account:  _panelAccount,
 };
@@ -156,6 +159,72 @@ function _panelCampaign(body) {
     });
   }
   body.appendChild(chron);
+}
+
+/** Skirmish — pick a champion, set the night, start a game vs AI. */
+function _panelSkirmish(body) {
+  const factions = _data?.skirmishFactions?.() ?? [];
+  if (!factions.length) return _placeholderPanel(body, { label: 'Skirmish' });
+  if (!factions.some(f => f.id === _skFaction)) _skFaction = factions[0].id;
+
+  body.appendChild(_cap('Your champion'));
+  const grid = document.createElement('div');
+  grid.className = 'lg-champions';
+  for (const f of factions) {
+    const card = document.createElement('div');
+    card.className = 'lg-champion ' + (f.side === 'night' ? 'is-night' : 'is-day') + (f.id === _skFaction ? ' is-selected' : '');
+    card.innerHTML = `<img src="${esc(f.img)}" alt=""><div class="nm">${esc(f.name)}</div>` +
+      `<div class="sd">${f.side === 'day' ? '☀ Day' : '🌙 Night'}</div>`;
+    card.addEventListener('click', () => { _skFaction = f.id; select('skirmish'); });
+    grid.appendChild(card);
+  }
+  body.appendChild(grid);
+
+  body.appendChild(_cap('The night ahead'));
+  const opts = document.createElement('div');
+  opts.className = 'lg-opts';
+  opts.appendChild(_optSelect('mapSize', 'Map size', [['skirmish', 'Skirmish'], ['standard', 'Standard'], ['regional', 'Regional']], (v) => v));
+  opts.appendChild(_optSelect('nodeCount', 'Power nodes', [['2', '2'], ['3', '3'], ['4', '4']], (v) => parseInt(v, 10)));
+  opts.appendChild(_optSelect('aiDifficulty', 'AI cunning', [['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Hard']], (v) => v));
+  body.appendChild(opts);
+
+  const startRow = document.createElement('div');
+  startRow.className = 'lg-skirmish-start';
+  startRow.appendChild(_button('▶ Start', 'gold', () => _data?.startSkirmish?.(_skFaction, { ..._skOpts })));
+  const summ = document.createElement('span');
+  summ.className = 'lg-skirmish-summary';
+  summ.id = 'lg-sk-summary';
+  startRow.appendChild(summ);
+  body.appendChild(startRow);
+  _updateSkirmishSummary();
+}
+
+function _optSelect(key, label, options, parse) {
+  const wrap = document.createElement('label');
+  wrap.className = 'lg-opt';
+  const span = document.createElement('span');
+  span.className = 'lg-opt-label';
+  span.textContent = label;
+  const sel = document.createElement('select');
+  sel.className = 'lg-opt-select';
+  for (const [val, lbl] of options) {
+    const o = document.createElement('option');
+    o.value = val; o.textContent = lbl;
+    if (parse(val) === _skOpts[key]) o.selected = true;
+    sel.appendChild(o);
+  }
+  sel.addEventListener('change', () => { _skOpts[key] = parse(sel.value); _updateSkirmishSummary(); });
+  wrap.appendChild(span);
+  wrap.appendChild(sel);
+  return wrap;
+}
+
+function _updateSkirmishSummary() {
+  const el = document.getElementById('lg-sk-summary');
+  if (!el) return;
+  const f = (_data?.skirmishFactions?.() ?? []).find((x) => x.id === _skFaction);
+  const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+  el.textContent = [f?.name, cap(_skOpts.mapSize), `${_skOpts.nodeCount} nodes`, cap(_skOpts.aiDifficulty)].filter(Boolean).join(' · ');
 }
 
 /** Replays — completed games (SP + MP), newest first, click to watch. */

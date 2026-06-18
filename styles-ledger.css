@@ -146,6 +146,27 @@
 .lg-account-id .nm { font-family:var(--lg-display); font-size:22px; color:var(--lg-ink); line-height:1; }
 .lg-account-id .sub { font-size:13px; color:var(--lg-faint); margin-top:3px; }
 
+/* Skirmish — champions + options */
+.lg-champions { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+.lg-champion { border:1px solid #232036; background:rgba(16,18,26,.55); border-radius:6px; padding:10px 8px; text-align:center; cursor:pointer; }
+.lg-champion img { width:54px; height:54px; border-radius:50%; object-fit:cover; margin-bottom:6px; border:1px solid #444; }
+.lg-champion .nm { font-size:14px; color:var(--lg-ink-2); }
+.lg-champion .sd { font-size:10px; letter-spacing:.1em; text-transform:uppercase; }
+.lg-champion.is-day .sd { color:var(--lg-gold-dim); }
+.lg-champion.is-night .sd { color:var(--lg-purple); }
+.lg-champion.is-day img { border-color:rgba(212,167,44,.4); }
+.lg-champion.is-night img { border-color:rgba(155,89,182,.4); }
+.lg-champion:hover { border-color:#3a3550; }
+.lg-champion.is-selected.is-day { border-color:var(--lg-gold-dim); background:rgba(40,32,18,.5); box-shadow:0 0 18px rgba(212,167,44,.33); }
+.lg-champion.is-selected.is-night { border-color:var(--lg-purple); background:rgba(22,14,26,.5); box-shadow:0 0 18px rgba(155,89,182,.33); }
+.lg-champion.is-selected .nm { color:var(--lg-ink); }
+.lg-opts { display:flex; gap:9px; }
+.lg-opt { flex:1; display:flex; flex-direction:column; gap:5px; background:rgba(16,18,26,.6); border:1px solid #232036; border-radius:5px; padding:9px 12px; }
+.lg-opt-label { font-size:11px; color:var(--lg-faint); }
+.lg-opt-select { background:rgba(8,9,14,.6); border:1px solid #2a2540; border-radius:4px; color:var(--lg-ink); font-family:var(--lg-serif); font-size:15px; padding:5px 8px; cursor:pointer; }
+.lg-skirmish-start { display:flex; align-items:center; gap:14px; margin-top:18px; }
+.lg-skirmish-summary { font-size:13px; color:var(--lg-faint); font-style:italic; }
+
 /* ── MOBILE: rail → bottom bar ────────────────────────────────────────────── */
 @media (max-width:720px) {
   .ledger-frame { flex-direction:column; }
