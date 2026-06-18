@@ -264,21 +264,64 @@ function _renderPartyView(body, sel) {
 }
 
 function _wirePartyButtons(container, slot) {
-  const wire = (selector, kind, withWeapon = false) => {
-    container.querySelectorAll(selector).forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const html = _data?.partyAction?.(kind, btn.dataset.idx, withWeapon ? btn.dataset.weapon : undefined);
-        if (html != null) { container.innerHTML = html; _wirePartyButtons(container, slot); }
-      });
-    });
+  const apply = (kind, idx, weapon) => {
+    const html = _data?.partyAction?.(kind, idx, weapon);
+    if (html != null) { container.innerHTML = html; _wirePartyButtons(container, slot); }
   };
+  const wire = (selector, kind) =>
+    container.querySelectorAll(selector).forEach((btn) =>
+      btn.addEventListener('click', () => apply(kind, btn.dataset.idx)));
   wire('.cprog-promote', 'promote');
   wire('.cprog-demote', 'demote');
   wire('.cprog-heal-btn', 'heal');
-  wire('.cprog-equip-btn', 'equip', true);
-  wire('.cprog-return-btn', 'return', true);
-  wire('.cprog-unequip-btn', 'unequip', true);
-  wire('.cprog-pool-equip-btn', 'pool-equip', true);
+
+  // Click a carried (non-equipped) weapon slot to make it the equipped weapon.
+  container.querySelectorAll('.cprog-wslot[data-weapon]:not(.is-equipped)').forEach((el) =>
+    el.addEventListener('click', () => apply('equip', el.dataset.idx, el.dataset.weapon)));
+
+  // Drag sources: every weapon slot (unit or pool) carrying a weapon id.
+  container.querySelectorAll('[draggable="true"][data-weapon]').forEach((el) => {
+    el.addEventListener('dragstart', (e) => {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', JSON.stringify({
+        from: el.dataset.from, idx: el.dataset.idx ?? null, weapon: el.dataset.weapon,
+      }));
+      el.classList.add('is-dragging');
+    });
+    el.addEventListener('dragend', () => el.classList.remove('is-dragging'));
+  });
+
+  const allowDrop = (el) => {
+    el.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; el.classList.add('is-drop'); });
+    el.addEventListener('dragleave', () => el.classList.remove('is-drop'));
+  };
+  // Drop on a unit card → arm it from the pool (or hand off from another unit).
+  container.querySelectorAll('.cprog-card[data-drop="unit"]').forEach((card) => {
+    allowDrop(card);
+    card.addEventListener('drop', (e) => {
+      e.preventDefault(); card.classList.remove('is-drop');
+      const d = _parseDrag(e); if (!d) return;
+      const idx = card.dataset.idx;
+      if (d.from === 'pool') apply('carry', idx, d.weapon);
+      else if (d.from === 'unit' && String(d.idx) !== String(idx)) {
+        _data?.partyAction?.('stow', d.idx, d.weapon); // source → pool
+        apply('carry', idx, d.weapon);                 // pool → target
+      }
+    });
+  });
+  // Drop on the inventory grid → stow a unit's weapon back to the pool.
+  container.querySelectorAll('.cprog-inv-grid[data-drop="pool"]').forEach((grid) => {
+    allowDrop(grid);
+    grid.addEventListener('drop', (e) => {
+      e.preventDefault(); grid.classList.remove('is-drop');
+      const d = _parseDrag(e); if (!d) return;
+      if (d.from === 'unit') apply('stow', d.idx, d.weapon);
+    });
+  });
+}
+
+function _parseDrag(e) {
+  try { return JSON.parse(e.dataTransfer.getData('text/plain')); } catch { return null; }
 }
 
 /** Skirmish — pick a champion, set the night, start a game vs AI. */

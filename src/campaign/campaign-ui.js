@@ -290,12 +290,28 @@ function poolWeaponRowHTML(id, count, targets) {
  * @param {object} weapons  shared pool, `{ weaponId: { count } }`
  * @param {{idx:(number|'leader'), label:string}[]} targets  equip candidates
  */
-function sharedWeaponsHTML(weapons, targets) {
-  const entries = Object.entries(weapons || {}).filter(([id, e]) => (e?.count ?? 0) > 0 && isWeapon(id));
-  if (entries.length === 0) return '';
-  const rows = entries.map(([id, e]) => poolWeaponRowHTML(id, e.count, targets)).join('');
-  return `<div class="cprog-section-label armory-label">Armory</div>
-    <div class="cprog-pool-weapons">${rows}</div>`;
+function inventoryGridHTML(weapons, resources) {
+  const slots = [];
+  for (const [id, e] of Object.entries(weapons || {})) {
+    const count = (e && typeof e === 'object') ? (e.count ?? 0) : (e ?? 0);
+    if (count < 1 || !isWeapon(id)) continue;
+    const stat = weaponStatString(id);
+    slots.push(`<div class="cprog-slot is-weapon" draggable="true" data-from="pool" data-weapon="${id}" title="${weaponName(id)}${stat ? ' — ' + stat : ''}">`
+      + `<span class="cprog-slot-glyph">${itemGlyph(id)}</span>`
+      + (count > 1 ? `<span class="cprog-slot-n">×${count}</span>` : '')
+      + `<span class="cprog-slot-name">${weaponName(id)}</span></div>`);
+  }
+  for (const [k, v] of Object.entries(resources || {})) {
+    if (!(v > 0)) continue;
+    slots.push(`<div class="cprog-slot is-resource" title="${k}">`
+      + `<span class="cprog-slot-glyph">${RESOURCE_ICONS[k] || '🎒'}</span>`
+      + `<span class="cprog-slot-n">×${v}</span>`
+      + `<span class="cprog-slot-name">${k}</span></div>`);
+  }
+  // Pad to a tidy grid + guarantee drop targets even when the pool is sparse.
+  const pad = Math.max(2, 8 - slots.length);
+  for (let i = 0; i < pad; i++) slots.push('<div class="cprog-slot is-empty"></div>');
+  return `<div class="cprog-inv-grid" data-drop="pool">${slots.join('')}</div>`;
 }
 
 /**
@@ -304,31 +320,55 @@ function sharedWeaponsHTML(weapons, targets) {
  * '' when the unit carries no weapons. `idx` ('leader' or a roster index) is
  * stamped onto each Equip button for event wiring.
  */
-function weaponListHTML(unit, idx) {
+// Weapons a unit may carry into a mission (mirrors campaign.js WEAPON_CARRY_CAP).
+const WEAPON_SLOTS = 2;
+
+/**
+ * A unit's weapon slots: up to WEAPON_SLOTS squares. Filled slots show the
+ * carried weapon (equipped first, marked ✓) and are draggable to the shared
+ * inventory or clickable to equip; empty slots are drop targets for arming the
+ * unit from the armory.
+ */
+function weaponSlotsHTML(unit, idx) {
   const items = unit.items || {};
   const equipped = getEquippedWeaponIdOf(items);
-  const carried = Object.entries(items)
-    .filter(([id, e]) => (e?.count ?? 0) > 0 && isWeapon(id) && id !== equipped);
-  if (!equipped && carried.length === 0) return '';
-  const rows = [];
-  // The equipped row carries the weapon's full stack count, so a duplicate of an
-  // equipped weapon (e.g. two swords, one wielded) surfaces as "Sword ×2" rather
-  // than silently dropping the spare — the carried filter excludes the same id.
-  if (equipped) rows.push(weaponRowHTML(equipped, items[equipped]?.count ?? 1, idx, true));
-  for (const [id, e] of carried) rows.push(weaponRowHTML(id, e.count, idx, false));
-  return `<div class="cprog-weapons">${rows.join('')}</div>`;
+  const carried = [];
+  if (equipped) carried.push([equipped, items[equipped]?.count ?? 1, true]);
+  for (const [id, e] of Object.entries(items)) {
+    if (id === equipped || !isWeapon(id) || (e?.count ?? 0) < 1) continue;
+    carried.push([id, e.count, false]);
+  }
+  const slots = [];
+  for (let s = 0; s < WEAPON_SLOTS; s++) {
+    const w = carried[s];
+    if (w) {
+      const [id, count, eq] = w;
+      const stat = weaponStatString(id);
+      const tip = `${weaponName(id)}${stat ? ' — ' + stat : ''}${eq ? ' · equipped' : ' · click to equip'}`;
+      slots.push(`<div class="cprog-wslot${eq ? ' is-equipped' : ''}" draggable="true" data-from="unit" data-idx="${idx}" data-weapon="${id}" title="${tip}">`
+        + `<span class="cprog-wslot-glyph">${itemGlyph(id)}</span>`
+        + (count > 1 ? `<span class="cprog-wslot-n">×${count}</span>` : '')
+        + (eq ? '<span class="cprog-wslot-eq" title="Equipped">✓</span>' : '')
+        + `</div>`);
+    } else {
+      slots.push('<div class="cprog-wslot is-empty" title="Drag a weapon here"><span class="cprog-wslot-plus">+</span></div>');
+    }
+  }
+  return `<div class="cprog-wslots">${slots.join('')}</div>`;
 }
 
-/** Badge row for a unit's carried non-weapon items. Empty string if none. */
+/** Row for a unit's carried non-weapon items — icon + name (e.g. "📯 Horn"). */
 function itemRowHTML(items) {
-  const badges = [];
+  const rows = [];
   for (const [id, entry] of Object.entries(items || {})) {
     const count = entry?.count ?? 0;
-    if (!count || isWeapon(id)) continue; // weapons render via weaponListHTML
-    const n = count > 1 ? `<span class="cprog-item-n">×${count}</span>` : '';
-    badges.push(`<span class="cprog-item" title="${ITEMS[id]?.label || id}">${itemGlyph(id)}${n}</span>`);
+    if (!count || isWeapon(id)) continue; // weapons render via weaponSlotsHTML
+    const n = count > 1 ? ` ×${count}` : '';
+    rows.push(`<span class="cprog-item" title="${ITEMS[id]?.label || id}">`
+      + `<span class="cprog-item-glyph">${itemGlyph(id)}</span>`
+      + `<span class="cprog-item-name">${weaponName(id)}${n}</span></span>`);
   }
-  return badges.length ? `<div class="cprog-inv">${badges.join('')}</div>` : '';
+  return rows.length ? `<div class="cprog-inv">${rows.join('')}</div>` : '';
 }
 
 /**
@@ -361,7 +401,7 @@ export function progressUnitCardHTML(unit, opts = {}) {
     ? `<button class="cprog-heal-btn" data-idx="${idx}">🌿 Use 1 herb</button>`
     : '';
 
-  return `<div class="${cls.join(' ')}" data-idx="${idx}">
+  return `<div class="${cls.join(' ')}" data-idx="${idx}" data-drop="unit">
     <div class="cprog-card-head">
       ${iconHtml}
       <div class="cprog-id">
@@ -381,7 +421,7 @@ export function progressUnitCardHTML(unit, opts = {}) {
       <span class="cprog-bar-num">${into}/${span}</span>
     </div>
     <div class="cprog-statline"><span class="cprog-stat">⚔ ${unit.attack}</span><span class="cprog-stat">🛡 ${unit.defense}</span></div>
-    ${weaponListHTML(unit, idx)}
+    ${weaponSlotsHTML(unit, idx)}
     ${itemRowHTML(unit.items)}
     ${healHtml}
   </div>`;
@@ -466,25 +506,13 @@ export function partyPaneHTML(heroStats, roster, activeIndices, maxActive, opts 
   }
   html += '</div>'; // .cprog-party-scroll
 
-  // Shared inventory: raw resources plus the shared armory (weapons any unit can
-  // draw on). Armory weapons each offer an Equip control per candidate unit —
-  // the leader and the current active squad.
-  const resEntries = Object.entries(resources).filter(([, v]) => v > 0);
-  const equipTargets = [{ idx: 'leader', label: 'Ishmael' }];
-  for (const i of active) {
-    equipTargets.push({ idx: i, label: String(roster[i].name || `Unit ${i}`).split(/\s+/)[0] });
-  }
-  const resHtml = resEntries.length
-    ? `<div class="cprog-resources">${resEntries.map(([k, v]) =>
-        `<span class="cr-item"><span class="cr-icon">${RESOURCE_ICONS[k] || ''}</span><span class="cr-count">${v}</span><span class="cr-label">${k}</span></span>`).join('')}</div>`
-    : '';
-  const armoryHtml = sharedWeaponsHTML(opts.weapons, equipTargets);
-
+  // Shared inventory as a slot grid: pooled weapons (drag onto a unit to arm
+  // them) plus raw resources. The grid is a drop target — a weapon dragged off a
+  // unit lands back here.
   html += '<div class="cprog-shared">';
-  html += '<div class="cprog-section-label">Shared Inventory</div>';
-  html += resHtml;
-  html += armoryHtml;
-  if (!resHtml && !armoryHtml) html += '<div class="cprog-empty">Empty.</div>';
+  html += '<div class="cprog-section-label">Shared Inventory ' +
+    '<span class="cprog-inv-hint">drag a weapon onto a unit · drop here to stow</span></div>';
+  html += inventoryGridHTML(opts.weapons, resources);
   html += '</div>';
 
   return html;

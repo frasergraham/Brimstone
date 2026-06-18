@@ -9851,6 +9851,10 @@ function _ledgerPartyAction(kind, target, weapon) {
     case 'return':     _activeCampaign.returnWeaponToInventory(idx, weapon); break;
     case 'unequip':    _activeCampaign.unequipToInventory(idx); break;
     case 'pool-equip': _activeCampaign.equipFromInventory(idx, weapon); break;
+    case 'carry':      _activeCampaign.carryFromInventory(idx, weapon); break;
+    // Stow a unit's weapon back to the pool: a spare returns directly; the lone
+    // equipped weapon is unequipped instead (returnWeaponToInventory won't touch it).
+    case 'stow':       if (_activeCampaign.returnWeaponToInventory(idx, weapon) == null) _activeCampaign.unequipToInventory(idx); break;
   }
   return _ledgerPartyHTML();
 }

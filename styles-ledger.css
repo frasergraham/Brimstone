@@ -221,6 +221,41 @@
 .lg-party .cprog-card.reserve .cprog-portrait, .lg-party .cprog-card.reserve .cprog-glyph { width:30px; height:30px; }
 .lg-party .cprog-name { font-size:.8rem; }
 
+/* Weapon slots on unit cards (drag to/from the inventory; click to equip) */
+.lg-party .cprog-wslots { display:flex; gap:5px; margin-top:7px; }
+.lg-party .cprog-wslot { position:relative; width:34px; height:34px; border:1px solid #2a2540; border-radius:5px;
+  background:rgba(8,9,14,.5); display:flex; align-items:center; justify-content:center; font-size:17px; cursor:grab; }
+.lg-party .cprog-wslot.is-empty { border-style:dashed; color:var(--lg-faint); cursor:default; font-size:14px; }
+.lg-party .cprog-wslot.is-equipped { border-color:var(--lg-gold-dim); background:rgba(40,32,18,.5); }
+.lg-party .cprog-wslot:not(.is-empty):not(.is-equipped):hover { border-color:var(--lg-purple); }
+.lg-party .cprog-wslot.is-dragging { opacity:.4; }
+.lg-party .cprog-wslot-eq { position:absolute; bottom:-3px; right:-3px; font-size:9px; color:var(--lg-gold); background:#14121c; border-radius:50%; padding:0 1px; }
+.lg-party .cprog-wslot-n { position:absolute; bottom:0; left:2px; font-size:8px; color:var(--lg-faint); }
+.lg-party .cprog-wslot-plus { color:var(--lg-faint); }
+
+/* Carried non-weapon items — icon + name */
+.lg-party .cprog-inv { display:flex; flex-wrap:wrap; gap:5px; margin-top:6px; }
+.lg-party .cprog-item { display:inline-flex; align-items:center; gap:4px; font-size:11px; color:var(--lg-ink-2);
+  border:1px solid #2a2540; border-radius:10px; padding:2px 8px 2px 5px; background:rgba(8,9,14,.4); }
+.lg-party .cprog-item-glyph { font-size:13px; }
+
+/* Shared inventory as a slot grid */
+.lg-party .cprog-shared { margin-top:16px; }
+.lg-party .cprog-inv-hint { font-size:10px; font-weight:400; text-transform:none; letter-spacing:0; color:var(--lg-faint); margin-left:8px; }
+.lg-party .cprog-inv-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(72px,1fr)); gap:7px; margin-top:8px;
+  border:1px solid #232036; border-radius:6px; padding:9px; background:rgba(8,9,14,.3); transition:border-color .12s, background .12s; }
+.lg-party .cprog-inv-grid.is-drop { border-color:var(--lg-purple); background:rgba(155,89,182,.08); }
+.lg-party .cprog-slot { position:relative; aspect-ratio:1/1; min-height:60px; border:1px solid #2a2540; border-radius:5px;
+  background:rgba(16,18,26,.6); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; padding:3px; }
+.lg-party .cprog-slot.is-weapon { cursor:grab; }
+.lg-party .cprog-slot.is-weapon:hover { border-color:var(--lg-purple); }
+.lg-party .cprog-slot.is-empty { border-style:dashed; border-color:#241f38; background:transparent; }
+.lg-party .cprog-slot.is-dragging { opacity:.4; }
+.lg-party .cprog-slot-glyph { font-size:20px; line-height:1; }
+.lg-party .cprog-slot-name { font-size:9px; color:var(--lg-faint); text-align:center; line-height:1.1; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.lg-party .cprog-slot-n { position:absolute; top:2px; right:4px; font-size:9px; color:var(--lg-ink-2); }
+.lg-party .cprog-card[data-drop].is-drop { outline:1px solid var(--lg-purple); outline-offset:1px; }
+
 /* Mission briefing */
 .lg-brief-head { margin-bottom:4px; }
 .lg-brief-kicker { font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--lg-label); }
