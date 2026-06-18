@@ -9786,16 +9786,6 @@ function _ledgerStartSkirmish(factionId, opts = {}) {
   init(/*witchIsAI*/ isDay, /*heroIsAI*/ !isDay, /*autoplay*/ false, factionId, opts);
 }
 
-// Bridge: hand back to the legacy setup-screen flow for online create / join /
-// lobby, which aren't native in the ledger yet. The ledger hides; the old menu
-// shows + runs the entry. (Temporary — removed when the lobby goes native.)
-function _ledgerBridgeToLegacy(showFn) {
-  document.getElementById('ledger-screen')?.classList.remove('is-active');
-  const ss = document.getElementById('setup-screen');
-  if (ss) ss.style.display = '';
-  showFn?.();
-}
-
 // Online snapshot for Play With Others: signed-in flag, live games, and the
 // active Battle row (if any). Derived from the same unified feed as Continue.
 async function _ledgerOnline() {
@@ -9849,6 +9839,50 @@ function _ledgerPartyAction(kind, target, weapon) {
   return _ledgerPartyHTML();
 }
 
+// The Battle status for the native ledger Battle panel. Resolves the player's
+// SIDE ('day'/'night') here so the ledger never compares faction string ids.
+async function _ledgerBattleStatus() {
+  const session = loadSession();
+  if (!session) return null;
+  try {
+    const base = window.BRIMSTONE_SERVER || '';
+    const res = await fetch(`${base}/api/battle-status?token=${encodeURIComponent(session.token)}`);
+    const st = res.ok ? await res.json() : null;
+    if (st) {
+      const f = st.myFaction || st.myBattle?.myFaction || mp?.myFaction;
+      st.mySide = f ? (getFaction(f)?.side ?? null) : null;
+    }
+    return st;
+  } catch { return null; }
+}
+
+// Rename the signed-in player (native Account edit).
+async function _ledgerSetUsername(name) {
+  const session = loadSession();
+  if (!session) return { ok: false, error: 'Not signed in.' };
+  try {
+    const res = await fetch(`${window.BRIMSTONE_SERVER || ''}/api/account/username`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: session.token, username: name }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      session.username = data.player.username;
+      localStorage.setItem('brimstone_session', JSON.stringify(session));
+      _updateSessionBar();
+      return { ok: true, username: data.player.username };
+    }
+    return { ok: false, error: data.error || 'Could not change name.' };
+  } catch { return { ok: false, error: 'Network error.' }; }
+}
+
+// Send a magic-link to link an email (native Account edit).
+async function _ledgerLinkEmail(email) {
+  const session = loadSession();
+  if (!session) return { ok: false, error: 'Not signed in.' };
+  return requestLinkEmail(session.token, email);
+}
+
 // When set, lobby pushes (onLobbyJoined/Update/List) route to the ledger
 // instead of the legacy _renderLobby/_renderPublicLobbies. The ledger registers
 // these via the DI onLobby/onLobbyList while its lobby view is mounted.
@@ -9879,6 +9913,12 @@ function _buildLedgerData() {
     onLobby:          (cb) => { _ledgerLobbyCb = cb; },
     onLobbyList:      (cb) => { _ledgerLobbyListCb = cb; },
     myPlayerId:       () => mp?.player?.id ?? loadSession()?.id ?? null,
+    factionsForSide:  (side) => getFactionsForSide(side).map((f) => ({ id: f.id, name: f.name ?? f.label ?? f.id })),
+    inviteLink:       () => {
+      if (!_currentLobby) return null;
+      const key = (_currentLobby.isPrivate && _currentLobby.code) ? _currentLobby.code : _currentLobby.id;
+      return new URL(`/join?code=${encodeURIComponent(key)}`, _linkOrigin()).href;
+    },
     replays:          () => _collectReplayRows(),
     campaign:         () => _ledgerCampaignData(),
     startMission:     (slot, missionId, resume) => _ledgerStartCampaignMission(slot, missionId, resume),
@@ -9887,19 +9927,21 @@ function _buildLedgerData() {
     skirmishFactions: () => _ledgerSkirmishFactions(),
     startSkirmish:    (factionId, opts) => _ledgerStartSkirmish(factionId, opts),
     online:           () => _ledgerOnline(),
-    openOnline:       () => _ledgerBridgeToLegacy(_showOnlineScreen),
-    openAsync:        () => _ledgerBridgeToLegacy(_showAsyncScreen),
-    openBattle:       () => _ledgerBridgeToLegacy(_showBattleScreen),
-    openAccount:      () => _ledgerBridgeToLegacy(() => { _initAccountPage(); showStep('account'); }),
     signOut:          () => _signOut(),
     activate:         (row) => _mmDefaultRowClick(row),   // resume / open / replay
-    // The auth dialog lives inside #setup-screen, so reveal it for sign-in, then
-    // return to the ledger on success.
-    signIn:           (cb) => _ledgerBridgeToLegacy(() => _showAuthDialog(() => {
-      document.getElementById('setup-screen')?.style.setProperty('display', 'none');
-      document.getElementById('ledger-screen')?.classList.add('is-active');
-      cb?.();
-    })),
+    // Native passwordless sign-in: feed the name into the (hidden) auth input and
+    // run the shared auth core — no old dialog ever shows.
+    signInWithName:   (name, cb) => {
+      const el = document.getElementById('auth-username');
+      if (el) el.value = name;
+      _ensureAuthed(() => cb?.());
+    },
+    // Battle: live status + join (native panel; no legacy screen).
+    battleStatus:     () => _ledgerBattleStatus(),
+    joinBattle:       () => { mp?.joinBattle?.(); },
+    // Account edits (native): rename + email link via the server.
+    setUsername:      (name) => _ledgerSetUsername(name),
+    linkEmail:        (email) => _ledgerLinkEmail(email),
   };
 }
 

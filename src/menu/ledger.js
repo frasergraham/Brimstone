@@ -28,9 +28,10 @@ let _campSlot = null;            // selected campaign slot (Campaign destination
 let _campView = 'missions';      // Campaign sub-view: 'missions' | 'party'
 let _skFaction = null;           // selected Skirmish champion
 const _skOpts = { mapSize: 'standard', nodeCount: 3, aiDifficulty: 'normal' };
-let _othersView = 'landing';     // Play With Others sub-view: 'landing' | 'find' | 'lobby'
+let _othersView = 'landing';     // Play With Others sub-view: 'landing'|'find'|'lobby'|'battle'
 let _lobby = null;               // current lobby state (from the onLobby push)
 let _lobbyList = [];             // open public lobbies (from onLobbyList)
+let _createAsync = false;        // Find-a-Game create defaults to async cadence
 
 export function initLedger({ playerName, start = 'continue', data = null } = {}) {
   _root = document.getElementById('ledger-screen');
@@ -294,6 +295,7 @@ function _panelOthers(body) {
   if (!_data?.online) return _placeholderPanel(body, { label: 'Play With Others' });
   if (_othersView === 'lobby' && _lobby) return _othersLobby(body, _lobby);
   if (_othersView === 'find') return _othersFind(body);
+  if (_othersView === 'battle') return _othersBattle(body);
   _othersLanding(body);
 }
 
@@ -305,17 +307,15 @@ function _othersLanding(body) {
     body.replaceChildren();
     if (!signedIn) {
       body.appendChild(_empty('Sign in to play with others — Live, Async, or the Battle.'));
-      const b = _button('Sign in', 'purple', () => _data?.signIn?.(() => select('others')));
-      b.style.marginTop = '14px';
-      body.appendChild(b);
+      body.appendChild(_signInForm(() => select('others')));
       return;
     }
     const rh = document.createElement('div');
     rh.className = 'lg-rhythms';
     rh.appendChild(_rhythmCard('⚡ Live match', '~15 min', 'Timed turns, one sitting. Quick-match or invite.',
-      () => { _othersView = 'find'; select('others'); }));
+      () => { _createAsync = false; _othersView = 'find'; select('others'); }));
     rh.appendChild(_rhythmCard('🌒 Async match', 'days', 'Play at your own pace; we notify you.',
-      () => _data.openAsync?.()));
+      () => { _createAsync = true; _othersView = 'find'; select('others'); }));
     body.appendChild(rh);
 
     const bf = document.createElement('div');
@@ -325,7 +325,7 @@ function _othersLanding(body) {
       `${battle ? '<span class="lg-battle-live">● live</span>' : '<span class="lg-battle-cta">View ▸</span>'}</div>` +
       `<div class="lg-battle-sub">Persistent 10v10 war — turns resolve at noon &amp; midnight.` +
       `${battle && battle.round != null ? ' · Round ' + battle.round : ''}</div>`;
-    bf.addEventListener('click', () => _data.openBattle?.());
+    bf.addEventListener('click', () => { _othersView = 'battle'; select('others'); });
     body.appendChild(bf);
 
     body.appendChild(_cap('Your games'));
@@ -362,15 +362,24 @@ function _othersFind(body) {
   body.appendChild(_cap('Create a game'));
   const opts = document.createElement('div');
   opts.className = 'lg-opts';
+  const modeSel = _plainSelect([['live', 'Live'], ['async', 'Async']], _createAsync ? 'async' : 'live');
+  modeSel.addEventListener('change', () => { _createAsync = modeSel.value === 'async'; select('others'); });
   const ppsSel  = _plainSelect([['1', '1v1'], ['2', '2v2'], ['3', '3v3'], ['4', '4v4']], '1');
   const mapSel  = _plainSelect([['skirmish', 'Skirmish'], ['standard', 'Standard'], ['regional', 'Regional']], 'standard');
   const privSel = _plainSelect([['false', 'Public'], ['true', 'Private (code)']], 'false');
+  const timeSel = _createAsync
+    ? _plainSelect([['43200000', '12 hours'], ['86400000', '1 day'], ['172800000', '2 days']], '86400000')
+    : _plainSelect([['60000', '60 sec'], ['90000', '90 sec'], ['120000', '2 min']], '90000');
+  opts.appendChild(_optWrap('Cadence', modeSel));
   opts.appendChild(_optWrap('Players', ppsSel));
   opts.appendChild(_optWrap('Map', mapSel));
+  opts.appendChild(_optWrap(_createAsync ? 'Per turn' : 'Turn timer', timeSel));
   opts.appendChild(_optWrap('Visibility', privSel));
   body.appendChild(opts);
   const createBtn = _button('＋ Create Game', 'gold', () => _data.lobby?.create?.({
-    playersPerSide: parseInt(ppsSel.value, 10), mapSize: mapSel.value, isPrivate: privSel.value === 'true',
+    playersPerSide: parseInt(ppsSel.value, 10), mapSize: mapSel.value,
+    isPrivate: privSel.value === 'true', isAsync: _createAsync,
+    turnIntervalMs: parseInt(timeSel.value, 10),
   }));
   createBtn.style.marginTop = '12px';
   body.appendChild(createBtn);
@@ -426,12 +435,26 @@ function _othersLobby(body, lobby) {
   head.className = 'lg-lobby-head';
   head.innerHTML =
     `<div><span class="gthc lg-lobby-title">Game Lobby</span>` +
-    `<div class="lg-lobby-sub">${pps}v${pps} · Live${cfg.mapSize ? ' · ' + cap(cfg.mapSize) : ''}</div></div>` +
+    `<div class="lg-lobby-sub">${pps}v${pps} · ${cfg.isAsync ? 'Async' : 'Live'}${cfg.mapSize ? ' · ' + cap(cfg.mapSize) : ''}</div></div>` +
     (lobby.isPrivate && lobby.code
       ? `<div class="lg-lobby-code"><div class="lbl">Private code</div><span class="gthc code">${esc(lobby.code)}</span></div>`
       : '');
   body.appendChild(head);
   const rule = document.createElement('div'); rule.className = 'ledger-rule'; body.appendChild(rule);
+
+  const link = _data.inviteLink?.();
+  if (link) {
+    const inviteRow = document.createElement('div');
+    inviteRow.className = 'lg-invite-row';
+    const copy = _button('📋 Copy invite link', 'ghost', () => {
+      navigator.clipboard?.writeText(link).then(() => {
+        copy.textContent = 'Copied ✓';
+        setTimeout(() => { copy.textContent = '📋 Copy invite link'; }, 1500);
+      }).catch(() => {});
+    });
+    inviteRow.appendChild(copy);
+    body.appendChild(inviteRow);
+  }
 
   // Players who haven't picked a side yet (the host starts here).
   if (unassigned.length) {
@@ -472,7 +495,28 @@ function _lobbySeat(lobby, slot, { myId, isHost, canClaim }) {
   if (slot.status === 'human') {
     const isMe = slot.playerId === myId;
     el.classList.add('is-human');
-    el.innerHTML = `<span class="nm">${esc(slot.name || 'Player')}${isMe ? ' · you' : ''}</span><span class="fac">${esc(cap(fac))}</span>`;
+    const nm = document.createElement('span');
+    nm.className = 'nm';
+    nm.textContent = (slot.name || 'Player') + (isMe ? ' · you' : '');
+    el.appendChild(nm);
+    if (isMe) {
+      // Switch your champion within your side.
+      const sel = document.createElement('select');
+      sel.className = 'lg-fac-select';
+      for (const f of (_data.factionsForSide?.(slot.side) || [])) {
+        const o = document.createElement('option');
+        o.value = f.id; o.textContent = f.name;
+        if (f.id === (slot.factionId || slot.faction)) o.selected = true;
+        sel.appendChild(o);
+      }
+      sel.addEventListener('change', () => _data.lobby?.setFaction?.(sel.value));
+      el.appendChild(sel);
+    } else {
+      const fc = document.createElement('span');
+      fc.className = 'fac';
+      fc.textContent = cap(fac);
+      el.appendChild(fc);
+    }
   } else if (slot.status === 'ai') {
     el.classList.add('is-ai');
     el.innerHTML = `<span class="nm">🤖 ${esc(slot.name || 'AI')}</span><span class="fac">${esc(cap(fac))}</span>`;
@@ -491,6 +535,39 @@ function _lobbySeat(lobby, slot, { myId, isHost, canClaim }) {
     el.appendChild(acts);
   }
   return el;
+}
+
+/** The Battle for Caleb's Hollow — native status panel + join (no legacy screen). */
+function _othersBattle(body) {
+  body.appendChild(_backRow('‹ Back', () => { _othersView = 'landing'; select('others'); }));
+  const token = ++_renderToken;
+  const loading = _empty('Reading the battlefield…');
+  body.appendChild(loading);
+  Promise.resolve(_data.battleStatus?.()).then((st) => {
+    if (token !== _renderToken) return;
+    loading.remove();
+    const b = st?.myBattle || (st?.battles && st.battles[0]) || null;
+    if (!b) { body.appendChild(_empty('No active Battle right now — check back at the next muster.')); return; }
+    const day = b.dayScore ?? 0, night = b.nightScore ?? 0, total = (day + night) || 1;
+    const pps = b.maxPerSide ?? 10;
+    const card = document.createElement('div');
+    card.className = 'lg-battle is-live';
+    card.innerHTML =
+      `<div class="lg-battle-head"><span class="gthc">⚔ The Battle for Caleb's Hollow</span><span class="lg-battle-live">● live</span></div>` +
+      `<div class="lg-battle-scorebar"><span class="d">☀ Day ${day}</span>` +
+      `<div class="track"><div class="fill" style="width:${Math.round(day / total * 100)}%"></div></div>` +
+      `<span class="n">${night} Night 🌙</span></div>` +
+      `<div class="lg-battle-sub">Persistent ${pps}v${pps} war${b.round != null ? ' · Round ' + b.round : ''}.</div>`;
+    body.appendChild(card);
+    const mySide = st?.mySide;
+    if (mySide) {
+      body.appendChild(_note(`You fight for ${mySide === 'day' ? '☀ Day' : '🌙 Night'}.`));
+    } else {
+      const j = _button('⚔ Join the Battle', 'purple', () => _data.joinBattle?.());
+      j.style.marginTop = '14px';
+      body.appendChild(j);
+    }
+  }).catch(() => { if (token === _renderToken) { loading.remove(); body.appendChild(_empty('Could not reach the Battle.')); } });
 }
 
 function _backRow(label, onClick) {
@@ -543,27 +620,86 @@ function _panelReplays(body) {
 /** Account — signed-in identity (sign-in/out via the existing auth dialog). */
 function _panelAccount(body) {
   const session = _data?.session?.();
-  if (session?.username) {
-    const card = document.createElement('div');
-    card.className = 'lg-account';
-    card.innerHTML =
-      `<img src="assets/char-paladin.png" alt="">` +
-      `<div class="lg-account-id"><div class="nm gthc">${esc(session.username)}</div>` +
-      `<div class="sub">${session.email ? esc(session.email) : 'passwordless — link an email to play across devices'}</div></div>`;
-    body.appendChild(card);
-    const actions = document.createElement('div');
-    actions.style.cssText = 'display:flex; gap:10px; margin-top:14px;';
-    actions.appendChild(_button('Manage account', 'ghost', () => _data?.openAccount?.()));
-    actions.appendChild(_button('Sign out', 'ghost', () => _data?.signOut?.()));
-    body.appendChild(actions);
-    body.appendChild(_note('Edit your name, link an email to play across devices, or set the server.'));
-  } else {
+  if (!session?.username) {
     body.appendChild(_empty('Not signed in.'));
-    const btn = _button('Sign in', 'gold', () => _data?.signIn?.(() => select('account')));
-    btn.style.marginTop = '14px';
-    body.appendChild(btn);
-    body.appendChild(_note('Passwordless — pick any name. Sign in to play online, async and the Battle.'));
+    body.appendChild(_signInForm(() => select('account')));
+    return;
   }
+  const card = document.createElement('div');
+  card.className = 'lg-account';
+  card.innerHTML =
+    `<img src="assets/char-paladin.png" alt="">` +
+    `<div class="lg-account-id"><div class="nm gthc">${esc(session.username)}</div>` +
+    `<div class="sub">${session.email ? esc(session.email) : 'passwordless'}</div></div>`;
+  body.appendChild(card);
+
+  body.appendChild(_cap('Change name'));
+  body.appendChild(_editRow('New name', 'text', (val, status) => {
+    status('Saving…');
+    Promise.resolve(_data?.setUsername?.(val)).then((r) => {
+      status(r?.ok ? 'Saved ✓' : (r?.error || 'Could not change name'), r?.ok);
+      if (r?.ok) setTimeout(() => select('account'), 700);
+    });
+  }));
+
+  body.appendChild(_cap('Link an email'));
+  body.appendChild(_editRow('you@example.com', 'email', (val, status) => {
+    status('Sending…');
+    Promise.resolve(_data?.linkEmail?.(val)).then((r) =>
+      status(r?.ok ? (r.message || 'Check your email ✓') : (r?.error || 'Could not send link'), r?.ok));
+  }));
+
+  const out = _button('Sign out', 'ghost', () => _data?.signOut?.());
+  out.style.marginTop = '18px';
+  body.appendChild(out);
+}
+
+/** Native passwordless sign-in form (no old auth dialog). */
+function _signInForm(onDone) {
+  const wrap = document.createElement('div');
+  wrap.style.marginTop = '14px';
+  const input = document.createElement('input');
+  input.className = 'lg-code-input';
+  input.placeholder = 'Choose a name';
+  input.maxLength = 24;
+  input.style.textTransform = 'none';
+  input.style.letterSpacing = '0';
+  const btn = _button('Sign in', 'gold', () => {
+    const name = input.value.trim();
+    if (name.length < 2) { input.focus(); return; }
+    _data?.signInWithName?.(name, onDone);
+  });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') btn.click(); });
+  const row = document.createElement('div');
+  row.className = 'lg-join-row';
+  row.appendChild(input);
+  row.appendChild(btn);
+  wrap.appendChild(row);
+  wrap.appendChild(_note('Passwordless — pick any name. Link an email later to play across devices.'));
+  return wrap;
+}
+
+/** Inline labelled input + Save button with a status line. */
+function _editRow(placeholder, type, onSubmit) {
+  const wrap = document.createElement('div');
+  const row = document.createElement('div');
+  row.className = 'lg-join-row';
+  const input = document.createElement('input');
+  input.className = 'lg-code-input';
+  input.placeholder = placeholder;
+  input.type = type;
+  input.style.textTransform = 'none';
+  input.style.letterSpacing = '0';
+  const status = document.createElement('span');
+  status.className = 'lg-edit-status';
+  const setStatus = (txt, ok) => { status.textContent = txt; status.className = 'lg-edit-status' + (ok ? ' ok' : ''); };
+  const btn = _button('Save', 'gold', () => { const v = input.value.trim(); if (v) onSubmit(v, setStatus); });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') btn.click(); });
+  row.appendChild(input);
+  row.appendChild(btn);
+  wrap.appendChild(row);
+  wrap.appendChild(status);
+  return wrap;
 }
 
 function _placeholderPanel(body, dest) {
@@ -585,7 +721,7 @@ function _resumeHero(row) {
     `</div>`;
   const actions = document.createElement('div');
   actions.className = 'lg-resume-actions';
-  actions.appendChild(_button('▶ Resume', 'gold', () => _data?.activate?.(row)));
+  actions.appendChild(_button('▶ Resume', 'gold', () => _activateRow(row)));
   wrap.querySelector('.lg-resume-body').appendChild(actions);
   return wrap;
 }
@@ -597,8 +733,18 @@ function _feedRow(row, cta = null) {
   el.innerHTML =
     `<div class="lg-feed-text"><div class="t">${esc(f.title)}</div><div class="m">${esc(f.meta || '')}</div></div>` +
     `<span class="lg-feed-cta">${cta || (row.action_needed ? 'your turn ▸' : 'open ▸')}</span>`;
-  el.addEventListener('click', () => _data?.activate?.(row));
+  el.addEventListener('click', () => _activateRow(row));
   return el;
+}
+
+// Activate a feed row WITHOUT ever falling into the legacy menu: campaign rows
+// launch natively, Battle rows open the native Battle view; everything else
+// (online resume, SP resume, replays) hands straight to the game screen.
+function _activateRow(row) {
+  if (row.kind === 'local-campaign') { _data?.startMission?.(row._slotIndex, row._missionDef?.id, true); return; }
+  if (row.kind === 'campaign-next') { _data?.startMission?.(row._slotIndex, row._nextMissionId, false); return; }
+  if (row.kind === 'battle' || row.kind === 'battle-invite') { _othersView = 'battle'; select('others'); return; }
+  _data?.activate?.(row);
 }
 
 function _missionRow(slot, m, status, index) {

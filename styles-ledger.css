@@ -192,6 +192,18 @@
 .lg-btn-purple:hover { background:rgba(155,89,182,.32); }
 
 /* Find a Game + native lobby */
+.lg-opts { flex-wrap:wrap; }
+.lg-opt { min-width:100px; }
+.lg-edit-status { font-size:12px; color:var(--lg-dim); margin-top:6px; display:inline-block; }
+.lg-edit-status.ok { color:var(--lg-green); }
+.lg-battle-scorebar { display:flex; align-items:center; gap:12px; font-size:14px; margin:10px 0 4px; }
+.lg-battle-scorebar .d { color:var(--lg-gold); white-space:nowrap; }
+.lg-battle-scorebar .n { color:var(--lg-purple-lt); white-space:nowrap; }
+.lg-battle-scorebar .track { flex:1; height:7px; border-radius:4px; background:var(--lg-night); overflow:hidden; }
+.lg-battle-scorebar .fill { height:100%; background:var(--lg-gold); }
+.lg-invite-row { margin-bottom:14px; }
+.lg-fac-select { background:rgba(8,9,14,.6); border:1px solid #2a2540; border-radius:4px; color:var(--lg-ink-2);
+  font-family:var(--lg-serif); font-size:12px; padding:3px 6px; cursor:pointer; }
 .lg-unassigned { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
 .lg-unassigned .lbl { font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--lg-label); }
 .lg-unassigned .chip { font-size:13px; padding:4px 11px; border:1px solid #2a2540; border-radius:12px; color:var(--lg-ink-2); }
