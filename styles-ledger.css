@@ -79,6 +79,72 @@
 /* shared section label */
 .lg-cap { font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--lg-label); }
 
+/* ── Panel content ────────────────────────────────────────────────────────── */
+.ledger-pane-body { flex:1; min-height:0; display:flex; flex-direction:column; }
+.lg-cap { margin:18px 0 9px; }
+.lg-cap:first-child { margin-top:0; }
+.lg-note { font-size:13px; color:var(--lg-faint); font-style:italic; margin-top:14px; }
+
+/* buttons */
+.lg-btn { font-family:var(--lg-serif); font-size:15px; padding:11px 24px; border-radius:4px; cursor:pointer; border:1px solid; }
+.lg-btn-sm { font-size:12px; padding:5px 14px; }
+.lg-btn-gold  { border-color:var(--lg-gold-dim); background:rgba(212,167,44,.18); color:var(--lg-gold); }
+.lg-btn-gold:hover  { background:rgba(212,167,44,.3); }
+.lg-btn-ghost { border-color:rgba(255,255,255,.16); background:rgba(255,255,255,.04); color:var(--lg-ink-2); }
+.lg-btn-ghost:hover { background:rgba(255,255,255,.09); }
+
+/* Continue — resume hero */
+.lg-resume { display:flex; gap:20px; background:rgba(40,32,18,.42); border:1px solid rgba(212,167,44,.34);
+  border-radius:6px; padding:16px; margin-bottom:20px; }
+.lg-resume-thumb { width:170px; height:108px; flex:none; border-radius:4px; display:flex; align-items:center; justify-content:center;
+  font-size:40px; color:rgba(245,200,66,.5); background:radial-gradient(circle at 50% 40%, rgba(40,32,18,.9), rgba(8,9,13,.95)); border:1px solid rgba(212,167,44,.2); }
+.lg-resume-body { flex:1; min-width:0; display:flex; flex-direction:column; }
+.lg-resume-kicker { font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--lg-gold-dim); margin-bottom:4px; }
+.lg-resume-title { font-family:var(--lg-display); font-weight:600; font-size:28px; color:var(--lg-ink); line-height:1.02; }
+.lg-resume-meta { font-size:14px; color:var(--lg-dim); margin:6px 0 2px; }
+.lg-resume-actions { margin-top:auto; display:flex; gap:10px; padding-top:10px; }
+
+/* feed rows (Continue "also waiting", Replays) */
+.lg-feed { display:flex; flex-direction:column; gap:9px; }
+.lg-feed-row { display:flex; align-items:center; gap:14px; background:rgba(16,18,26,.66); border:1px solid #232036;
+  border-radius:5px; padding:10px 14px; cursor:pointer; }
+.lg-feed-row:hover { border-color:#33304a; background:rgba(20,22,32,.8); }
+.lg-feed-row.is-action { border-color:rgba(76,175,125,.4); }
+.lg-feed-text { flex:1; min-width:0; }
+.lg-feed-text .t { font-size:15px; color:#d4c9b0; }
+.lg-feed-text .m { font-size:12px; color:var(--lg-faint); }
+.lg-feed-cta { font-size:13px; color:var(--lg-purple-lt); white-space:nowrap; }
+.lg-feed-row.is-action .lg-feed-cta { color:var(--lg-green); }
+
+/* Campaign — slots + chronicle */
+.lg-slots { display:flex; gap:12px; margin-bottom:4px; }
+.lg-slot { flex:1; border:1px solid #232036; background:rgba(16,18,26,.6); border-radius:5px; padding:11px 13px; cursor:pointer; }
+.lg-slot.is-active { border-color:rgba(212,167,44,.4); background:rgba(40,32,18,.4); }
+.lg-slot.is-empty { border-style:dashed; border-color:#33304a; background:rgba(16,18,26,.4); display:flex; align-items:center;
+  justify-content:center; text-align:center; cursor:default; }
+.lg-slot-new { font-size:13px; color:#6a6356; }
+.lg-slot-tag { font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--lg-gold-dim); }
+.lg-slot.is-active .lg-slot-tag { color:var(--lg-gold-dim); }
+.lg-slot-title { font-family:var(--lg-display); font-size:19px; color:var(--lg-ink); line-height:1.1; }
+.lg-slot-sub { font-size:11px; color:var(--lg-faint); }
+.lg-chronicle { display:flex; flex-direction:column; overflow:auto; }
+.lg-mission { display:flex; align-items:center; gap:15px; padding:10px 6px; border-bottom:1px solid rgba(255,255,255,.05); border-radius:4px; }
+.lg-mission.is-current { background:rgba(212,167,44,.08); }
+.lg-mission-n { font-size:17px; width:30px; flex:none; color:var(--lg-faint); }
+.lg-mission.is-done .lg-mission-n { color:var(--lg-green); }
+.lg-mission.is-current .lg-mission-n { color:var(--lg-gold); }
+.lg-mission-name { flex:1; font-size:16px; color:#e8dfc8; }
+.lg-mission.is-locked .lg-mission-name { color:#6a6356; }
+.lg-mission-mark { font-size:14px; color:var(--lg-faint); }
+.lg-mission.is-done .lg-mission-mark { color:var(--lg-green); }
+
+/* Account */
+.lg-account { display:flex; align-items:center; gap:14px; background:rgba(16,18,26,.66); border:1px solid #2a2540;
+  border-radius:7px; padding:14px 16px; }
+.lg-account img { width:48px; height:48px; border-radius:50%; object-fit:cover; border:1px solid rgba(212,167,44,.4); }
+.lg-account-id .nm { font-family:var(--lg-display); font-size:22px; color:var(--lg-ink); line-height:1; }
+.lg-account-id .sub { font-size:13px; color:var(--lg-faint); margin-top:3px; }
+
 /* ── MOBILE: rail → bottom bar ────────────────────────────────────────────── */
 @media (max-width:720px) {
   .ledger-frame { flex-direction:column; }

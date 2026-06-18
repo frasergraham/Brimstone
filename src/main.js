@@ -9663,15 +9663,93 @@ if (_scenarioParam) {
   catch (e) { console.error('Bad ?scenario= JSON:', e); }
 }
 
-// Dev preview for the new "Ledger" menu (Direction B redesign, WIP): `?ledger`
-// shows the rail+ledger frame over the legacy menu so it can be built and
-// browser-verified before the single cutover. At cutover this becomes the live
-// menu and the legacy #setup-screen toggle here is removed.
+// ── Ledger menu data layer (Direction B redesign) ───────────────────────────
+// The Ledger is DOM/render-only; main.js owns the data + actions and injects
+// them. Everything here REUSES the existing menu plumbing (the unified games
+// feed, campaign saves, replays, row activation, auth) — see docs + the impl
+// plan. These helpers + the ?ledger hook relocate into the live boot at cutover.
+
+// Replay rows (completed SP + MP), row-shape identical to _renderReplaysList's.
+// (That function still builds its own for the legacy menu; at cutover it should
+// delegate here. Duplicated for now so the live menu is untouched.)
+async function _collectReplayRows() {
+  const rows = [];
+  try {
+    _pruneCompletedSpGames();
+    const modeLabels = { hero: '⚔ vs AI', witch: '✦ vs AI', 'two-players': '👥 Two Players' };
+    for (const g of _loadCompletedSpIndex()) {
+      const winnerLabel = g.winner === 'hero' ? 'Hero wins' : 'Witch wins';
+      rows.push({ kind: 'completed-sp', room_id: g.id, win_reason: g.winReason,
+        title: `${modeLabels[g.mode] ?? g.mode} — ${winnerLabel}${g.pinned ? ' 📌' : ''}`,
+        total_rounds: g.totalRounds, action_needed: false, turn_deadline: null,
+        updated_at: g.createdAt ?? 0, is_local: true, _completedMeta: g });
+    }
+  } catch {}
+  const session = loadSession();
+  if (session) {
+    try {
+      const base = window.BRIMSTONE_SERVER || '';
+      const res = await fetch(`${base}/api/completed-games?token=${encodeURIComponent(session.token)}`);
+      if (res.ok) for (const g of await res.json()) {
+        let players = []; try { players = JSON.parse(g.players_json || '[]'); } catch {}
+        const pps = players.length ? players.filter(p => p.faction === 'hero').length : 1;
+        const myFaction = players.length
+          ? (players.find(p => p.playerId === session?.id)?.faction ?? 'hero')
+          : (g.hero_player_id === session?.id ? 'hero' : 'witch');
+        const resultLabel = g.winner === myFaction ? 'Victory' : 'Defeat';
+        const icon = g.winner === 'hero' ? '⚔' : '✦';
+        rows.push({ kind: 'completed-mp', room_id: g.game_id, win_reason: g.win_reason,
+          title: (pps > 1 ? `${icon} ${pps}v${pps} — ${resultLabel}` : `${icon} ${g.hero_name} vs ${g.witch_name} — ${resultLabel}`) + (g.pinned ? ' 📌' : ''),
+          total_rounds: g.total_rounds, action_needed: false, turn_deadline: null,
+          updated_at: g.created_at ?? 0, _replayMeta: g });
+      }
+    } catch {}
+  }
+  return rows;
+}
+
+// Per-slot campaign chronicle for the Ledger's Campaign destination.
+function _ledgerCampaignData() {
+  const camp = CAMPAIGNS.find(c => !c.disabled) || CAMPAIGNS[0];
+  if (!camp) return null;
+  const slots = [];
+  for (let slot = 1; slot <= CAMPAIGN_SLOT_COUNT; slot++) {
+    const c = new Campaign(camp, slot);
+    if (!c.load()) { slots.push({ slot, empty: true }); continue; }
+    slots.push({
+      slot, empty: false,
+      completedCount: c.completedMissions?.size ?? 0,
+      updatedAt: c.updatedAt ?? 0,
+      isComplete: c.isComplete?.() ?? false,
+      nextMissionId: c.getNextMission?.() ?? null,
+      missions: c.getMissionList?.() ?? [],
+      _campaignDef: camp,
+    });
+  }
+  const active = slots.filter(s => !s.empty).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0] || slots[0];
+  return { campaignId: camp.id, title: camp.title, slots, activeSlot: active };
+}
+
+// The injected data/action surface the Ledger renders against.
+function _buildLedgerData() {
+  return {
+    session:     () => loadSession(),
+    activeGames: async () => (await _fetchAllGames()).rows,
+    replays:     () => _collectReplayRows(),
+    campaign:    () => _ledgerCampaignData(),
+    activate:    (row) => _mmDefaultRowClick(row),   // resume / open / replay
+    signIn:      (cb) => _showAuthDialog(cb),
+  };
+}
+
+// Dev preview for the new "Ledger" menu (WIP): `?ledger` shows the rail+ledger
+// frame over the legacy menu so it can be built + browser-verified before the
+// single cutover. At cutover this becomes the live menu (legacy toggle removed).
 if (new URLSearchParams(location.search).get('ledger') != null) {
   import('./menu/ledger.js').then(({ initLedger }) => {
     document.getElementById('setup-screen')?.style.setProperty('display', 'none');
     const session = loadSession();
-    initLedger({ playerName: session?.username || 'Wanderer' })?.show();
+    initLedger({ playerName: session?.username || 'Wanderer', data: _buildLedgerData() })?.show();
   }).catch((e) => console.error('Ledger preview load failed:', e));
 }
 
