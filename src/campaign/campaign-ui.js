@@ -6,6 +6,7 @@ import { ENTITY_COLOR, EntityType, getEquippedWeaponIdOf } from '../entities.js'
 import { xpForLevel } from '../balance.js';
 import { ITEMS } from '../items.js';
 import { WEAPON_LABEL } from '../tiles.js';
+import { ABILITIES } from '../abilities.js';
 
 // ── Campaign mid-mission save/resume ────────────────────────────────────────
 // Mid-mission saves are slot-aware so a mission-in-progress in one save slot
@@ -236,53 +237,6 @@ export function weaponStatString(id) {
   return parts.join(' · ');
 }
 
-/**
- * One weapon row: glyph, name, stat string, and controls. The equipped weapon
- * shows a ✓ badge plus an Unequip control that banks it in the shared armory
- * (equipped slot → pool, no replacement); a carried (backpack) weapon gets an
- * Equip control plus a Stow control that returns it to the shared armory (so
- * another unit can take it). `idx` ('leader' or a roster index) is stamped onto
- * every control.
- */
-function weaponRowHTML(id, count, idx, isEquipped) {
-  const name = weaponName(id);
-  const stats = weaponStatString(id);
-  const n = count > 1 ? ` <span class="cprog-w-n">×${count}</span>` : '';
-  const statHtml = stats ? `<span class="cprog-w-stats">${stats}</span>` : '';
-  const ctrl = isEquipped
-    ? '<span class="cprog-w-eq" title="Equipped">✓ Equipped</span>'
-      + `<button class="cprog-unequip-btn" data-idx="${idx}" data-weapon="${id}" title="Unequip ${name} into the shared armory">⊘ Unequip</button>`
-    : `<button class="cprog-equip-btn" data-idx="${idx}" data-weapon="${id}" title="Equip ${name}">Equip</button>`
-      + `<button class="cprog-return-btn" data-idx="${idx}" data-weapon="${id}" title="Stow ${name} in the shared armory">↩ Stow</button>`;
-  return `<div class="cprog-weapon${isEquipped ? ' equipped' : ''}" data-weapon="${id}">
-    <span class="cprog-w-glyph">${itemGlyph(id)}</span>
-    <span class="cprog-w-name">${name}${n}</span>
-    ${statHtml}
-    ${ctrl}
-  </div>`;
-}
-
-/**
- * One shared-armory weapon row: glyph, name, stat string, and an Equip control
- * per candidate unit (the leader + the active squad) — clicking one draws the
- * weapon out of the shared pool and onto that unit. `targets` is
- * `[{ idx, label }]` where `idx` is 'leader' or a roster index.
- */
-function poolWeaponRowHTML(id, count, targets) {
-  const name = weaponName(id);
-  const stats = weaponStatString(id);
-  const n = count > 1 ? ` <span class="cprog-w-n">×${count}</span>` : '';
-  const statHtml = stats ? `<span class="cprog-w-stats">${stats}</span>` : '';
-  const btns = targets.map(t =>
-    `<button class="cprog-pool-equip-btn" data-idx="${t.idx}" data-weapon="${id}" title="Equip ${name} on ${t.label}">▸ ${t.label}</button>`
-  ).join('');
-  return `<div class="cprog-pool-weapon" data-weapon="${id}">
-    <span class="cprog-w-glyph">${itemGlyph(id)}</span>
-    <span class="cprog-w-name">${name}${n}</span>
-    ${statHtml}
-    <div class="cprog-pool-equip">${btns}</div>
-  </div>`;
-}
 
 /**
  * The shared-armory block for the Shared Inventory section: every pooled weapon
@@ -290,17 +244,9 @@ function poolWeaponRowHTML(id, count, targets) {
  * @param {object} weapons  shared pool, `{ weaponId: { count } }`
  * @param {{idx:(number|'leader'), label:string}[]} targets  equip candidates
  */
-function inventoryGridHTML(weapons, resources) {
+/** Resource slots (display only) — the whole stockpile travels to every mission. */
+function resourceGridHTML(resources) {
   const slots = [];
-  for (const [id, e] of Object.entries(weapons || {})) {
-    const count = (e && typeof e === 'object') ? (e.count ?? 0) : (e ?? 0);
-    if (count < 1 || !isWeapon(id)) continue;
-    const stat = weaponStatString(id);
-    slots.push(`<div class="cprog-slot is-weapon" draggable="true" data-from="pool" data-weapon="${id}" title="${weaponName(id)}${stat ? ' — ' + stat : ''}">`
-      + `<span class="cprog-slot-glyph">${itemGlyph(id)}</span>`
-      + (count > 1 ? `<span class="cprog-slot-n">×${count}</span>` : '')
-      + `<span class="cprog-slot-name">${weaponName(id)}</span></div>`);
-  }
   for (const [k, v] of Object.entries(resources || {})) {
     if (!(v > 0)) continue;
     slots.push(`<div class="cprog-slot is-resource" title="${k}">`
@@ -308,10 +254,32 @@ function inventoryGridHTML(weapons, resources) {
       + `<span class="cprog-slot-n">×${v}</span>`
       + `<span class="cprog-slot-name">${k}</span></div>`);
   }
-  // Pad to a tidy grid + guarantee drop targets even when the pool is sparse.
-  const pad = Math.max(2, 8 - slots.length);
+  if (!slots.length) return '<div class="cprog-empty">No resources gathered yet.</div>';
+  return `<div class="cprog-inv-grid is-resources">${slots.join('')}</div>`;
+}
+
+/**
+ * Equipment slots — the shared weapon armory (the bench). Each weapon is a
+ * two-wide draggable slot showing its name + stats; the grid is a drop target so
+ * a weapon dragged off a unit lands back here. Only weapons a unit actually
+ * carries reach the mission, so anything left in this pool stays behind.
+ */
+function equipmentGridHTML(weapons) {
+  const slots = [];
+  for (const [id, e] of Object.entries(weapons || {})) {
+    const count = (e && typeof e === 'object') ? (e.count ?? 0) : (e ?? 0);
+    if (count < 1 || !isWeapon(id)) continue;
+    const stat = weaponStatString(id);
+    slots.push(`<div class="cprog-slot is-weapon" draggable="true" data-from="pool" data-weapon="${id}" title="${weaponName(id)}${stat ? ' — ' + stat : ''}">`
+      + `<span class="cprog-slot-glyph">${itemGlyph(id)}</span>`
+      + `<span class="cprog-slot-info">`
+      + `<span class="cprog-slot-name">${weaponName(id)}${count > 1 ? ` ×${count}` : ''}</span>`
+      + (stat ? `<span class="cprog-slot-stats">${stat}</span>` : '')
+      + `</span></div>`);
+  }
+  const pad = Math.max(2, 6 - slots.length);
   for (let i = 0; i < pad; i++) slots.push('<div class="cprog-slot is-empty"></div>');
-  return `<div class="cprog-inv-grid" data-drop="pool">${slots.join('')}</div>`;
+  return `<div class="cprog-inv-grid is-equipment" data-drop="pool">${slots.join('')}</div>`;
 }
 
 /**
@@ -355,6 +323,30 @@ function weaponSlotsHTML(unit, idx) {
     }
   }
   return `<div class="cprog-wslots">${slots.join('')}</div>`;
+}
+
+/**
+ * In-game-style stat line: ATK / DEF / RNG / AGI (folding the equipped weapon's
+ * mods + range, like the in-game Unit Stats Bar) plus the unit's special-ability
+ * badges. Mirrors src/ui.js's usb-stat presentation.
+ */
+function unitStatsHTML(unit) {
+  const eqId = getEquippedWeaponIdOf(unit.items || {});
+  const w = eqId ? ITEMS[eqId] : null;
+  const atk = (unit.attack ?? 0) + (w?.statMods?.attack || 0);
+  const def = (unit.defense ?? 0) + (w?.statMods?.defense || 0);
+  const rng = w?.range || 1;
+  const agi = unit.agility ?? 0;
+  const stat = (lbl, val, title) =>
+    `<span class="cprog-ustat"${title ? ` title="${title}"` : ''}>${lbl} <b>${val}</b></span>`;
+  let html = `<div class="cprog-ustats">${stat('ATK', atk)}${stat('DEF', def)}${stat('RNG', rng)}` +
+    `${stat('AGI', agi, 'Agility — higher acts earlier each turn')}</div>`;
+  const abilities = (unit.abilities || []).map((id) => ABILITIES[id]?.label).filter(Boolean);
+  if (abilities.length) {
+    html += `<div class="cprog-uabilities">${abilities.map((l) =>
+      `<span class="cprog-uability" title="${l}">✦ ${l}</span>`).join('')}</div>`;
+  }
+  return html;
 }
 
 /** Row for a unit's carried non-weapon items — icon + name (e.g. "📯 Horn"). */
@@ -420,7 +412,7 @@ export function progressUnitCardHTML(unit, opts = {}) {
       <div class="cprog-track"><div class="cprog-fill xp" style="width:${xpPct}%"></div></div>
       <span class="cprog-bar-num">${into}/${span}</span>
     </div>
-    <div class="cprog-statline"><span class="cprog-stat">⚔ ${unit.attack}</span><span class="cprog-stat">🛡 ${unit.defense}</span></div>
+    ${unitStatsHTML(unit)}
     ${weaponSlotsHTML(unit, idx)}
     ${itemRowHTML(unit.items)}
     ${healHtml}
@@ -461,6 +453,8 @@ export function partyPaneHTML(heroStats, roster, activeIndices, maxActive, opts 
     color: ENTITY_COLOR[EntityType.PALADIN],
     hp: heroStats.hp, maxHp: heroStats.maxHp,
     attack: heroStats.attack, defense: heroStats.defense,
+    agility: heroStats.agility ?? 6,    // paladin base agility (UNIT_TYPES.paladin)
+    abilities: heroStats.abilities || [],
     level: heroStats.level, xp: heroStats.xp,
     items: heroStats.items,
   };
@@ -510,9 +504,12 @@ export function partyPaneHTML(heroStats, roster, activeIndices, maxActive, opts 
   // them) plus raw resources. The grid is a drop target — a weapon dragged off a
   // unit lands back here.
   html += '<div class="cprog-shared">';
-  html += '<div class="cprog-section-label">Shared Inventory ' +
-    '<span class="cprog-inv-hint">drag a weapon onto a unit · drop here to stow</span></div>';
-  html += inventoryGridHTML(opts.weapons, resources);
+  html += '<div class="cprog-section-label">Resources ' +
+    '<span class="cprog-inv-hint">the whole stockpile is available in every mission</span></div>';
+  html += resourceGridHTML(resources);
+  html += '<div class="cprog-section-label">Equipment ' +
+    '<span class="cprog-inv-hint">drag a weapon onto a unit — only weapons your active units carry reach the mission</span></div>';
+  html += equipmentGridHTML(opts.weapons);
   html += '</div>';
 
   return html;
@@ -525,6 +522,8 @@ function _survivorUnit(s) {
     assetId: Renderer.survivorAssetId(s.title) || 'survivor_innkeeper',
     color: s.color || ENTITY_COLOR.survivor,
     hp: s.hp, maxHp: s.maxHp, attack: s.attack, defense: s.defense,
+    agility: s.agility ?? 4,            // survivor base agility (UNIT_TYPES.survivor)
+    abilities: s.abilities || [],
     level: s.level, xp: s.xp, items: s.items,
   };
 }

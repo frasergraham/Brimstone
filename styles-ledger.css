@@ -221,6 +221,13 @@
 .lg-party .cprog-card.reserve .cprog-portrait, .lg-party .cprog-card.reserve .cprog-glyph { width:30px; height:30px; }
 .lg-party .cprog-name { font-size:.8rem; }
 
+/* In-game-style unit stats (ATK/DEF/RNG/AGI) + ability badges */
+.lg-party .cprog-ustats { display:flex; flex-wrap:wrap; gap:7px; margin-top:6px; }
+.lg-party .cprog-ustat { font-size:10px; color:var(--lg-faint); letter-spacing:.03em; }
+.lg-party .cprog-ustat b { color:var(--lg-ink-2); font-weight:600; }
+.lg-party .cprog-uabilities { display:flex; flex-wrap:wrap; gap:4px; margin-top:5px; }
+.lg-party .cprog-uability { font-size:9.5px; color:var(--lg-purple-lt); border:1px solid rgba(155,89,182,.3); border-radius:8px; padding:1px 6px; }
+
 /* Weapon slots on unit cards (drag to/from the inventory; click to equip) */
 .lg-party .cprog-wslots { display:flex; gap:5px; margin-top:7px; }
 .lg-party .cprog-wslot { position:relative; width:34px; height:34px; border:1px solid #2a2540; border-radius:5px;
@@ -242,19 +249,26 @@
 /* Shared inventory as a slot grid */
 .lg-party .cprog-shared { margin-top:16px; }
 .lg-party .cprog-inv-hint { font-size:10px; font-weight:400; text-transform:none; letter-spacing:0; color:var(--lg-faint); margin-left:8px; }
-.lg-party .cprog-inv-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(72px,1fr)); gap:7px; margin-top:8px;
+.lg-party .cprog-inv-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(76px,1fr)); grid-auto-rows:60px; gap:7px; margin-top:8px;
   border:1px solid #232036; border-radius:6px; padding:9px; background:rgba(8,9,14,.3); transition:border-color .12s, background .12s; }
 .lg-party .cprog-inv-grid.is-drop { border-color:var(--lg-purple); background:rgba(155,89,182,.08); }
-.lg-party .cprog-slot { position:relative; aspect-ratio:1/1; min-height:60px; border:1px solid #2a2540; border-radius:5px;
+.lg-party .cprog-slot { position:relative; border:1px solid #2a2540; border-radius:5px;
   background:rgba(16,18,26,.6); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; padding:3px; }
-.lg-party .cprog-slot.is-weapon { cursor:grab; }
+/* Weapons are two boxes wide so their name + stats fit beside the icon. */
+.lg-party .cprog-slot.is-weapon { grid-column:span 2; flex-direction:row; align-items:center; justify-content:flex-start; gap:8px; padding:6px 10px; cursor:grab; text-align:left; }
 .lg-party .cprog-slot.is-weapon:hover { border-color:var(--lg-purple); }
+.lg-party .cprog-slot-info { display:flex; flex-direction:column; min-width:0; flex:1; gap:1px; }
+.lg-party .cprog-slot.is-weapon .cprog-slot-glyph { flex-shrink:0; }
+.lg-party .cprog-slot.is-weapon .cprog-slot-name { font-size:12px; color:var(--lg-ink-2); text-align:left; }
+.lg-party .cprog-slot-stats { font-size:10px; color:var(--lg-gold-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .lg-party .cprog-slot.is-empty { border-style:dashed; border-color:#241f38; background:transparent; }
 .lg-party .cprog-slot.is-dragging { opacity:.4; }
 .lg-party .cprog-slot-glyph { font-size:20px; line-height:1; }
 .lg-party .cprog-slot-name { font-size:9px; color:var(--lg-faint); text-align:center; line-height:1.1; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .lg-party .cprog-slot-n { position:absolute; top:2px; right:4px; font-size:9px; color:var(--lg-ink-2); }
 .lg-party .cprog-card[data-drop].is-drop { outline:1px solid var(--lg-purple); outline-offset:1px; }
+/* Footer breathing room so the inventory doesn't butt against the screen edge. */
+.lg-party { padding-bottom:40px; }
 
 /* Mission briefing */
 .lg-brief-head { margin-bottom:4px; }

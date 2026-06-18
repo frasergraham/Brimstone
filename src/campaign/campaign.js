@@ -117,6 +117,7 @@ export function snapshotSurvivor(entity) {
     maxHp:        entity.maxHp,
     attack:       entity.attack,
     defense:      entity.defense,
+    agility:      entity.agility,
     // Campaign veterancy — carry level + accumulated XP between missions. Before
     // this, static levels evaporated and survivors reset to L1 each mission.
     level:        entity.level || 1,
