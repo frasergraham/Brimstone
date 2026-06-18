@@ -9950,9 +9950,24 @@ function _buildLedgerData() {
 // single cutover. At cutover this becomes the live menu (legacy toggle removed).
 if (new URLSearchParams(location.search).get('ledger') != null) {
   import('./menu/ledger.js').then(({ initLedger }) => {
-    document.getElementById('setup-screen')?.style.setProperty('display', 'none');
+    const ss = document.getElementById('setup-screen');
+    ss?.style.setProperty('display', 'none');
     const session = loadSession();
-    initLedger({ playerName: session?.username || 'Wanderer', data: _buildLedgerData() })?.show();
+    const api = initLedger({ playerName: session?.username || 'Wanderer', data: _buildLedgerData() });
+    api?.show();
+    // Sticky: in ?ledger mode the legacy menu must NEVER reappear. If anything
+    // (e.g. game-over → back to menu) shows #setup-screen while we're not in a
+    // game, hide it and re-show the ledger on Continue (with fresh saves).
+    if (ss && api) {
+      new MutationObserver(() => {
+        const inGame = getComputedStyle(document.getElementById('game-screen')).display !== 'none';
+        if (!inGame && getComputedStyle(ss).display !== 'none') {
+          ss.style.setProperty('display', 'none');
+          api.show();
+          api.select('continue');
+        }
+      }).observe(ss, { attributes: true, attributeFilter: ['style'] });
+    }
   }).catch((e) => console.error('Ledger preview load failed:', e));
 }
 
