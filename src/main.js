@@ -52,7 +52,7 @@ import { nodeController } from './game.js';
 import { MissionConductor, areHintsSuppressed, markHintsSeen, resetAllHintsForCampaign } from './mission-conductor.js';
 import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel, getEquippedWeaponIdOf, normalizeItems, flattenItemCounts } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
-import { Campaign, CAMPAIGN_SLOT_COUNT, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
+import { Campaign, CAMPAIGN_SLOT_COUNT, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
 import { processStoryTriggers } from './campaign/missions.js';
 import { MissionLogicEngine } from './mission-logic/engine.js';
@@ -3843,7 +3843,10 @@ function _resumeCampaignMission(missionId) {
   if (missionDef.logic) _attachMissionLogic(existingState, missionDef);
   existingState.fogOfWar = existingState.fogOfWar || 'partial';
   if (missionDef.lootOverrides) existingState.lootOverrides = missionDef.lootOverrides;
-  if (missionDef.aiBudgetBonus) existingState.campaignAIBudgetBonus = missionDef.aiBudgetBonus;
+  // Re-resolve the (possibly dynamic) witch budget bonus. completedMissions is
+  // stable across a mission, so this matches the value baked in at mission start.
+  const budgetBonus = effectiveAiBudgetBonus(missionDef, _activeCampaign);
+  if (budgetBonus) existingState.campaignAIBudgetBonus = budgetBonus;
 
   // Hide setup, show game
   document.getElementById('setup-screen').style.display = 'none';
@@ -4707,10 +4710,11 @@ function _initCampaignMission(missionDef) {
     state.phase = phaseForRound(1, state.cycleConfig);
   }
 
-  // Campaign AI budget bonus for harder waves
-  if (missionDef.aiBudgetBonus) {
-    state.campaignAIBudgetBonus = missionDef.aiBudgetBonus;
-  }
+  // Campaign AI budget bonus (extra witch actions/turn). May be a static int or
+  // a dynamic "missing_wins" rule resolved against campaign progress — e.g. the
+  // Long Watch eases as more neighbouring villages were cleared.
+  const budgetBonus = effectiveAiBudgetBonus(missionDef, _activeCampaign);
+  if (budgetBonus) state.campaignAIBudgetBonus = budgetBonus;
 
   // Apply per-mission loot table overrides
   if (missionDef.lootOverrides) {

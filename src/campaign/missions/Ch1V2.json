@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "campaignId": "calebs_hollow_prologue",
+  "id": "village_thornwick",
+  "title": "Thornwick",
+  "chapter": 1,
+  "briefing": "Thornwick clings to a bramble-choked ridge two days north. Its three wells have become power nodes, and the witch's minions prowl the hedgerows. Seize the wells and break her hold on the ridge.",
+  "victoryText": "Thornwick's wells run clear again. The brambles wither and the ridge is yours.",
+  "defeatText": "The thorns close over Thornwick. Its wells pulse with her ritual still.",
+  "mapSize": "skirmish",
+  "hasWitch": true,
+  "aiPersonality": "swarm",
+  "nodeScoreThreshold": 3,
+  "disableScoring": false,
+  "healBonus": 25,
+  "requires": ["dark_ritual"],
+  "rewards": { "wood": 2, "herbs": 1 },
+  "map": { "mode": "procedural", "seed": 31112, "mapSize": "skirmish", "nodeCount": 3 },
+  "objectives": {
+    "win": [
+      { "type": "slay_witch" },
+      { "type": "control_nodes" }
+    ],
+    "lose": [
+      { "type": "hero_killed" },
+      { "type": "witch_score_threshold", "points": 3 }
+    ]
+  }
+}

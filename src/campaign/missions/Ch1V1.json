@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "campaignId": "calebs_hollow_prologue",
+  "id": "village_marsh_end",
+  "title": "Marsh's End",
+  "chapter": 1,
+  "briefing": "Word reaches you of Marsh's End, a sodden hamlet a day's ride east of the Hollow. The witch's reach has crept into its bogs and the power nodes pulse with her ritual. Drive her back and hold the nodes before her grip tightens.",
+  "victoryText": "Marsh's End is free. The bog-lights dim and the villagers breathe easier — one more hamlet beyond the witch's reach.",
+  "defeatText": "The marsh swallows the last of the light. Marsh's End belongs to her now.",
+  "mapSize": "skirmish",
+  "hasWitch": true,
+  "aiPersonality": "balanced",
+  "nodeScoreThreshold": 3,
+  "disableScoring": false,
+  "healBonus": 25,
+  "requires": ["dark_ritual"],
+  "rewards": { "food": 2, "herbs": 1 },
+  "map": { "mode": "procedural", "seed": 31001, "mapSize": "skirmish", "nodeCount": 2 },
+  "objectives": {
+    "win": [
+      { "type": "slay_witch" },
+      { "type": "control_nodes" }
+    ],
+    "lose": [
+      { "type": "hero_killed" },
+      { "type": "witch_score_threshold", "points": 3 }
+    ]
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "campaignId": "calebs_hollow_prologue",
+  "id": "village_gallows_ferry",
+  "title": "Gallows Ferry",
+  "chapter": 1,
+  "briefing": "Gallows Ferry guards the only crossing for miles. The witch means to hold its three landings and ferry her dead across the river. Take the landings and deny her the crossing.",
+  "victoryText": "The ferry runs for the living once more. Gallows Ferry holds the line.",
+  "defeatText": "The ferry carries only the dead now. Gallows Ferry is lost.",
+  "mapSize": "standard",
+  "hasWitch": true,
+  "aiPersonality": "balanced",
+  "nodeScoreThreshold": 4,
+  "disableScoring": false,
+  "healBonus": 25,
+  "requires": ["dark_ritual"],
+  "rewards": { "food": 2, "wood": 2 },
+  "map": { "mode": "procedural", "seed": 31003, "mapSize": "standard", "nodeCount": 3 },
+  "objectives": {
+    "win": [
+      { "type": "slay_witch" },
+      { "type": "control_nodes" }
+    ],
+    "lose": [
+      { "type": "hero_killed" },
+      { "type": "witch_score_threshold", "points": 4 }
+    ]
+  }
+}

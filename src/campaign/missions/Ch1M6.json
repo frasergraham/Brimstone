@@ -54,7 +54,17 @@
   ],
   "aiPersonality": "evasive",
   "heroPersonality": "node_denier",
-  "aiBudgetBonus": 0,
+  "aiBudgetBonus": {
+    "type": "missing_wins",
+    "of": [
+      "village_marsh_end",
+      "village_thornwick",
+      "village_gallows_ferry",
+      "village_ashford_mill",
+      "village_blackfen"
+    ],
+    "target": 5
+  },
   "maxSurvivorsFromRoster": 3,
   "missionSurvivors": 1,
   "minSurvivors": 2,
@@ -72,6 +82,18 @@
   "requires": [
     "dark_ritual"
   ],
+  "unlock": {
+    "anyOf": {
+      "count": 3,
+      "of": [
+        "village_marsh_end",
+        "village_thornwick",
+        "village_gallows_ferry",
+        "village_ashford_mill",
+        "village_blackfen"
+      ]
+    }
+  },
   "map": {
     "mode": "handmade",
     "cols": 13,

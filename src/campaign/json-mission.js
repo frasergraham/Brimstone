@@ -272,6 +272,24 @@ export function validateMissionJSON(m) {
     catch (err) { _fail(err.message); }
   }
 
+  // aiBudgetBonus — a static integer of extra witch actions/turn, OR a dynamic
+  // bonus that scales with campaign progress (resolved by effectiveAiBudgetBonus):
+  //   { "type": "missing_wins", "of": [missionId…], "target": N }
+  if (m.aiBudgetBonus != null) {
+    const b = m.aiBudgetBonus;
+    if (typeof b === 'number') {
+      if (!Number.isFinite(b)) _fail('aiBudgetBonus number must be finite');
+    } else if (b && typeof b === 'object') {
+      if (b.type !== 'missing_wins') _fail('aiBudgetBonus object must have type:"missing_wins"');
+      if (!Array.isArray(b.of) || b.of.some(x => typeof x !== 'string')) {
+        _fail('aiBudgetBonus.of must be an array of mission-id strings');
+      }
+      if (b.target != null && !Number.isFinite(b.target)) _fail('aiBudgetBonus.target must be a finite number');
+    } else {
+      _fail('aiBudgetBonus must be a number or a { type:"missing_wins", of, target } object');
+    }
+  }
+
   return m;
 }
 

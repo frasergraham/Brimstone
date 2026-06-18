@@ -222,6 +222,31 @@ export function buildVictoryDelegate(objectives) {
   };
 }
 
+/**
+ * Resolve a mission's effective witch AI budget bonus. `aiBudgetBonus` is
+ * normally a static integer, but a mission may instead declare a DYNAMIC bonus
+ * that scales with campaign progress:
+ *
+ *   "aiBudgetBonus": { "type": "missing_wins", "of": [ids…], "target": N }
+ *
+ * → bonus = max(0, target − (how many of `of` are already won)). This drives the
+ * Long Watch (M6) difficulty: the more neighbouring villages the hero cleared,
+ * the fewer extra actions the witch gets — with target 5, 3 villages won ⇒ +2,
+ * 4 ⇒ +1, 5 ⇒ +0. Returns 0 for an absent/zero bonus or a null campaign.
+ */
+export function effectiveAiBudgetBonus(missionDef, campaign) {
+  const b = missionDef?.aiBudgetBonus;
+  if (b == null) return 0;
+  if (typeof b === 'number') return b;
+  if (typeof b === 'object' && b.type === 'missing_wins') {
+    const of = Array.isArray(b.of) ? b.of : [];
+    const target = Number.isFinite(b.target) ? b.target : of.length;
+    const won = of.reduce((n, id) => n + (campaign?.completedMissions?.has(id) ? 1 : 0), 0);
+    return Math.max(0, target - won);
+  }
+  return 0;
+}
+
 // Sentinel returned by a win condition that should defer to external systems
 // (e.g. standard node scoring, conductor missions) instead of resolving now.
 const DEFERRED = Symbol('victory-deferred');

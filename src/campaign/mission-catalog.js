@@ -32,6 +32,11 @@ export const MIGRATED_MISSIONS = Object.freeze([
   { id: 'first_night',         campaignId: 'calebs_hollow_prologue',   title: 'The First Night',            file: 'Ch1M3' },
   { id: 'river_crossing',      campaignId: 'calebs_hollow_prologue',   title: 'The River Crossing',         file: 'Ch1M4' },
   { id: 'dark_ritual',         campaignId: 'calebs_hollow_prologue',   title: 'Dark Ritual',                file: 'Ch1M5' },
+  { id: 'village_marsh_end',     campaignId: 'calebs_hollow_prologue', title: "Marsh's End",                file: 'Ch1V1' },
+  { id: 'village_thornwick',     campaignId: 'calebs_hollow_prologue', title: 'Thornwick',                  file: 'Ch1V2' },
+  { id: 'village_gallows_ferry', campaignId: 'calebs_hollow_prologue', title: 'Gallows Ferry',              file: 'Ch1V3' },
+  { id: 'village_ashford_mill',  campaignId: 'calebs_hollow_prologue', title: 'Ashford Mill',               file: 'Ch1V4' },
+  { id: 'village_blackfen',      campaignId: 'calebs_hollow_prologue', title: 'Blackfen',                   file: 'Ch1V5' },
   { id: 'long_watch',          campaignId: 'calebs_hollow_prologue',   title: 'The Long Watch',             file: 'Ch1M6' },
   { id: 'witchs_trail',        campaignId: 'calebs_hollow_prologue',   title: "The Witch's Trail",          file: 'Ch1M7' },
 ]);

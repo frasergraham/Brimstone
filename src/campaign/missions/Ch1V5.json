@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "campaignId": "calebs_hollow_prologue",
+  "id": "village_blackfen",
+  "title": "Blackfen",
+  "chapter": 1,
+  "briefing": "Blackfen sprawls across the drowned moor, the largest of the outlying settlements and the deepest in her shadow. Four nodes burn across the fen and her power runs strong. Hold them long enough and Blackfen is saved.",
+  "victoryText": "Blackfen rises from the mire. The largest of the outlands stands free of her.",
+  "defeatText": "The fen drowns Blackfen whole. Her shadow stretches unbroken now.",
+  "mapSize": "standard",
+  "hasWitch": true,
+  "aiPersonality": "swarm",
+  "nodeScoreThreshold": 5,
+  "disableScoring": false,
+  "healBonus": 25,
+  "requires": ["dark_ritual"],
+  "rewards": { "food": 3, "wood": 2, "herbs": 2 },
+  "map": { "mode": "procedural", "seed": 31200, "mapSize": "standard", "nodeCount": 4 },
+  "objectives": {
+    "win": [
+      { "type": "slay_witch" },
+      { "type": "control_nodes" }
+    ],
+    "lose": [
+      { "type": "hero_killed" },
+      { "type": "witch_score_threshold", "points": 5 }
+    ]
+  }
+}
