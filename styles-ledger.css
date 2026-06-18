@@ -119,10 +119,10 @@
 /* Campaign — slots + chronicle */
 .lg-slots { display:flex; gap:12px; margin-bottom:4px; }
 .lg-slot { flex:1; border:1px solid #232036; background:rgba(16,18,26,.6); border-radius:5px; padding:11px 13px; cursor:pointer; }
-.lg-slot.is-active { border-color:rgba(212,167,44,.4); background:rgba(40,32,18,.4); }
-.lg-slot.is-empty { border-style:dashed; border-color:#33304a; background:rgba(16,18,26,.4); display:flex; align-items:center;
-  justify-content:center; text-align:center; cursor:default; }
-.lg-slot-new { font-size:13px; color:#6a6356; }
+.lg-slot:hover { border-color:rgba(212,167,44,.3); }
+.lg-slot.is-active { border-color:rgba(212,167,44,.5); background:rgba(40,32,18,.45); }
+.lg-slot.is-new { border-style:dashed; border-color:#33304a; background:rgba(16,18,26,.4); }
+.lg-slot.is-new .lg-slot-title { color:var(--lg-dim); }
 .lg-slot-tag { font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--lg-gold-dim); }
 .lg-slot.is-active .lg-slot-tag { color:var(--lg-gold-dim); }
 .lg-slot-title { font-family:var(--lg-display); font-size:19px; color:var(--lg-ink); line-height:1.1; }
@@ -130,6 +130,7 @@
 .lg-chronicle { display:flex; flex-direction:column; overflow:auto; }
 .lg-mission { display:flex; align-items:center; gap:15px; padding:10px 6px; border-bottom:1px solid rgba(255,255,255,.05); border-radius:4px; }
 .lg-mission.is-current { background:rgba(212,167,44,.08); }
+.lg-mission.is-playable:hover { background:rgba(212,167,44,.12); }
 .lg-mission-n { font-size:17px; width:30px; flex:none; color:var(--lg-faint); }
 .lg-mission.is-done .lg-mission-n { color:var(--lg-green); }
 .lg-mission.is-current .lg-mission-n { color:var(--lg-gold); }

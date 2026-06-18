@@ -24,6 +24,7 @@ let _root = null;
 let _activeId = null;
 let _data = null;
 let _renderToken = 0;            // guards against out-of-order async panel renders
+let _campSlot = null;            // selected campaign slot (Campaign destination)
 
 export function initLedger({ playerName, start = 'continue', data = null } = {}) {
   _root = document.getElementById('ledger-screen');
@@ -116,41 +117,42 @@ function _panelContinue(body) {
   }).catch(() => { if (token === _renderToken) body.replaceChildren(_empty('Could not read the ledger.')); });
 }
 
-/** Campaign — playthrough slots + the chronicle of missions for the active slot. */
+/** Campaign — pick a playthrough slot, then play any available mission. */
 function _panelCampaign(body) {
   const data = _data?.campaign?.();
   if (!data) return _placeholderPanel(body, { label: 'Campaign' });
+  // Resolve the selected slot (default to the active/most-recent playthrough).
+  if (!data.slots.some(s => s.slot === _campSlot)) _campSlot = data.activeSlotIndex;
+  const sel = data.slots.find(s => s.slot === _campSlot) || data.slots[0];
 
   body.appendChild(_cap('Your playthroughs'));
   const slotRow = document.createElement('div');
   slotRow.className = 'lg-slots';
   for (const s of data.slots) {
-    const active = s === data.activeSlot && !s.empty;
     const card = document.createElement('div');
-    card.className = 'lg-slot' + (s.empty ? ' is-empty' : active ? ' is-active' : '');
-    if (s.empty) {
-      card.innerHTML = `<div class="lg-slot-new">+ New<br>playthrough</div>`;
-    } else {
-      card.innerHTML =
-        `<div class="lg-slot-tag">Slot ${roman(s.slot)}${active ? ' · active' : ''}</div>` +
-        `<div class="lg-slot-title gthc">${s.isComplete ? 'Complete' : (s.completedCount + ' cleared')}</div>` +
-        `<div class="lg-slot-sub">${s.completedCount} mission${s.completedCount === 1 ? '' : 's'} won</div>`;
-      card.addEventListener('click', () => _resumeCampaignSlot(s));
-    }
+    card.className = 'lg-slot' + (s.slot === sel.slot ? ' is-active' : '') + (s.started ? '' : ' is-new');
+    card.innerHTML = s.started
+      ? `<div class="lg-slot-tag">Slot ${roman(s.slot)}${s.slot === sel.slot ? ' · selected' : ''}</div>` +
+        `<div class="lg-slot-title gthc">${s.isComplete ? 'Complete' : s.completedCount + ' cleared'}</div>` +
+        `<div class="lg-slot-sub">${s.completedCount} mission${s.completedCount === 1 ? '' : 's'} won</div>`
+      : `<div class="lg-slot-tag">Slot ${roman(s.slot)}</div>` +
+        `<div class="lg-slot-title gthc">New</div>` +
+        `<div class="lg-slot-sub">begin a playthrough</div>`;
+    card.addEventListener('click', () => { _campSlot = s.slot; select('campaign'); });
     slotRow.appendChild(card);
   }
   body.appendChild(slotRow);
 
-  const active = data.activeSlot;
-  body.appendChild(_cap(`The Chronicle of Missions${active && !active.empty ? ' · Slot ' + roman(active.slot) : ''}`));
+  body.appendChild(_cap(`The Chronicle of Missions · Slot ${roman(sel.slot)}`));
   const chron = document.createElement('div');
   chron.className = 'lg-chronicle';
-  if (!active || active.empty || !active.missions?.length) {
-    chron.appendChild(_empty('No playthrough yet — pick a slot to begin the campaign.'));
+  const missions = sel.missions || [];
+  if (!missions.length) {
+    chron.appendChild(_empty('No missions found for this campaign.'));
   } else {
-    active.missions.forEach((m, i) => {
-      const status = m.completed ? 'done' : (m.id === active.nextMissionId ? 'current' : (m.available ? 'available' : 'locked'));
-      chron.appendChild(_missionRow(m, status, i, active));
+    missions.forEach((m, i) => {
+      const status = m.completed ? 'done' : (m.id === sel.nextMissionId ? 'current' : (m.available ? 'available' : 'locked'));
+      chron.appendChild(_missionRow(sel, m, status, i));
     });
   }
   body.appendChild(chron);
@@ -229,31 +231,25 @@ function _feedRow(row, cta = null) {
   return el;
 }
 
-function _missionRow(m, status, index, slot) {
-  const mark = status === 'done' ? '✓' : status === 'current' ? '◆' : status === 'locked' ? '🔒' : '▸';
+function _missionRow(slot, m, status, index) {
+  const playable = status === 'current' || status === 'available';
+  const resume = status === 'current' && slot.resumeMissionId === m.id;
+  const mark = status === 'done' ? '✓' : status === 'locked' ? '🔒' : '◆';
   const el = document.createElement('div');
-  el.className = 'lg-mission is-' + status;
+  el.className = 'lg-mission is-' + status + (playable ? ' is-playable' : '');
   el.innerHTML =
     `<span class="lg-mission-n gthc">${roman(index + 1)}</span>` +
     `<span class="lg-mission-name">${esc(m.title || m.id)}</span>` +
-    (status === 'current'
-      ? `<button class="lg-btn lg-btn-gold lg-btn-sm">▶ Resume</button>`
+    (playable
+      ? `<button class="lg-btn lg-btn-gold lg-btn-sm">${resume ? '▶ Resume' : '▶ Play'}</button>`
       : `<span class="lg-mission-mark">${mark}</span>`);
-  if (status === 'current' || status === 'available') {
-    el.querySelector('button')?.addEventListener('click', (e) => { e.stopPropagation(); _resumeCampaignSlot(slot, m.id); });
+  if (playable) {
+    const go = (e) => { e?.stopPropagation?.(); _data?.startMission?.(slot.slot, m.id, resume); };
+    el.querySelector('button')?.addEventListener('click', go);
+    el.addEventListener('click', go);
+    el.style.cursor = 'pointer';
   }
   return el;
-}
-
-function _resumeCampaignSlot(slot, missionId = null) {
-  if (!slot || slot.empty || !_data?.activate) return;
-  const id = missionId || slot.nextMissionId;
-  _data.activate({
-    kind: 'campaign-next',
-    _campaignDef: slot._campaignDef,
-    _slotIndex: slot.slot,
-    _nextMissionId: id,
-  });
 }
 
 function _button(label, variant, onClick) {

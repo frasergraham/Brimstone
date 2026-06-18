@@ -9708,26 +9708,50 @@ async function _collectReplayRows() {
   return rows;
 }
 
-// Per-slot campaign chronicle for the Ledger's Campaign destination.
+// Per-slot campaign chronicle for the Ledger's Campaign destination. Every slot
+// (started or fresh) carries its mission list so the Ledger can show + launch
+// missions; a fresh slot's list shows mission 1 available, the rest locked.
 function _ledgerCampaignData() {
   const camp = CAMPAIGNS.find(c => !c.disabled) || CAMPAIGNS[0];
   if (!camp) return null;
   const slots = [];
   for (let slot = 1; slot <= CAMPAIGN_SLOT_COUNT; slot++) {
     const c = new Campaign(camp, slot);
-    if (!c.load()) { slots.push({ slot, empty: true }); continue; }
+    const started = c.load();
+    const nextId = c.getNextMission?.() ?? null;
+    const resumeMissionId = (nextId && loadCampaignMissionSave(camp.id, nextId, slot)) ? nextId : null;
     slots.push({
-      slot, empty: false,
+      slot, started,
       completedCount: c.completedMissions?.size ?? 0,
       updatedAt: c.updatedAt ?? 0,
       isComplete: c.isComplete?.() ?? false,
-      nextMissionId: c.getNextMission?.() ?? null,
-      missions: c.getMissionList?.() ?? [],
-      _campaignDef: camp,
+      nextMissionId: nextId,
+      resumeMissionId,
+      missions: (c.getMissionList?.() ?? []).map(m => ({
+        id: m.id, title: m.title, completed: !!m.completed, available: !!m.available,
+      })),
     });
   }
-  const active = slots.filter(s => !s.empty).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0] || slots[0];
-  return { campaignId: camp.id, title: camp.title, slots, activeSlot: active };
+  const active = slots.filter(s => s.started).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0] || slots[0];
+  return { campaignId: camp.id, title: camp.title, slots, activeSlotIndex: active?.slot ?? 1 };
+}
+
+// Launch (or resume) a campaign mission from the Ledger — sets the active
+// campaign on the chosen slot and hands off to the game (the game screen takes
+// over; the ledger overlay steps aside). Starting a mission on a fresh slot
+// begins that playthrough.
+async function _ledgerStartCampaignMission(slotIndex, missionId, resume = false) {
+  const camp = CAMPAIGNS.find(c => !c.disabled) || CAMPAIGNS[0];
+  if (!camp) return;
+  _activeCampaign = new Campaign(camp, slotIndex);
+  _activeCampaign.load();
+  const id = missionId || _activeCampaign.getNextMission?.();
+  const missionDef = id && _activeCampaign.getMissionDef?.(id);
+  if (!missionDef) return;
+  document.getElementById('ledger-screen')?.classList.remove('is-active'); // hand off to the game
+  await _loadCampaignPortraits?.();
+  if (resume) _resumeCampaignMission(id);
+  else _initCampaignMission(missionDef);
 }
 
 // The injected data/action surface the Ledger renders against.
@@ -9737,6 +9761,7 @@ function _buildLedgerData() {
     activeGames: async () => (await _fetchAllGames()).rows,
     replays:     () => _collectReplayRows(),
     campaign:    () => _ledgerCampaignData(),
+    startMission:(slot, missionId, resume) => _ledgerStartCampaignMission(slot, missionId, resume),
     activate:    (row) => _mmDefaultRowClick(row),   // resume / open / replay
     signIn:      (cb) => _showAuthDialog(cb),
   };
