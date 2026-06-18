@@ -8953,14 +8953,19 @@ function _createMpClient() {
     },
 
     onLobbyJoined(lobby) {
+      _currentLobby = lobby;
+      if (_ledgerLobbyCb) { _ledgerLobbyCb(lobby); return; }   // ledger is driving
       _renderLobby(lobby);
     },
 
     onLobbyUpdate(lobby) {
+      _currentLobby = lobby;
+      if (_ledgerLobbyCb) { _ledgerLobbyCb(lobby); return; }
       _renderLobby(lobby);
     },
 
     onLobbyList(rooms) {
+      if (_ledgerLobbyListCb) { _ledgerLobbyListCb(rooms); return; }
       _renderPublicLobbies(rooms);
     },
 
@@ -9844,11 +9849,36 @@ function _ledgerPartyAction(kind, target, weapon) {
   return _ledgerPartyHTML();
 }
 
+// When set, lobby pushes (onLobbyJoined/Update/List) route to the ledger
+// instead of the legacy _renderLobby/_renderPublicLobbies. The ledger registers
+// these via the DI onLobby/onLobbyList while its lobby view is mounted.
+let _ledgerLobbyCb = null;
+let _ledgerLobbyListCb = null;
+
 // The injected data/action surface the Ledger renders against.
 function _buildLedgerData() {
   return {
     session:          () => loadSession(),
     activeGames:      async () => (await _fetchAllGames()).rows,
+    // Native online lobby (verified vs the dev server). `mp` is the connected
+    // multiplayer client (present once signed in). Seat indices are absolute
+    // (server-side); the ledger passes lobby.slots indices straight through.
+    lobby: {
+      create:       (config) => mp?.createLobby(config),
+      join:         (codeOrId) => mp?.joinLobby(codeOrId),
+      browse:       () => mp?.browseLobby(),
+      claimSlot:    (idx) => _currentLobby && mp?.claimSlot(_currentLobby.id, idx),
+      setFaction:   (factionId) => _currentLobby && mp?.setFaction(_currentLobby.id, factionId),
+      setSlotAI:    (seatIdx, personality) => _currentLobby && mp?.setSlotAI(_currentLobby.id, seatIdx, personality),
+      removeSlotAI: (seatIdx) => _currentLobby && mp?.removeSlotAI(_currentLobby.id, seatIdx),
+      fillAll:      (personality = 'random') => _currentLobby && mp?.fillAllWithAI(_currentLobby.id, personality),
+      start:        () => _currentLobby && mp?.startGame(_currentLobby.id),
+      leave:        () => { if (_currentLobby) mp?.leaveLobby(_currentLobby.id); _currentLobby = null; },
+      invite:       (seatIdx, email) => _currentLobby && mp?.sendSlotInvite(_currentLobby.id, seatIdx, email),
+    },
+    onLobby:          (cb) => { _ledgerLobbyCb = cb; },
+    onLobbyList:      (cb) => { _ledgerLobbyListCb = cb; },
+    myPlayerId:       () => mp?.player?.id ?? loadSession()?.id ?? null,
     replays:          () => _collectReplayRows(),
     campaign:         () => _ledgerCampaignData(),
     startMission:     (slot, missionId, resume) => _ledgerStartCampaignMission(slot, missionId, resume),
@@ -9863,7 +9893,13 @@ function _buildLedgerData() {
     openAccount:      () => _ledgerBridgeToLegacy(() => { _initAccountPage(); showStep('account'); }),
     signOut:          () => _signOut(),
     activate:         (row) => _mmDefaultRowClick(row),   // resume / open / replay
-    signIn:           (cb) => _showAuthDialog(cb),
+    // The auth dialog lives inside #setup-screen, so reveal it for sign-in, then
+    // return to the ledger on success.
+    signIn:           (cb) => _ledgerBridgeToLegacy(() => _showAuthDialog(() => {
+      document.getElementById('setup-screen')?.style.setProperty('display', 'none');
+      document.getElementById('ledger-screen')?.classList.add('is-active');
+      cb?.();
+    })),
   };
 }
 

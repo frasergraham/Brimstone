@@ -28,6 +28,9 @@ let _campSlot = null;            // selected campaign slot (Campaign destination
 let _campView = 'missions';      // Campaign sub-view: 'missions' | 'party'
 let _skFaction = null;           // selected Skirmish champion
 const _skOpts = { mapSize: 'standard', nodeCount: 3, aiDifficulty: 'normal' };
+let _othersView = 'landing';     // Play With Others sub-view: 'landing' | 'find' | 'lobby'
+let _lobby = null;               // current lobby state (from the onLobby push)
+let _lobbyList = [];             // open public lobbies (from onLobbyList)
 
 export function initLedger({ playerName, start = 'continue', data = null } = {}) {
   _root = document.getElementById('ledger-screen');
@@ -35,6 +38,16 @@ export function initLedger({ playerName, start = 'continue', data = null } = {})
   _data = data;
   const nameEl = document.getElementById('ledger-user-name');
   if (nameEl) nameEl.textContent = playerName || _data?.session?.()?.username || 'Wanderer';
+  // Live lobby pushes → switch Play With Others into the lobby view + re-render.
+  _data?.onLobby?.((lobby) => {
+    _lobby = lobby;
+    _othersView = 'lobby';
+    if (_activeId === 'others') select('others');
+  });
+  _data?.onLobbyList?.((rooms) => {
+    _lobbyList = rooms || [];
+    if (_activeId === 'others' && _othersView === 'find') select('others');
+  });
   _renderRail();
   select(start);
   return { show, hide, select };
@@ -275,16 +288,21 @@ function _updateSkirmishSummary() {
   el.textContent = [f?.name, cap(_skOpts.mapSize), `${_skOpts.nodeCount} nodes`, cap(_skOpts.aiDifficulty)].filter(Boolean).join(' · ');
 }
 
-/** Play With Others — the three rhythms (Live / Async / Battle) + your games.
- *  Create/Join/Lobby bridge to the legacy flow for now (native lobby is next). */
+/** Play With Others — landing (rhythms + Battle + games), Find-a-Game, and the
+ *  native lobby. Live/create/join/lobby are native; Async + Battle still bridge. */
 function _panelOthers(body) {
   if (!_data?.online) return _placeholderPanel(body, { label: 'Play With Others' });
+  if (_othersView === 'lobby' && _lobby) return _othersLobby(body, _lobby);
+  if (_othersView === 'find') return _othersFind(body);
+  _othersLanding(body);
+}
+
+function _othersLanding(body) {
   const token = ++_renderToken;
   body.innerHTML = `<p class="ledger-placeholder">Reading the table…</p>`;
   Promise.resolve(_data.online()).then(({ signedIn, games, battle }) => {
     if (token !== _renderToken) return;
     body.replaceChildren();
-
     if (!signedIn) {
       body.appendChild(_empty('Sign in to play with others — Live, Async, or the Battle.'));
       const b = _button('Sign in', 'purple', () => _data?.signIn?.(() => select('others')));
@@ -292,11 +310,12 @@ function _panelOthers(body) {
       body.appendChild(b);
       return;
     }
-
     const rh = document.createElement('div');
     rh.className = 'lg-rhythms';
-    rh.appendChild(_rhythmCard('⚡ Live match', '~15 min', 'Timed turns, one sitting. Quick-match or invite.', () => _data.openOnline?.()));
-    rh.appendChild(_rhythmCard('🌒 Async match', 'days', 'Play at your own pace; we notify you.', () => _data.openAsync?.()));
+    rh.appendChild(_rhythmCard('⚡ Live match', '~15 min', 'Timed turns, one sitting. Quick-match or invite.',
+      () => { _othersView = 'find'; select('others'); }));
+    rh.appendChild(_rhythmCard('🌒 Async match', 'days', 'Play at your own pace; we notify you.',
+      () => _data.openAsync?.()));
     body.appendChild(rh);
 
     const bf = document.createElement('div');
@@ -329,6 +348,180 @@ function _rhythmCard(title, time, desc, onClick) {
   el.addEventListener('click', onClick);
   return el;
 }
+
+/** Find a Game — quick-match, create (with config), join-by-code, open lobbies. */
+function _othersFind(body) {
+  body.appendChild(_backRow('‹ Back', () => { _othersView = 'landing'; select('others'); }));
+
+  const quick = document.createElement('div');
+  quick.className = 'lg-find-actions';
+  quick.appendChild(_button('⚡ Quick Match', 'purple',
+    () => _data.lobby?.create?.({ playersPerSide: 1, mapSize: 'standard', isPrivate: false })));
+  body.appendChild(quick);
+
+  body.appendChild(_cap('Create a game'));
+  const opts = document.createElement('div');
+  opts.className = 'lg-opts';
+  const ppsSel  = _plainSelect([['1', '1v1'], ['2', '2v2'], ['3', '3v3'], ['4', '4v4']], '1');
+  const mapSel  = _plainSelect([['skirmish', 'Skirmish'], ['standard', 'Standard'], ['regional', 'Regional']], 'standard');
+  const privSel = _plainSelect([['false', 'Public'], ['true', 'Private (code)']], 'false');
+  opts.appendChild(_optWrap('Players', ppsSel));
+  opts.appendChild(_optWrap('Map', mapSel));
+  opts.appendChild(_optWrap('Visibility', privSel));
+  body.appendChild(opts);
+  const createBtn = _button('＋ Create Game', 'gold', () => _data.lobby?.create?.({
+    playersPerSide: parseInt(ppsSel.value, 10), mapSize: mapSel.value, isPrivate: privSel.value === 'true',
+  }));
+  createBtn.style.marginTop = '12px';
+  body.appendChild(createBtn);
+
+  body.appendChild(_cap('Have a code?'));
+  const jrow = document.createElement('div');
+  jrow.className = 'lg-join-row';
+  const input = document.createElement('input');
+  input.className = 'lg-code-input';
+  input.placeholder = 'CODE';
+  input.maxLength = 8;
+  jrow.appendChild(input);
+  jrow.appendChild(_button('Join ▸', 'gold', () => { const c = input.value.trim(); if (c) _data.lobby?.join?.(c); }));
+  body.appendChild(jrow);
+
+  body.appendChild(_cap('Open lobbies'));
+  _data.lobby?.browse?.();
+  const list = document.createElement('div');
+  list.className = 'lg-feed';
+  if (!_lobbyList.length) {
+    list.appendChild(_empty('Looking for open games…'));
+  } else {
+    for (const room of _lobbyList) {
+      const pps = room.playersPerSide ?? room.pps ?? 1;
+      const el = document.createElement('div');
+      el.className = 'lg-feed-row';
+      el.innerHTML = `<div class="lg-feed-text"><div class="t">${esc(room.hostName || room.host || 'Open game')}</div>` +
+        `<div class="m">${pps}v${pps} · ${esc(cap(room.mapSize || 'standard'))}</div></div><span class="lg-feed-cta">join ▸</span>`;
+      el.addEventListener('click', () => _data.lobby?.join?.(room.code || room.id));
+      list.appendChild(el);
+    }
+  }
+  body.appendChild(list);
+}
+
+/** The native lobby — Day/Night seats from live room state, with the seat
+ *  actions (claim, faction, add/remove AI, fill, invite, start). */
+function _othersLobby(body, lobby) {
+  body.appendChild(_backRow('‹ Leave lobby', () => {
+    _data.lobby?.leave?.(); _lobby = null; _othersView = 'landing'; select('others');
+  }));
+
+  const cfg = lobby.config || {};
+  const pps = cfg.playersPerSide ?? 1;
+  const myId = _data.myPlayerId?.();
+  const isHost = lobby.hostPlayerId === myId;
+  const unassigned = lobby.unassigned || [];
+  const meUnassigned = unassigned.some((u) => u.playerId === myId);
+  const meInSlot = (lobby.slots || []).some((s) => s.playerId === myId && s.status === 'human');
+  const canClaim = meUnassigned || meInSlot;
+
+  const head = document.createElement('div');
+  head.className = 'lg-lobby-head';
+  head.innerHTML =
+    `<div><span class="gthc lg-lobby-title">Game Lobby</span>` +
+    `<div class="lg-lobby-sub">${pps}v${pps} · Live${cfg.mapSize ? ' · ' + cap(cfg.mapSize) : ''}</div></div>` +
+    (lobby.isPrivate && lobby.code
+      ? `<div class="lg-lobby-code"><div class="lbl">Private code</div><span class="gthc code">${esc(lobby.code)}</span></div>`
+      : '');
+  body.appendChild(head);
+  const rule = document.createElement('div'); rule.className = 'ledger-rule'; body.appendChild(rule);
+
+  // Players who haven't picked a side yet (the host starts here).
+  if (unassigned.length) {
+    const ua = document.createElement('div');
+    ua.className = 'lg-unassigned';
+    ua.innerHTML = `<span class="lbl">Pick a side</span> ` + unassigned.map((u) =>
+      `<span class="chip${u.playerId === myId ? ' you' : ''}">${esc(u.name)}${u.playerId === myId ? ' · you' : ''}</span>`).join(' ');
+    body.appendChild(ua);
+  }
+
+  const cols = document.createElement('div');
+  cols.className = 'lg-seats';
+  for (const [side, label, icon] of [['day', 'Day', '☀'], ['night', 'Night', '🌙']]) {
+    const col = document.createElement('div');
+    col.className = 'lg-seat-col is-' + side;
+    col.innerHTML = `<div class="lg-seat-label">${icon} ${label}</div>`;
+    const slots = (lobby.slots || []).filter((s) => s.side === side);
+    for (const slot of slots) col.appendChild(_lobbySeat(lobby, slot, { myId, isHost, canClaim }));
+    cols.appendChild(col);
+  }
+  body.appendChild(cols);
+
+  const footer = document.createElement('div');
+  footer.className = 'lg-lobby-footer';
+  if (isHost) footer.appendChild(_button('🤖 Fill with AI', 'ghost', () => _data.lobby?.fillAll?.('random')));
+  const allFilled = (lobby.slots || []).every((s) => s.status === 'human' || s.status === 'ai');
+  const startBtn = _button('▶ Start', 'gold', () => _data.lobby?.start?.());
+  if (!isHost || !allFilled) startBtn.disabled = true;
+  footer.appendChild(startBtn);
+  body.appendChild(footer);
+}
+
+function _lobbySeat(lobby, slot, { myId, isHost, canClaim }) {
+  const idx = (lobby.slots || []).indexOf(slot);
+  const el = document.createElement('div');
+  el.className = 'lg-seat';
+  const fac = slot.factionId || slot.faction || '';
+  if (slot.status === 'human') {
+    const isMe = slot.playerId === myId;
+    el.classList.add('is-human');
+    el.innerHTML = `<span class="nm">${esc(slot.name || 'Player')}${isMe ? ' · you' : ''}</span><span class="fac">${esc(cap(fac))}</span>`;
+  } else if (slot.status === 'ai') {
+    el.classList.add('is-ai');
+    el.innerHTML = `<span class="nm">🤖 ${esc(slot.name || 'AI')}</span><span class="fac">${esc(cap(fac))}</span>`;
+    if (isHost) {
+      const rm = _button('✕', 'ghost', () => _data.lobby?.removeSlotAI?.(idx));
+      rm.classList.add('lg-seat-x');
+      el.appendChild(rm);
+    }
+  } else {
+    el.classList.add('is-open');
+    el.innerHTML = `<span class="nm open">Open seat</span>`;
+    const acts = document.createElement('div');
+    acts.className = 'lg-seat-acts';
+    if (canClaim) acts.appendChild(_button('Claim', 'gold', () => _data.lobby?.claimSlot?.(idx)));
+    if (isHost) acts.appendChild(_button('🤖 AI', 'ghost', () => _data.lobby?.setSlotAI?.(idx, 'random')));
+    el.appendChild(acts);
+  }
+  return el;
+}
+
+function _backRow(label, onClick) {
+  const el = document.createElement('div');
+  el.className = 'lg-back';
+  el.textContent = label;
+  el.addEventListener('click', onClick);
+  return el;
+}
+function _plainSelect(options, def) {
+  const sel = document.createElement('select');
+  sel.className = 'lg-opt-select';
+  for (const [val, lbl] of options) {
+    const o = document.createElement('option');
+    o.value = val; o.textContent = lbl;
+    if (val === def) o.selected = true;
+    sel.appendChild(o);
+  }
+  return sel;
+}
+function _optWrap(label, sel) {
+  const wrap = document.createElement('label');
+  wrap.className = 'lg-opt';
+  const span = document.createElement('span');
+  span.className = 'lg-opt-label';
+  span.textContent = label;
+  wrap.appendChild(span);
+  wrap.appendChild(sel);
+  return wrap;
+}
+function cap(s) { return s ? String(s)[0].toUpperCase() + String(s).slice(1) : s; }
 
 /** Replays — completed games (SP + MP), newest first, click to watch. */
 function _panelReplays(body) {
