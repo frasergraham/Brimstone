@@ -9860,6 +9860,8 @@ function _buildLedgerData() {
     openOnline:       () => _ledgerBridgeToLegacy(_showOnlineScreen),
     openAsync:        () => _ledgerBridgeToLegacy(_showAsyncScreen),
     openBattle:       () => _ledgerBridgeToLegacy(_showBattleScreen),
+    openAccount:      () => _ledgerBridgeToLegacy(() => { _initAccountPage(); showStep('account'); }),
+    signOut:          () => _signOut(),
     activate:         (row) => _mmDefaultRowClick(row),   // resume / open / replay
     signIn:           (cb) => _showAuthDialog(cb),
   };

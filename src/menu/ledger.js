@@ -358,7 +358,12 @@ function _panelAccount(body) {
       `<div class="lg-account-id"><div class="nm gthc">${esc(session.username)}</div>` +
       `<div class="sub">${session.email ? esc(session.email) : 'passwordless — link an email to play across devices'}</div></div>`;
     body.appendChild(card);
-    body.appendChild(_note('Manage your name, email link and server from here. (Full account controls land with the action screens.)'));
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex; gap:10px; margin-top:14px;';
+    actions.appendChild(_button('Manage account', 'ghost', () => _data?.openAccount?.()));
+    actions.appendChild(_button('Sign out', 'ghost', () => _data?.signOut?.()));
+    body.appendChild(actions);
+    body.appendChild(_note('Edit your name, link an email to play across devices, or set the server.'));
   } else {
     body.appendChild(_empty('Not signed in.'));
     const btn = _button('Sign in', 'gold', () => _data?.signIn?.(() => select('account')));
