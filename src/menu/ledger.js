@@ -15,7 +15,7 @@ const DESTINATIONS = [
   { id: 'continue', icon: '▶',  label: 'Continue',         title: 'Continue',         tag: '— the night is not over',            accent: 'gold' },
   { id: 'campaign', icon: '☀',  label: 'Campaign',         title: 'The Campaign',     tag: '— six nights to break the curse',    accent: 'gold' },
   { id: 'skirmish', icon: '🎯', label: 'Skirmish',         title: 'Skirmish',         tag: '— choose a champion, set the night', accent: 'gold' },
-  { id: 'others',   icon: '🌙', label: 'Play With Others', title: 'Play With Others', tag: '— choose your rhythm',               accent: 'purple' },
+  { id: 'others',   icon: '🌙', label: 'Play Online',       title: 'Play Online',      tag: '— a single battle, or the war',      accent: 'purple' },
   { id: 'replays',  icon: '📜', label: 'Replays',          title: 'Replays',          tag: '— games already told',               accent: 'gold' },
   { id: 'account',  icon: '⚙',  label: 'Account',          title: 'Account',          tag: '',                                   accent: 'gold' },
 ];
@@ -26,6 +26,7 @@ let _data = null;
 let _renderToken = 0;            // guards against out-of-order async panel renders
 let _campSlot = null;            // selected campaign slot (Campaign destination)
 let _campView = 'missions';      // Campaign sub-view: 'missions' | 'party'
+let _campBriefing = null;        // active mission briefing ({slot,missionId,resume,title,briefing,index})
 let _skFaction = null;           // selected Skirmish champion
 const _skOpts = { mapSize: 'standard', nodeCount: 3, aiDifficulty: 'normal' };
 let _othersView = 'landing';     // Play With Others sub-view: 'landing'|'find'|'lobby'|'battle'
@@ -63,7 +64,7 @@ function _renderRail() {
     item.className = 'ledger-rail-item';
     item.dataset.dest = d.id;
     item.innerHTML = `<span class="ic">${d.icon}</span><span class="lb">${d.label}</span>`;
-    item.addEventListener('click', () => select(d.id));
+    item.addEventListener('click', () => { _campBriefing = null; select(d.id); });
     host.appendChild(item);
   }
 }
@@ -140,6 +141,7 @@ function _panelContinue(body) {
 function _panelCampaign(body) {
   const data = _data?.campaign?.();
   if (!data) return _placeholderPanel(body, { label: 'Campaign' });
+  if (_campBriefing) return _campaignBriefing(body);
   // Resolve the selected slot (default to the active/most-recent playthrough).
   if (!data.slots.some(s => s.slot === _campSlot)) _campSlot = data.activeSlotIndex;
   const sel = data.slots.find(s => s.slot === _campSlot) || data.slots[0];
@@ -157,22 +159,19 @@ function _panelCampaign(body) {
       : `<div class="lg-slot-tag">Slot ${roman(s.slot)}</div>` +
         `<div class="lg-slot-title gthc">New</div>` +
         `<div class="lg-slot-sub">begin a playthrough</div>`;
-    card.addEventListener('click', () => { _campSlot = s.slot; select('campaign'); });
+    card.addEventListener('click', () => { _campSlot = s.slot; _campBriefing = null; select('campaign'); });
     slotRow.appendChild(card);
   }
   body.appendChild(slotRow);
 
-  // Party / Missions page-turn (the mock's between-mission toggle).
-  const toggle = document.createElement('div');
-  toggle.className = 'lg-toggle';
-  for (const [view, label] of [['missions', 'Missions'], ['party', 'Party']]) {
-    const opt = document.createElement('span');
-    opt.className = 'lg-toggle-opt' + (_campView === view ? ' is-active' : '');
-    opt.textContent = label;
-    opt.addEventListener('click', () => { _campView = view; select('campaign'); });
-    toggle.appendChild(opt);
-  }
-  body.appendChild(toggle);
+  // Page-turn between the mission chronicle and the warband — full-width tabs.
+  const tabs = document.createElement('div');
+  tabs.className = 'lg-camp-tabs';
+  tabs.appendChild(_button('Choose Next Mission', _campView === 'missions' ? 'gold' : 'ghost',
+    () => { _campView = 'missions'; select('campaign'); }));
+  tabs.appendChild(_button('Manage the Party', _campView === 'party' ? 'gold' : 'ghost',
+    () => { _campView = 'party'; select('campaign'); }));
+  body.appendChild(tabs);
 
   if (_campView === 'party') { _renderPartyView(body, sel); return; }
 
@@ -191,19 +190,45 @@ function _panelCampaign(body) {
   body.appendChild(chron);
 }
 
+/** Mission briefing — shown before a mission launches (title, briefing, Begin). */
+function _campaignBriefing(body) {
+  const b = _campBriefing;
+  body.appendChild(_backRow('‹ Back to the chronicle', () => { _campBriefing = null; select('campaign'); }));
+  const head = document.createElement('div');
+  head.className = 'lg-brief-head';
+  head.innerHTML =
+    `<div class="lg-brief-kicker">Mission ${roman((b.index ?? 0) + 1)}</div>` +
+    `<div class="lg-brief-title gthc">${esc(b.title)}</div>`;
+  body.appendChild(head);
+  const rule = document.createElement('div'); rule.className = 'ledger-rule'; body.appendChild(rule);
+  const text = document.createElement('p');
+  text.className = 'lg-brief-text';
+  text.textContent = b.briefing || 'The night waits. Steel yourself and step into the dark.';
+  body.appendChild(text);
+  const begin = _button(b.resume ? '▶ Resume Mission' : '▶ Begin Mission', 'gold',
+    () => _data?.startMission?.(b.slot, b.missionId, b.resume));
+  begin.style.marginTop = '20px';
+  body.appendChild(begin);
+}
+
 /** Warband (Party) view — reuses the existing party-pane renderer + mutations.
  *  Injects the party HTML and wires its controls back to partyAction. */
 function _renderPartyView(body, sel) {
   const container = document.createElement('div');
   container.className = 'lg-party';
   body.appendChild(container);
-  const data = _data?.campaignParty?.(sel.slot);
-  if (!data || !data.html) {
-    container.appendChild(_empty('No warband yet — start this playthrough to gather survivors.'));
-    return;
-  }
-  container.innerHTML = data.html;
-  _wirePartyButtons(container, sel.slot);
+  container.appendChild(_empty('Gathering the warband…'));
+  // Portraits load lazily; await them so the character icons render (not glyphs).
+  const render = () => {
+    const data = _data?.campaignParty?.(sel.slot);
+    if (!data || !data.html) {
+      container.replaceChildren(_empty('No warband yet — start this playthrough to gather survivors.'));
+      return;
+    }
+    container.innerHTML = data.html;
+    _wirePartyButtons(container, sel.slot);
+  };
+  Promise.resolve(_data?.preloadPortraits?.()).then(render).catch(render);
 }
 
 function _wirePartyButtons(container, slot) {
@@ -220,6 +245,7 @@ function _wirePartyButtons(container, slot) {
   wire('.cprog-heal-btn', 'heal');
   wire('.cprog-equip-btn', 'equip', true);
   wire('.cprog-return-btn', 'return', true);
+  wire('.cprog-unequip-btn', 'unequip', true);
   wire('.cprog-pool-equip-btn', 'pool-equip', true);
 }
 
@@ -235,8 +261,14 @@ function _panelSkirmish(body) {
   for (const f of factions) {
     const card = document.createElement('div');
     card.className = 'lg-champion ' + (f.side === 'night' ? 'is-night' : 'is-day') + (f.id === _skFaction ? ' is-selected' : '');
-    card.innerHTML = `<img src="${esc(f.img)}" alt=""><div class="nm">${esc(f.name)}</div>` +
-      `<div class="sd">${f.side === 'day' ? '☀ Day' : '🌙 Night'}</div>`;
+    card.innerHTML =
+      `<img src="${esc(f.img)}" alt="">` +
+      `<div class="lg-champ-info">` +
+        `<div class="lg-champ-top"><span class="nm">${esc(f.name)}</span>` +
+        `<span class="sd">${f.side === 'day' ? '☀ Day' : '🌙 Night'}</span></div>` +
+        (f.hp != null ? `<div class="lg-champ-stats">♥ ${f.hp} · ⚔ ${f.atk} · 🛡 ${f.def}</div>` : '') +
+        (f.blurb ? `<div class="lg-champ-blurb">${esc(f.blurb)}</div>` : '') +
+      `</div>`;
     card.addEventListener('click', () => { _skFaction = f.id; select('skirmish'); });
     grid.appendChild(card);
   }
@@ -245,9 +277,13 @@ function _panelSkirmish(body) {
   body.appendChild(_cap('The night ahead'));
   const opts = document.createElement('div');
   opts.className = 'lg-opts';
-  opts.appendChild(_optSelect('mapSize', 'Map size', [['skirmish', 'Skirmish'], ['standard', 'Standard'], ['regional', 'Regional']], (v) => v));
-  opts.appendChild(_optSelect('nodeCount', 'Power nodes', [['2', '2'], ['3', '3'], ['4', '4']], (v) => parseInt(v, 10)));
-  opts.appendChild(_optSelect('aiDifficulty', 'AI cunning', [['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Hard']], (v) => v));
+  opts.appendChild(_optSelect('mapSize', 'Map size', MAP_SIZE_OPTS, (v) => v));
+  opts.appendChild(_optSelect('nodeCount', 'Power nodes', [
+    { value: '2', label: '2', sub: 'sparse' }, { value: '3', label: '3', sub: 'default' }, { value: '4', label: '4', sub: 'crowded' },
+  ], (v) => parseInt(v, 10)));
+  opts.appendChild(_optSelect('aiDifficulty', 'AI cunning', [
+    { value: 'easy', label: 'Easy', sub: 'forgiving' }, { value: 'normal', label: 'Normal', sub: 'balanced' }, { value: 'hard', label: 'Hard', sub: 'ruthless' },
+  ], (v) => v));
   body.appendChild(opts);
 
   const startRow = document.createElement('div');
@@ -262,23 +298,8 @@ function _panelSkirmish(body) {
 }
 
 function _optSelect(key, label, options, parse) {
-  const wrap = document.createElement('label');
-  wrap.className = 'lg-opt';
-  const span = document.createElement('span');
-  span.className = 'lg-opt-label';
-  span.textContent = label;
-  const sel = document.createElement('select');
-  sel.className = 'lg-opt-select';
-  for (const [val, lbl] of options) {
-    const o = document.createElement('option');
-    o.value = val; o.textContent = lbl;
-    if (parse(val) === _skOpts[key]) o.selected = true;
-    sel.appendChild(o);
-  }
-  sel.addEventListener('change', () => { _skOpts[key] = parse(sel.value); _updateSkirmishSummary(); });
-  wrap.appendChild(span);
-  wrap.appendChild(sel);
-  return wrap;
+  const dd = _dropdown(options, String(_skOpts[key]), (v) => { _skOpts[key] = parse(v); _updateSkirmishSummary(); });
+  return _optWrap(label, dd);
 }
 
 function _updateSkirmishSummary() {
@@ -292,7 +313,7 @@ function _updateSkirmishSummary() {
 /** Play With Others — landing (rhythms + Battle + games), Find-a-Game, and the
  *  native lobby. Live/create/join/lobby are native; Async + Battle still bridge. */
 function _panelOthers(body) {
-  if (!_data?.online) return _placeholderPanel(body, { label: 'Play With Others' });
+  if (!_data?.online) return _placeholderPanel(body, { label: 'Play Online' });
   if (_othersView === 'lobby' && _lobby) return _othersLobby(body, _lobby);
   if (_othersView === 'find') return _othersFind(body);
   if (_othersView === 'battle') return _othersBattle(body);
@@ -306,16 +327,14 @@ function _othersLanding(body) {
     if (token !== _renderToken) return;
     body.replaceChildren();
     if (!signedIn) {
-      body.appendChild(_empty('Sign in to play with others — Live, Async, or the Battle.'));
+      body.appendChild(_empty('Sign in to play online — a single battle, or the Battle for Caleb\'s Hollow.'));
       body.appendChild(_signInForm(() => select('others')));
       return;
     }
     const rh = document.createElement('div');
     rh.className = 'lg-rhythms';
-    rh.appendChild(_rhythmCard('⚡ Live match', '~15 min', 'Timed turns, one sitting. Quick-match or invite.',
+    rh.appendChild(_rhythmCard('⚔ Single Battle', 'live or async', 'One game against another player. Choose the pace when you create it.',
       () => { _createAsync = false; _othersView = 'find'; select('others'); }));
-    rh.appendChild(_rhythmCard('🌒 Async match', 'days', 'Play at your own pace; we notify you.',
-      () => { _createAsync = true; _othersView = 'find'; select('others'); }));
     body.appendChild(rh);
 
     const bf = document.createElement('div');
@@ -353,33 +372,26 @@ function _rhythmCard(title, time, desc, onClick) {
 function _othersFind(body) {
   body.appendChild(_backRow('‹ Back', () => { _othersView = 'landing'; select('others'); }));
 
-  const quick = document.createElement('div');
-  quick.className = 'lg-find-actions';
-  quick.appendChild(_button('⚡ Quick Match', 'purple',
-    () => _data.lobby?.create?.({ playersPerSide: 1, mapSize: 'standard', isPrivate: false })));
-  body.appendChild(quick);
-
-  body.appendChild(_cap('Create a game'));
+  body.appendChild(_cap('Create a Single Battle'));
   const opts = document.createElement('div');
   opts.className = 'lg-opts';
-  const modeSel = _plainSelect([['live', 'Live'], ['async', 'Async']], _createAsync ? 'async' : 'live');
-  modeSel.addEventListener('change', () => { _createAsync = modeSel.value === 'async'; select('others'); });
-  const ppsSel  = _plainSelect([['1', '1v1'], ['2', '2v2'], ['3', '3v3'], ['4', '4v4']], '1');
-  const mapSel  = _plainSelect([['skirmish', 'Skirmish'], ['standard', 'Standard'], ['regional', 'Regional']], 'standard');
-  const privSel = _plainSelect([['false', 'Public'], ['true', 'Private (code)']], 'false');
-  const timeSel = _createAsync
-    ? _plainSelect([['43200000', '12 hours'], ['86400000', '1 day'], ['172800000', '2 days']], '86400000')
-    : _plainSelect([['60000', '60 sec'], ['90000', '90 sec'], ['120000', '2 min']], '90000');
-  opts.appendChild(_optWrap('Cadence', modeSel));
-  opts.appendChild(_optWrap('Players', ppsSel));
-  opts.appendChild(_optWrap('Map', mapSel));
-  opts.appendChild(_optWrap(_createAsync ? 'Per turn' : 'Turn timer', timeSel));
-  opts.appendChild(_optWrap('Visibility', privSel));
+  const modeDd = _dropdown(CADENCE_OPTS, _createAsync ? 'async' : 'live', (v) => { _createAsync = v === 'async'; select('others'); });
+  const ppsDd  = _dropdown([{ value: '1', label: '1v1' }, { value: '2', label: '2v2' }, { value: '3', label: '3v3' }, { value: '4', label: '4v4' }], '1');
+  const mapDd  = _dropdown(MAP_SIZE_OPTS, 'standard');
+  const privDd = _dropdown([{ value: 'false', label: 'Public', sub: 'Listed; anyone can join' }, { value: 'true', label: 'Private', sub: 'Join by code only' }], 'false');
+  const timeDd = _createAsync
+    ? _dropdown([{ value: '43200000', label: '12 hours' }, { value: '86400000', label: '1 day' }, { value: '172800000', label: '2 days' }], '86400000')
+    : _dropdown([{ value: '60000', label: '60 sec' }, { value: '90000', label: '90 sec' }, { value: '120000', label: '2 min' }], '90000');
+  opts.appendChild(_optWrap('Cadence', modeDd));
+  opts.appendChild(_optWrap('Players', ppsDd));
+  opts.appendChild(_optWrap('Map', mapDd));
+  opts.appendChild(_optWrap(_createAsync ? 'Per turn' : 'Turn timer', timeDd));
+  opts.appendChild(_optWrap('Visibility', privDd));
   body.appendChild(opts);
   const createBtn = _button('＋ Create Game', 'gold', () => _data.lobby?.create?.({
-    playersPerSide: parseInt(ppsSel.value, 10), mapSize: mapSel.value,
-    isPrivate: privSel.value === 'true', isAsync: _createAsync,
-    turnIntervalMs: parseInt(timeSel.value, 10),
+    playersPerSide: parseInt(ppsDd.value, 10), mapSize: mapDd.value,
+    isPrivate: privDd.value === 'true', isAsync: _createAsync,
+    turnIntervalMs: parseInt(timeDd.value, 10),
   }));
   createBtn.style.marginTop = '12px';
   body.appendChild(createBtn);
@@ -501,16 +513,10 @@ function _lobbySeat(lobby, slot, { myId, isHost, canClaim }) {
     el.appendChild(nm);
     if (isMe) {
       // Switch your champion within your side.
-      const sel = document.createElement('select');
-      sel.className = 'lg-fac-select';
-      for (const f of (_data.factionsForSide?.(slot.side) || [])) {
-        const o = document.createElement('option');
-        o.value = f.id; o.textContent = f.name;
-        if (f.id === (slot.factionId || slot.faction)) o.selected = true;
-        sel.appendChild(o);
-      }
-      sel.addEventListener('change', () => _data.lobby?.setFaction?.(sel.value));
-      el.appendChild(sel);
+      const facs = (_data.factionsForSide?.(slot.side) || []).map((f) => ({ value: f.id, label: f.name }));
+      const dd = _dropdown(facs, slot.factionId || slot.faction, (v) => _data.lobby?.setFaction?.(v));
+      dd.classList.add('lg-fac-dd');
+      el.appendChild(dd);
     } else {
       const fc = document.createElement('span');
       fc.className = 'fac';
@@ -577,17 +583,71 @@ function _backRow(label, onClick) {
   el.addEventListener('click', onClick);
   return el;
 }
-function _plainSelect(options, def) {
-  const sel = document.createElement('select');
-  sel.className = 'lg-opt-select';
-  for (const [val, lbl] of options) {
-    const o = document.createElement('option');
-    o.value = val; o.textContent = lbl;
-    if (val === def) o.selected = true;
-    sel.appendChild(o);
-  }
-  return sel;
+// Shared option lists (with subtext) for the create/skirmish dropdowns.
+const MAP_SIZE_OPTS = [
+  { value: 'skirmish', label: 'Skirmish', sub: '10×10 · quick duel' },
+  { value: 'standard', label: 'Standard', sub: '14×14 · balanced' },
+  { value: 'regional', label: 'Regional', sub: '19×19 · roomy' },
+  { value: 'campaign', label: 'Campaign', sub: '23×23 · long game' },
+  { value: 'battle',   label: 'Battle',   sub: '42×42 · epic war' },
+];
+const CADENCE_OPTS = [
+  { value: 'live',  label: 'Live',  sub: 'Timed turns, one sitting' },
+  { value: 'async', label: 'Async', sub: 'Play over days; we notify you' },
+];
+
+let _ddCloseBound = false;
+function _bindDropdownClose() {
+  if (_ddCloseBound) return;
+  _ddCloseBound = true;
+  document.addEventListener('click', () => {
+    document.querySelectorAll('.lg-dd.is-open').forEach((el) => el.classList.remove('is-open'));
+  });
 }
+
+/** Custom dropdown matching the ledger aesthetic, with per-option subtext.
+ *  options: [{ value, label, sub? }]. Returns an element exposing a live `.value`. */
+function _dropdown(options, value, onChange) {
+  _bindDropdownClose();
+  let cur = value ?? options[0]?.value;
+  const root = document.createElement('div');
+  root.className = 'lg-dd';
+  Object.defineProperty(root, 'value', { get: () => cur, configurable: true });
+  const labelFor = (v) => options.find((o) => o.value === v)?.label ?? v;
+  const capBtn = document.createElement('button');
+  capBtn.type = 'button';
+  capBtn.className = 'lg-dd-cap';
+  const renderCap = () => { capBtn.innerHTML = `<span class="lg-dd-cur">${esc(labelFor(cur))}</span><span class="lg-dd-arrow">▾</span>`; };
+  renderCap();
+  const menu = document.createElement('div');
+  menu.className = 'lg-dd-menu';
+  for (const o of options) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'lg-dd-item' + (o.value === cur ? ' is-sel' : '');
+    item.innerHTML = `<span class="lg-dd-item-label">${esc(o.label)}</span>` +
+      (o.sub ? `<span class="lg-dd-item-sub">${esc(o.sub)}</span>` : '');
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      cur = o.value;
+      renderCap();
+      menu.querySelectorAll('.lg-dd-item').forEach((el) => el.classList.toggle('is-sel', el === item));
+      root.classList.remove('is-open');
+      onChange?.(cur);
+    });
+    menu.appendChild(item);
+  }
+  capBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const willOpen = !root.classList.contains('is-open');
+    document.querySelectorAll('.lg-dd.is-open').forEach((el) => el.classList.remove('is-open'));
+    root.classList.toggle('is-open', willOpen);
+  });
+  root.appendChild(capBtn);
+  root.appendChild(menu);
+  return root;
+}
+
 function _optWrap(label, sel) {
   const wrap = document.createElement('label');
   wrap.className = 'lg-opt';
@@ -760,7 +820,11 @@ function _missionRow(slot, m, status, index) {
       ? `<button class="lg-btn lg-btn-gold lg-btn-sm">${resume ? '▶ Resume' : '▶ Play'}</button>`
       : `<span class="lg-mission-mark">${mark}</span>`);
   if (playable) {
-    const go = (e) => { e?.stopPropagation?.(); _data?.startMission?.(slot.slot, m.id, resume); };
+    const go = (e) => {
+      e?.stopPropagation?.();
+      _campBriefing = { slot: slot.slot, missionId: m.id, resume, title: m.title || m.id, briefing: m.briefing || '', index };
+      select('campaign');
+    };
     el.querySelector('button')?.addEventListener('click', go);
     el.addEventListener('click', go);
     el.style.cursor = 'pointer';
@@ -779,7 +843,13 @@ function _button(label, variant, onClick) {
 function _cap(text)  { const d = document.createElement('div'); d.className = 'lg-cap'; d.textContent = text; return d; }
 function _empty(text){ const p = document.createElement('p'); p.className = 'ledger-placeholder'; p.textContent = text; return p; }
 function _note(text) { const p = document.createElement('p'); p.className = 'lg-note'; p.textContent = text; return p; }
-function roman(n)    { return ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'][n] || String(n); }
+function roman(n) {
+  if (!(n > 0)) return String(n ?? '');
+  const map = [[1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'], [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'], [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']];
+  let out = '', v = Math.floor(n);
+  for (const [val, sym] of map) while (v >= val) { out += sym; v -= val; }
+  return out;
+}
 function esc(s)      { return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
 export function show() { _root?.classList.add('is-active'); }

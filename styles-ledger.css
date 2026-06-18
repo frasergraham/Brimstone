@@ -147,13 +147,18 @@
 .lg-account-id .sub { font-size:13px; color:var(--lg-faint); margin-top:3px; }
 
 /* Skirmish — champions + options */
-.lg-champions { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
-.lg-champion { border:1px solid #232036; background:rgba(16,18,26,.55); border-radius:6px; padding:10px 8px; text-align:center; cursor:pointer; }
-.lg-champion img { width:54px; height:54px; border-radius:50%; object-fit:cover; margin-bottom:6px; border:1px solid #444; }
-.lg-champion .nm { font-size:14px; color:var(--lg-ink-2); }
+.lg-champions { display:grid; grid-template-columns:repeat(auto-fill, minmax(264px,1fr)); gap:10px; }
+.lg-champion { display:flex; align-items:center; gap:12px; border:1px solid #232036; background:rgba(16,18,26,.55); border-radius:6px; padding:10px 12px; text-align:left; cursor:pointer; }
+.lg-champion img { width:52px; height:52px; border-radius:50%; object-fit:cover; border:1px solid #444; flex-shrink:0; }
+.lg-champ-info { flex:1; min-width:0; }
+.lg-champ-top { display:flex; align-items:baseline; gap:8px; }
+.lg-champion .nm { font-size:15px; color:var(--lg-ink-2); }
 .lg-champion .sd { font-size:10px; letter-spacing:.1em; text-transform:uppercase; }
+.lg-champ-stats { font-size:12px; color:var(--lg-gold-dim); margin-top:2px; }
+.lg-champ-blurb { font-size:11.5px; color:var(--lg-faint); margin-top:3px; line-height:1.3; }
 .lg-champion.is-day .sd { color:var(--lg-gold-dim); }
 .lg-champion.is-night .sd { color:var(--lg-purple); }
+.lg-champion.is-night .lg-champ-stats { color:var(--lg-purple-lt); }
 .lg-champion.is-day img { border-color:rgba(212,167,44,.4); }
 .lg-champion.is-night img { border-color:rgba(155,89,182,.4); }
 .lg-champion:hover { border-color:#3a3550; }
@@ -163,18 +168,46 @@
 .lg-opts { display:flex; gap:9px; }
 .lg-opt { flex:1; display:flex; flex-direction:column; gap:5px; background:rgba(16,18,26,.6); border:1px solid #232036; border-radius:5px; padding:9px 12px; }
 .lg-opt-label { font-size:11px; color:var(--lg-faint); }
-.lg-opt-select { background:rgba(8,9,14,.6); border:1px solid #2a2540; border-radius:4px; color:var(--lg-ink); font-family:var(--lg-serif); font-size:15px; padding:5px 8px; cursor:pointer; }
+
+/* Custom dropdown (aesthetic; per-option subtext) */
+.lg-dd { position:relative; }
+.lg-dd-cap { width:100%; display:flex; justify-content:space-between; align-items:center; gap:8px;
+  background:rgba(8,9,14,.6); border:1px solid #2a2540; border-radius:4px; color:var(--lg-ink);
+  font-family:var(--lg-serif); font-size:15px; padding:7px 10px; cursor:pointer; text-align:left; }
+.lg-dd-cap:hover { border-color:var(--lg-gold-dim); }
+.lg-dd-arrow { font-size:10px; color:var(--lg-faint); transition:transform .15s; }
+.lg-dd.is-open .lg-dd-arrow { transform:rotate(180deg); }
+.lg-dd-menu { position:absolute; top:calc(100% + 4px); left:0; right:0; z-index:40; display:none;
+  background:#14121c; border:1px solid #3a3052; border-radius:5px; overflow-y:auto; max-height:280px;
+  box-shadow:0 12px 30px rgba(0,0,0,.55); }
+.lg-dd.is-open .lg-dd-menu { display:block; }
+.lg-dd-item { width:100%; display:flex; flex-direction:column; gap:1px; align-items:flex-start;
+  background:none; border:0; border-bottom:1px solid rgba(255,255,255,.05); color:var(--lg-ink-2);
+  font-family:var(--lg-serif); padding:8px 11px; cursor:pointer; text-align:left; }
+.lg-dd-item:last-child { border-bottom:0; }
+.lg-dd-item:hover { background:rgba(212,167,44,.12); }
+.lg-dd-item.is-sel { background:rgba(212,167,44,.08); }
+.lg-dd-item-label { font-size:14px; color:var(--lg-ink); }
+.lg-dd-item.is-sel .lg-dd-item-label { color:var(--lg-gold); }
+.lg-dd-item-sub { font-size:11px; color:var(--lg-faint); }
+.lg-fac-dd { min-width:118px; }
+.lg-fac-dd .lg-dd-cap { font-size:13px; padding:4px 8px; }
 .lg-skirmish-start { display:flex; align-items:center; gap:14px; margin-top:18px; }
 .lg-skirmish-summary { font-size:13px; color:var(--lg-faint); font-style:italic; }
 
-/* Campaign Party/Missions toggle + party container */
-.lg-toggle { display:inline-flex; border:1px solid #2a2540; border-radius:5px; overflow:hidden; margin:6px 0 14px; }
-.lg-toggle-opt { font-size:13px; padding:8px 16px; color:var(--lg-dim); cursor:pointer; }
-.lg-toggle-opt.is-active { background:rgba(212,167,44,.16); color:var(--lg-gold); }
+/* Campaign Missions/Party tabs + party container */
+.lg-camp-tabs { display:flex; gap:10px; margin:10px 0 16px; }
+.lg-camp-tabs .lg-btn { flex:1; }
 .lg-party { display:flex; flex-direction:column; }
 
-/* Play With Others — rhythms + battle */
-.lg-rhythms { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px; }
+/* Mission briefing */
+.lg-brief-head { margin-bottom:4px; }
+.lg-brief-kicker { font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--lg-label); }
+.lg-brief-title { font-family:var(--lg-display); font-size:30px; color:var(--lg-ink); margin-top:2px; }
+.lg-brief-text { font-size:15px; line-height:1.6; color:var(--lg-ink-2); margin-top:14px; max-width:62ch; }
+
+/* Play Online — rhythms + battle */
+.lg-rhythms { display:grid; grid-template-columns:1fr; gap:12px; margin-bottom:16px; }
 .lg-rhythm { border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.045); border-radius:5px; padding:14px 16px; cursor:pointer; }
 .lg-rhythm:hover { border-color:rgba(155,89,182,.45); background:rgba(155,89,182,.1); }
 .lg-rhythm-top { display:flex; justify-content:space-between; align-items:center; }
@@ -202,8 +235,6 @@
 .lg-battle-scorebar .track { flex:1; height:7px; border-radius:4px; background:var(--lg-night); overflow:hidden; }
 .lg-battle-scorebar .fill { height:100%; background:var(--lg-gold); }
 .lg-invite-row { margin-bottom:14px; }
-.lg-fac-select { background:rgba(8,9,14,.6); border:1px solid #2a2540; border-radius:4px; color:var(--lg-ink-2);
-  font-family:var(--lg-serif); font-size:12px; padding:3px 6px; cursor:pointer; }
 .lg-unassigned { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
 .lg-unassigned .lbl { font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--lg-label); }
 .lg-unassigned .chip { font-size:13px; padding:4px 11px; border:1px solid #2a2540; border-radius:12px; color:var(--lg-ink-2); }

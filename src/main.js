@@ -9738,6 +9738,7 @@ function _ledgerCampaignData() {
       resumeMissionId,
       missions: (c.getMissionList?.() ?? []).map(m => ({
         id: m.id, title: m.title, completed: !!m.completed, available: !!m.available,
+        briefing: c.getMissionDef?.(m.id)?.briefing ?? '',
       })),
     });
   }
@@ -9766,6 +9767,16 @@ async function _ledgerStartCampaignMission(slotIndex, missionId, resume = false)
 // The six selectable Skirmish champions, with portraits. The Day default
 // leader id is 'hero' (a Paladin); the rest are their own faction ids.
 function _ledgerSkirmishFactions() {
+  // Leader base stats (src/unit-types.js) + a one-line role, shown beside each
+  // champion icon in Skirmish.
+  const S = {
+    hero:        { hp: 98,  atk: 2, def: 2, blurb: 'Sturdy frontline — balanced, hard to topple.' },
+    rogue:       { hp: 70,  atk: 3, def: 1, blurb: 'Swift skirmisher — hits hard, but fragile.' },
+    captain:     { hp: 84,  atk: 2, def: 3, blurb: 'Stalwart commander — defensive, rallies allies.' },
+    witch:       { hp: 70,  atk: 2, def: 2, blurb: 'Dark summoner — conjures the restless dead.' },
+    necromancer: { hp: 70,  atk: 1, def: 2, blurb: 'Raises the dead — deadly with a horde at hand.' },
+    brute:       { hp: 126, atk: 4, def: 3, blurb: 'Towering bruiser — immense HP, crushing blows.' },
+  };
   return [
     { id: 'hero',        name: 'Paladin',     side: 'day',   img: 'assets/char-paladin.png' },
     { id: 'rogue',       name: 'Rogue',       side: 'day',   img: 'assets/char-rogue.png' },
@@ -9773,7 +9784,7 @@ function _ledgerSkirmishFactions() {
     { id: 'witch',       name: 'Witch',       side: 'night', img: 'assets/char-witch.png' },
     { id: 'necromancer', name: 'Necromancer', side: 'night', img: 'assets/char-necromancer.png' },
     { id: 'brute',       name: 'Brute',       side: 'night', img: 'assets/char-brute.png' },
-  ].filter(f => getFaction(f.id));
+  ].filter(f => getFaction(f.id)).map(f => ({ ...f, ...S[f.id] }));
 }
 
 // Launch a Skirmish vs AI from the Ledger. Picking a Day champion ⇒ the witch
@@ -9834,6 +9845,7 @@ function _ledgerPartyAction(kind, target, weapon) {
     case 'heal':       _activeCampaign.healUnitWithHerb(idx); break;
     case 'equip':      _activeCampaign.equipWeaponForUnit(idx, weapon); break;
     case 'return':     _activeCampaign.returnWeaponToInventory(idx, weapon); break;
+    case 'unequip':    _activeCampaign.unequipToInventory(idx); break;
     case 'pool-equip': _activeCampaign.equipFromInventory(idx, weapon); break;
   }
   return _ledgerPartyHTML();
@@ -9923,6 +9935,7 @@ function _buildLedgerData() {
     campaign:         () => _ledgerCampaignData(),
     startMission:     (slot, missionId, resume) => _ledgerStartCampaignMission(slot, missionId, resume),
     campaignParty:    (slot) => _ledgerCampaignParty(slot),
+    preloadPortraits: () => _loadCampaignPortraits?.(),
     partyAction:      (kind, target, weapon) => _ledgerPartyAction(kind, target, weapon),
     skirmishFactions: () => _ledgerSkirmishFactions(),
     startSkirmish:    (factionId, opts) => _ledgerStartSkirmish(factionId, opts),

@@ -7340,6 +7340,19 @@ body.spectator-mode #game-screen   { display: flex !important; }
   transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 .cprog-return-btn:hover { background: rgba(255,255,255,0.08); color: var(--text, #d4c9b0); }
+/* Unequip control: bank a unit's equipped weapon back into the shared armory. */
+.cprog-unequip-btn {
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid rgba(212,167,44,0.28);
+  color: var(--clr-dim, #9a8f78);
+  border-radius: 4px;
+  padding: 0.12rem 0.45rem;
+  font-size: 0.62rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.cprog-unequip-btn:hover { background: rgba(212,167,44,0.14); border-color: rgba(212,167,44,0.5); color: var(--text, #d4c9b0); }
 
 .cprog-heal-btn {
   margin-top: 0.4rem;
