@@ -1,0 +1,97 @@
+/* ============================================================================
+   The Ledger — menu redesign (Direction B).
+   A single-frame master-detail menu: a candlelit left RAIL of destinations + a
+   right LEDGER pane that re-binds in place. Atmosphere over the static bg.png.
+   Self-hosted Garamonds (no CDN — offline Capacitor/Electron builds).
+   Built alongside the legacy #setup-screen; shown via the router / ?ledger.
+   ========================================================================== */
+@import url('assets/fonts/ledger-fonts.css');
+
+:root {
+  --lg-gold:      #f5c842;   /* wordmark / active / living */
+  --lg-gold-dim:  #d4a72c;   /* gold accents + borders */
+  --lg-purple:    #9b59b6;   /* the dead / Night / Witch */
+  --lg-purple-lt: #c08fd6;
+  --lg-night:     #7b4fbb;
+  --lg-green:     #4caf7d;
+  --lg-ink:       #f0e8d0;   /* bright parchment text */
+  --lg-ink-2:     #cfc6ad;
+  --lg-dim:       #9b9180;
+  --lg-label:     #8a7a5a;   /* uppercase section labels */
+  --lg-faint:     #7a7060;
+  --lg-serif:     'EB Garamond', 'Georgia', serif;
+  --lg-display:   'Cormorant Garamond', 'Georgia', serif;
+}
+
+#ledger-screen {
+  position: fixed; inset: 0; z-index: 50;
+  display: none;                 /* router / ?ledger toggles .is-active */
+  font-family: var(--lg-serif);
+  background: #06070b;
+  overflow: hidden;
+}
+#ledger-screen.is-active { display: block; }
+
+/* ── Backdrop: static bg.png + a left-dark gradient + an inset vignette ───── */
+.ledger-backdrop { position:absolute; inset:0; background:#06070b url('assets/bg.png') center/cover no-repeat; }
+.ledger-scrim    { position:absolute; inset:0; pointer-events:none;
+  background:linear-gradient(90deg, rgba(6,7,11,.92) 0%, rgba(6,7,11,.66) 46%, rgba(6,7,11,.32) 100%); }
+.ledger-vignette { position:absolute; inset:0; pointer-events:none; box-shadow:inset 0 0 220px 50px rgba(0,0,0,.8); }
+.ledger-frame    { position:relative; height:100%; display:flex; }
+
+/* ── RAIL ─────────────────────────────────────────────────────────────────── */
+.ledger-rail {
+  width:262px; flex:none; padding:32px 24px; display:flex; flex-direction:column;
+  background:linear-gradient(90deg, rgba(8,9,14,.86), rgba(8,9,14,.55));
+  border-right:1px solid rgba(212,167,44,.16);
+}
+.ledger-wordmark { font-family:var(--lg-display); font-weight:600; font-size:30px; letter-spacing:.1em;
+  line-height:.92; color:var(--lg-gold); text-shadow:0 0 26px rgba(245,200,66,.5); }
+.ledger-sub { font-family:var(--lg-display); font-size:10px; letter-spacing:.4em; color:var(--lg-label); margin:6px 0 32px; }
+.ledger-rail-items { display:flex; flex-direction:column; gap:3px; flex:1; }
+.ledger-rail-item {
+  display:flex; align-items:center; gap:13px; padding:11px 13px; border-radius:4px; cursor:pointer;
+  border-left:2px solid transparent; user-select:none;
+}
+.ledger-rail-item .ic { width:20px; text-align:center; font-size:15px; opacity:.55; }
+.ledger-rail-item .lb { font-family:var(--lg-display); font-size:19px; color:#b3a98f; transition:color .12s; }
+.ledger-rail-item.is-active { background:rgba(212,167,44,.13); border-left-color:var(--lg-gold); }
+.ledger-rail-item.is-active .ic { opacity:1; }
+.ledger-rail-item.is-active .lb { color:var(--lg-gold); }
+.ledger-rail-item:hover:not(.is-active) .lb { color:#d8cdb0; }
+.ledger-user { display:flex; align-items:center; gap:10px; border-top:1px solid rgba(255,255,255,.07); padding-top:14px; }
+.ledger-user img { width:30px; height:30px; border-radius:50%; object-fit:cover; }
+.ledger-user .nm { font-size:13px; color:var(--lg-ink-2); }
+.ledger-user .st { font-size:11px; color:#5a5446; }
+
+/* ── LEDGER PANE ──────────────────────────────────────────────────────────── */
+.ledger-pane {
+  flex:1; min-width:0; padding:36px 42px; display:flex; flex-direction:column; overflow:auto;
+  background:linear-gradient(90deg, rgba(8,9,13,.55), rgba(8,9,13,.2));
+}
+.ledger-pane-head { display:flex; align-items:baseline; gap:14px; }
+.ledger-pane-title { font-family:var(--lg-display); font-weight:600; font-size:40px; color:var(--lg-ink); line-height:1; }
+.ledger-pane-tag { font-size:13px; color:#9b8a6a; font-style:italic; }
+.ledger-rule { height:1px; background:linear-gradient(90deg, rgba(212,167,44,.5), transparent); margin:14px 0 22px; }
+.ledger-rule.is-purple { background:linear-gradient(90deg, rgba(155,89,182,.5), transparent); }
+.ledger-placeholder { color:var(--lg-dim); font-size:15px; font-style:italic; }
+
+/* shared section label */
+.lg-cap { font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--lg-label); }
+
+/* ── MOBILE: rail → bottom bar ────────────────────────────────────────────── */
+@media (max-width:720px) {
+  .ledger-frame { flex-direction:column; }
+  .ledger-rail {
+    width:auto; flex-direction:row; order:2; padding:8px 6px; overflow-x:auto;
+    border-right:none; border-top:1px solid rgba(212,167,44,.16);
+    padding-bottom:calc(8px + env(safe-area-inset-bottom));
+  }
+  .ledger-wordmark, .ledger-sub, .ledger-user { display:none; }
+  .ledger-rail-items { flex-direction:row; gap:2px; }
+  .ledger-rail-item { flex-direction:column; gap:2px; padding:6px 10px; border-left:none; border-bottom:2px solid transparent; }
+  .ledger-rail-item.is-active { border-left:none; border-bottom-color:var(--lg-gold); }
+  .ledger-rail-item .lb { font-size:11px; }
+  .ledger-pane { order:1; padding:calc(40px + env(safe-area-inset-top)) 18px 18px; }
+  .ledger-pane-title { font-size:30px; }
+}

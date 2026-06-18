@@ -9663,6 +9663,18 @@ if (_scenarioParam) {
   catch (e) { console.error('Bad ?scenario= JSON:', e); }
 }
 
+// Dev preview for the new "Ledger" menu (Direction B redesign, WIP): `?ledger`
+// shows the rail+ledger frame over the legacy menu so it can be built and
+// browser-verified before the single cutover. At cutover this becomes the live
+// menu and the legacy #setup-screen toggle here is removed.
+if (new URLSearchParams(location.search).get('ledger') != null) {
+  import('./menu/ledger.js').then(({ initLedger }) => {
+    document.getElementById('setup-screen')?.style.setProperty('display', 'none');
+    const session = loadSession();
+    initLedger({ playerName: session?.username || 'Wanderer' })?.show();
+  }).catch((e) => console.error('Ledger preview load failed:', e));
+}
+
 // Auto-start admin replay when ?replayGame=<gameId>[&source=sp] is in the URL.
 // This allows /replay?replayGame=X (served as index.html) to work automatically.
 const _replayGameParam   = new URLSearchParams(location.search).get('replayGame');
