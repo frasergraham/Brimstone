@@ -2416,6 +2416,11 @@ export class Renderer3D {
     // ── Phase 3: standees + selection ───────────────────────────────────────
     // Map<entityId, { plane, base, assetId, ownerKey, leader }> for incremental diff.
     this._entityStandees   = new Map();
+    // Death fade-out: entityId → { startTime, duration }. Ramps a killed unit's
+    // standee (model + floating icon + attachments) to invisible over the
+    // killing ACTION, mirroring the 2D renderer's _fadeOutAnims. Pumped each
+    // frame by _pumpFadeOuts (after the fog veil so it has the final say).
+    this._fadeOutAnims     = new Map();
     // Cache: assetId → BABYLON.Texture (built lazily from the loaded tilemap).
     this._portraitTextures = new Map();
     // Cache: BABYLON.StandardMaterial per asset id (sprite-textured plane material).
@@ -5884,7 +5889,6 @@ export class Renderer3D {
   // ─── Stubs (deferred to later phases / out of Phase 5 scope) ─────────────
 
   addDeathAnim(_col, _row, _color)                                           { /* later phase */ }
-  addFadeOutAnim(_entityId, _duration)                                       { /* later phase */ }
   addNodeRevealAnim(_hexes, _color, _opts)                                   { /* Phase 6 — Hana */ }
   addSpawnAnim(_col, _row, _color)                                           { /* later phase */ }
 
@@ -5897,7 +5901,25 @@ export class Renderer3D {
   // addHpChangeFlash, clearFlashes, clearAnimations, waitForAnimations
   // are defined under the Phase 5 banner near the end of this class.
 
-  getFadeOutOpacity(_entityId)                        { return 1; }
+  /** Begin fading a killed entity's standee to invisible over `duration` ms.
+   *  Called at ACTION granularity from the resolution loop (main.js) the moment
+   *  a battle/splash kill resolves, so the unit dissolves at the end of the
+   *  action that killed it rather than snapping out at the step boundary.
+   *  Babylon owns a continuous render loop, so the next frame's _pumpFadeOuts
+   *  picks this up — no anim loop to kick. */
+  addFadeOutAnim(entityId, duration = 600) {
+    if (entityId == null || !this._fadeOutAnims) return;
+    this._fadeOutAnims.set(entityId, { startTime: Date.now(), duration: Math.max(1, duration) });
+  }
+
+  /** Current opacity for an entity (1 when not fading, 0 when fully faded).
+   *  Same linear ramp as the 2D renderer so UI math is renderer-agnostic. */
+  getFadeOutOpacity(entityId) {
+    const anim = this._fadeOutAnims?.get(entityId);
+    if (!anim) return 1;
+    const t = (Date.now() - anim.startTime) / anim.duration;
+    return Math.max(0, 1 - t);
+  }
   getEntityScreenPositions(_col, _row, _entities, _rect)                     { return []; }
   getEntityScreenPos(_col, _row, _id, _stackIdx, _stackTotal, _rect)         { return null; }
   /**
@@ -10943,6 +10965,9 @@ export class Renderer3D {
     this.clearAllProjectileAnims();
     this.clearFlashes();
     this.clearSpeechBubbles();
+    // Drop any in-flight death fades — between-round reset. Dead units' standees
+    // are disposed by the sync diff; survivors never carry a fade entry.
+    this._fadeOutAnims?.clear();
     if (this._scene) {
       for (const standee of this._entityStandees.values()) {
         this._scene.stopAnimation(standee.plane);
@@ -14472,6 +14497,47 @@ export class Renderer3D {
     this._xrayFading?.delete(id);
   }
 
+  /** Multiply every visible mesh of a standee down to `opacity` (0..1): the rig
+   *  clone body, the floating unit-icon badge, and weapon/horse/x-ray
+   *  attachments. The cone + sphere are invisible position anchors, and the
+   *  badge plane + rig clone are parented under the cone, so fading the cone's
+   *  descendants fades the model AND its icon together in one pass. Babylon's
+   *  mesh.visibility multiplies the material alpha, so an opaque body and the
+   *  0.8-alpha badge both ramp proportionally. */
+  _setStandeeOpacity(standee, opacity) {
+    if (!standee) return;
+    const setVis = (m) => { if (m && typeof m.visibility === 'number') m.visibility = opacity; };
+    const cone = standee.plane;
+    if (cone && typeof cone.getChildMeshes === 'function') {
+      for (const m of cone.getChildMeshes(false)) setVis(m);
+    }
+    const sphere = standee.sphere;
+    if (sphere && typeof sphere.getChildMeshes === 'function') {
+      for (const m of sphere.getChildMeshes(false)) setVis(m);
+    }
+  }
+
+  /** Per-frame death fade. Ramps each fading entity's standee from full to
+   *  invisible over its duration. Runs in the render loop AFTER _applyFogVeil so
+   *  it is the final word on a dying unit's opacity (the fog pass would
+   *  otherwise reset a still-visible unit's meshes to full each draw). We do NOT
+   *  dispose at opacity 0: the killed entity stays `alive` in the round's
+   *  display snapshot until the resolution swaps it out, so disposing here would
+   *  let _syncEntityStandees rebuild it next frame. Disposal stays with the
+   *  existing step-boundary path; the entry is dropped once that fires (standee
+   *  gone) or by clearAnimations() between rounds. */
+  _pumpFadeOuts() {
+    if (!this._fadeOutAnims || this._fadeOutAnims.size === 0) return;
+    for (const id of this._fadeOutAnims.keys()) {
+      const standee = this._entityStandees.get(id);
+      if (!standee) { this._fadeOutAnims.delete(id); continue; }
+      // getFadeOutOpacity is Date.now-based (mirrors addFadeOutAnim + the 2D
+      // renderer). Do NOT use the render clock here — _onBeforeRender's `now` is
+      // performance.now(), a different epoch, which would mis-time the ramp.
+      this._setStandeeOpacity(standee, this.getFadeOutOpacity(id));
+    }
+  }
+
   /** Per-frame x-ray occlusion sweep (throttled). For each alive, fog-visible
    *  standee, cast a ray from the camera to the unit's torso anchor and pick
    *  against occluder geometry (trees / buildings / border forest). A unit is
@@ -14924,6 +14990,9 @@ export class Renderer3D {
     this._pumpXrayOcclusion();
     // Ring fade-in/out tween for ghosts whose occlusion state just changed.
     this._pumpXrayFades(now);
+    // Death fade — ramp killed units' standees (model + icon) to invisible over
+    // the killing action. After the fog veil so it owns the final opacity.
+    this._pumpFadeOuts();
     // Scene fog tracking — keep the start/end relative to the camera so the
     // band fades just past the playable map at every zoom level.
     this._pumpSceneFog();
