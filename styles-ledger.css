@@ -167,6 +167,12 @@
 .lg-skirmish-start { display:flex; align-items:center; gap:14px; margin-top:18px; }
 .lg-skirmish-summary { font-size:13px; color:var(--lg-faint); font-style:italic; }
 
+/* Campaign Party/Missions toggle + party container */
+.lg-toggle { display:inline-flex; border:1px solid #2a2540; border-radius:5px; overflow:hidden; margin:6px 0 14px; }
+.lg-toggle-opt { font-size:13px; padding:8px 16px; color:var(--lg-dim); cursor:pointer; }
+.lg-toggle-opt.is-active { background:rgba(212,167,44,.16); color:var(--lg-gold); }
+.lg-party { display:flex; flex-direction:column; }
+
 /* Play With Others — rhythms + battle */
 .lg-rhythms { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px; }
 .lg-rhythm { border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.045); border-radius:5px; padding:14px 16px; cursor:pointer; }

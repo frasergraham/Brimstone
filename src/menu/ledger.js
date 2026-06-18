@@ -25,6 +25,7 @@ let _activeId = null;
 let _data = null;
 let _renderToken = 0;            // guards against out-of-order async panel renders
 let _campSlot = null;            // selected campaign slot (Campaign destination)
+let _campView = 'missions';      // Campaign sub-view: 'missions' | 'party'
 let _skFaction = null;           // selected Skirmish champion
 const _skOpts = { mapSize: 'standard', nodeCount: 3, aiDifficulty: 'normal' };
 
@@ -147,6 +148,20 @@ function _panelCampaign(body) {
   }
   body.appendChild(slotRow);
 
+  // Party / Missions page-turn (the mock's between-mission toggle).
+  const toggle = document.createElement('div');
+  toggle.className = 'lg-toggle';
+  for (const [view, label] of [['missions', 'Missions'], ['party', 'Party']]) {
+    const opt = document.createElement('span');
+    opt.className = 'lg-toggle-opt' + (_campView === view ? ' is-active' : '');
+    opt.textContent = label;
+    opt.addEventListener('click', () => { _campView = view; select('campaign'); });
+    toggle.appendChild(opt);
+  }
+  body.appendChild(toggle);
+
+  if (_campView === 'party') { _renderPartyView(body, sel); return; }
+
   body.appendChild(_cap(`The Chronicle of Missions · Slot ${roman(sel.slot)}`));
   const chron = document.createElement('div');
   chron.className = 'lg-chronicle';
@@ -160,6 +175,38 @@ function _panelCampaign(body) {
     });
   }
   body.appendChild(chron);
+}
+
+/** Warband (Party) view — reuses the existing party-pane renderer + mutations.
+ *  Injects the party HTML and wires its controls back to partyAction. */
+function _renderPartyView(body, sel) {
+  const container = document.createElement('div');
+  container.className = 'lg-party';
+  body.appendChild(container);
+  const data = _data?.campaignParty?.(sel.slot);
+  if (!data || !data.html) {
+    container.appendChild(_empty('No warband yet — start this playthrough to gather survivors.'));
+    return;
+  }
+  container.innerHTML = data.html;
+  _wirePartyButtons(container, sel.slot);
+}
+
+function _wirePartyButtons(container, slot) {
+  const wire = (selector, kind, withWeapon = false) => {
+    container.querySelectorAll(selector).forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const html = _data?.partyAction?.(kind, btn.dataset.idx, withWeapon ? btn.dataset.weapon : undefined);
+        if (html != null) { container.innerHTML = html; _wirePartyButtons(container, slot); }
+      });
+    });
+  };
+  wire('.cprog-promote', 'promote');
+  wire('.cprog-demote', 'demote');
+  wire('.cprog-heal-btn', 'heal');
+  wire('.cprog-equip-btn', 'equip', true);
+  wire('.cprog-return-btn', 'return', true);
+  wire('.cprog-pool-equip-btn', 'pool-equip', true);
 }
 
 /** Skirmish — pick a champion, set the night, start a game vs AI. */

@@ -9802,6 +9802,48 @@ async function _ledgerOnline() {
   };
 }
 
+// Warband (Party) for a campaign slot. Loads the slot, seeds the active squad,
+// and reuses the existing party-pane renderer — returns its HTML for the ledger
+// to drop in. partyAction performs a mutation (deploy/bench/heal/equip/stow)
+// and returns the refreshed HTML so the ledger re-renders in place.
+function _ledgerPartyHTML() {
+  if (!_activeCampaign) return '';
+  const maxActive = _progressMaxActive();
+  _activeRosterIndices = _activeRosterIndices
+    .filter(i => i >= 0 && i < _activeCampaign.roster.length).slice(0, maxActive);
+  const resolver = (id) => _activeCampaign.getMissionDef(id)?.title ?? id;
+  return _partyPaneHTML(
+    _activeCampaign.heroStats, _activeCampaign.roster, _activeRosterIndices, maxActive,
+    { resources: _activeCampaign.resources, weapons: _activeCampaign.weapons },
+  ) + _fallenSectionHTML(_activeCampaign.fallen, resolver);
+}
+
+function _ledgerCampaignParty(slot) {
+  const camp = CAMPAIGNS.find(c => !c.disabled) || CAMPAIGNS[0];
+  if (!camp) return { started: false, html: '' };
+  _activeCampaign = new Campaign(camp, slot);
+  const started = _activeCampaign.load();
+  _seedActiveRosterForProgress();
+  return { started, title: camp.title, html: _ledgerPartyHTML() };
+}
+
+function _ledgerPartyAction(kind, target, weapon) {
+  if (!_activeCampaign) return '';
+  const maxActive = _progressMaxActive();
+  const idx = target === 'leader' ? 'leader' : parseInt(target, 10);
+  switch (kind) {
+    case 'promote':
+      if (_activeRosterIndices.length < maxActive && !_activeRosterIndices.includes(idx)) _activeRosterIndices.push(idx);
+      break;
+    case 'demote':     _activeRosterIndices = _activeRosterIndices.filter(i => i !== idx); break;
+    case 'heal':       _activeCampaign.healUnitWithHerb(idx); break;
+    case 'equip':      _activeCampaign.equipWeaponForUnit(idx, weapon); break;
+    case 'return':     _activeCampaign.returnWeaponToInventory(idx, weapon); break;
+    case 'pool-equip': _activeCampaign.equipFromInventory(idx, weapon); break;
+  }
+  return _ledgerPartyHTML();
+}
+
 // The injected data/action surface the Ledger renders against.
 function _buildLedgerData() {
   return {
@@ -9810,6 +9852,8 @@ function _buildLedgerData() {
     replays:          () => _collectReplayRows(),
     campaign:         () => _ledgerCampaignData(),
     startMission:     (slot, missionId, resume) => _ledgerStartCampaignMission(slot, missionId, resume),
+    campaignParty:    (slot) => _ledgerCampaignParty(slot),
+    partyAction:      (kind, target, weapon) => _ledgerPartyAction(kind, target, weapon),
     skirmishFactions: () => _ledgerSkirmishFactions(),
     startSkirmish:    (factionId, opts) => _ledgerStartSkirmish(factionId, opts),
     online:           () => _ledgerOnline(),
