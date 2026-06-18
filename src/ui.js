@@ -1,7 +1,7 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
 import { hexKey, hexToPixel, hexDistance, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, FORTIFY_HP_PER_LEVEL, getFortifyCombatBonus, legacyTileType } from './tiles.js';
-import { ITEMS } from './items.js';
+import { ITEMS, lootDisplayLabel } from './items.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf, rangeOf, getEquippedWeaponIdOf, getItemCountOf, totalItemCount, applyProjectedEquip } from './entities.js';
 import { DAMAGE_SCALE } from './balance.js';
 import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
@@ -4919,18 +4919,34 @@ export class UIController {
 
           // ── Resource tracking (player's faction only) ─────────────────
           if (ev.result?.success && (!humanFaction || ev._faction === humanFaction)) {
-            // Resources found: collect lootItems from explore results
+            // Loot found: equipment/key items/mounts show their full name +
+            // stats (via lootItemIds → lootDisplayLabel); raw resources still
+            // aggregate as icons. Falls back to the legacy emoji+log parse for
+            // older/online events that predate lootItemIds.
             if (ev.action?.type === 'explore') {
-              for (const item of ev.result.lootItems ?? []) {
-                if (!item.startsWith('+')) continue;
-                const icon = item.slice(1);
-                if (icon === '🐴' || icon === '⚔') {
-                  // Extract the descriptive log line for this equipment find
-                  const keyword = icon === '🐴' ? 'horse' : 'Found a ';
-                  const logLine = (ev.result.log ?? []).find(l => l.toLowerCase().includes(keyword));
-                  equipFinds.push({ icon, log: logLine || (icon === '🐴' ? 'Found a horse!' : 'Found a weapon!') });
-                } else {
-                  _addRes(foundRes, icon);
+              const ids   = ev.result.lootItemIds;
+              const icons = ev.result.lootItems ?? [];
+              if (Array.isArray(ids) && ids.length) {
+                for (let i = 0; i < ids.length; i++) {
+                  const id   = ids[i];
+                  const icon = (icons[i] ?? '').replace(/^\+/, '');
+                  if (ITEMS[id] || id === 'horse') {
+                    equipFinds.push({ label: lootDisplayLabel(id) });
+                  } else {
+                    _addRes(foundRes, icon || id);
+                  }
+                }
+              } else {
+                for (const item of icons) {
+                  if (!item.startsWith('+')) continue;
+                  const icon = item.slice(1);
+                  if (icon === '🐴' || icon === '⚔') {
+                    const keyword = icon === '🐴' ? 'horse' : 'Found a ';
+                    const logLine = (ev.result.log ?? []).find(l => l.toLowerCase().includes(keyword));
+                    equipFinds.push({ icon, log: logLine || (icon === '🐴' ? 'Found a horse!' : 'Found a weapon!') });
+                  } else {
+                    _addRes(foundRes, icon);
+                  }
                 }
               }
             }
@@ -5055,7 +5071,10 @@ export class UIController {
         }
 
         for (const eq of equipFinds) {
-          html += `<div class="summary-equip">${eq.icon === '🐴' ? '🐴' : '⚔'} ${eq.log}</div>`;
+          // New path: `label` already carries emoji + name + stats. Legacy path:
+          // generic icon + parsed log line.
+          const body = eq.label ?? `${eq.icon === '🐴' ? '🐴' : '⚔'} ${eq.log}`;
+          html += `<div class="summary-equip">${body}</div>`;
         }
 
         // Resource economy rows

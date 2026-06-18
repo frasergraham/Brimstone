@@ -756,11 +756,12 @@ export function executeMove(state, actor, targetCol, targetRow) {
 export function executeExplore(state, actor) {
   const log = [];
   const lootItems = [];
+  const lootItemIds = [];
   const t = tile(state, actor.col, actor.row);
   // Footprint hexes are impassable and carry no building of their own — they
   // are never explorable (the entrance holds the building/loot).
-  if (isBuildingFootprint(t)) return { success: false, log: ['Nothing to explore here.'], lootItems };
-  if (t.explored) return { success: false, log: ['Already explored.'], lootItems };
+  if (isBuildingFootprint(t)) return { success: false, log: ['Nothing to explore here.'], lootItems, lootItemIds };
+  if (t.explored) return { success: false, log: ['Already explored.'], lootItems, lootItemIds };
 
   t.explored = true;
 
@@ -791,7 +792,7 @@ export function executeExplore(state, actor) {
     }
     const raw = rollLoot(table);
     const lootType = concreteFaction.modifyLootRoll(state, actor, table, raw);
-    _applyLoot(state, actor, lootType, log, lootItems);
+    _applyLoot(state, actor, lootType, log, lootItems, lootItemIds);
     concreteFaction.applyExploreLootBonus(
       state, actor, lootType,
       () => runBonusLoot(table),
@@ -803,7 +804,7 @@ export function executeExplore(state, actor) {
   const runBonusLoot = (table) => {
     const raw = rollLoot(table);
     const lootType = concreteFaction.modifyLootRoll(state, actor, table, raw);
-    _applyLoot(state, actor, lootType, log, lootItems);
+    _applyLoot(state, actor, lootType, log, lootItems, lootItemIds);
   };
   // Editor-authored fixed-explore result (offline/campaign only): short-circuit
   // the random roll (and NvN bonus rolls) and yield exactly the authored loot.
@@ -812,10 +813,10 @@ export function executeExplore(state, actor) {
   const ov = t.exploreOverride;
   if (ov != null) {
     if (ov.kind === 'nothing' || ov.id == null) {
-      _applyLoot(state, actor, 'nothing', log, lootItems);
+      _applyLoot(state, actor, 'nothing', log, lootItems, lootItemIds);
     } else {
       const count = ov.kind === 'resource' ? Math.max(1, ov.amount ?? 1) : 1;
-      for (let i = 0; i < count; i++) _applyLoot(state, actor, ov.id, log, lootItems);
+      for (let i = 0; i < count; i++) _applyLoot(state, actor, ov.id, log, lootItems, lootItemIds);
     }
   } else {
     runLoot();
@@ -838,6 +839,7 @@ export function executeExplore(state, actor) {
     addItemInItems(herbInv, ResourceType.HERBS, 1);
     log.push(`${actor.displayName}'s keen eye also finds Herbs!`);
     lootItems.push('+🌿');
+    lootItemIds.push(ResourceType.HERBS);
   }
 
   if (encounterLog.length) log.push(...encounterLog);
@@ -846,7 +848,7 @@ export function executeExplore(state, actor) {
   const xpAwards = [];
   grantXp(xpAwards, actor, XP_PER_EXPLORE, state, 'explore');
   return {
-    success: true, log, cost: 1, lootItems, encounterLog, encounterSurvivor,
+    success: true, log, cost: 1, lootItems, lootItemIds, encounterLog, encounterSurvivor,
     ...(xpAwards.length ? { xpAwards } : {}),
   };
 }
@@ -870,7 +872,12 @@ function _effectiveLoot(state, category, key, defaultTable) {
   return table;
 }
 
-function _applyLoot(state, actor, lootType, log, lootItems) {
+// `lootItems` carries the compact emoji floaters (e.g. '+⚔'); `lootItemIds`
+// carries the concrete loot id index-aligned with it (e.g. 'sword', 'horse',
+// 'herbs') so the action card + round summary can resolve a full name + stats
+// via lootDisplayLabel(). Every push to one pushes exactly one to the other.
+function _applyLoot(state, actor, lootType, log, lootItems, lootItemIds) {
+  const gained = (icon, id) => { lootItems?.push(icon); lootItemIds?.push(id); };
   if (lootType === 'nothing') {
     log.push(`${actor.displayName} searches carefully… nothing useful found.`);
     return;
@@ -882,7 +889,7 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
     if (faction.canEquipHorse()) {
       if (!actor.hasItem('horse')) actor.addItem('horse');
       log.push(`Found a horse! ${actor.displayName}'s movement range increases to 2.`);
-      lootItems?.push('+🐴');
+      gained('+🐴', 'horse');
     }
     return;
   }
@@ -892,7 +899,7 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
     // Sound Horn action. Idempotent: re-exploring the same tile won't stack it.
     if (!actor.hasItem('horn')) actor.addItem('horn');
     log.push(`Found a horn! ${actor.displayName} can sound it to call out across the land.`);
-    lootItems?.push('+📯');
+    gained('+📯', 'horn');
     return;
   }
 
@@ -903,11 +910,11 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
       if (!actor.getEquippedWeaponId()) {
         actor.equipWeapon(lootType);
         log.push(`Found a ${label}! ${actor.displayName} equips it immediately.`);
-        lootItems?.push('+⚔');
+        gained('+⚔', lootType);
       } else {
         actor.addItem(lootType);
         log.push(`Found a ${label}! Added to ${actor.displayName}'s pack.`);
-        lootItems?.push('+⚔');
+        gained('+⚔', lootType);
       }
     } else if (faction.canEquipWeapon()) {
       // The side can use weapons in general, but this faction rejects this
@@ -925,7 +932,7 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
     const inv = faction.getInventory(state);
     addItemInItems(inv, lootType, 1);
     log.push(`${actor.displayName} found Herbs! Added to supplies.`);
-    lootItems?.push('+🌿');
+    gained('+🌿', lootType);
     return;
   }
 
@@ -936,7 +943,7 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
   const inv = faction.getInventory(state);
   addItemInItems(inv, lootType, 1);
   log.push(faction.getResourceFoundLog(actor, lootType));
-  lootItems?.push(`+${resIcon}`);
+  gained(`+${resIcon}`, lootType);
 }
 
 // Splash damage: when an attack triggers splash, every other unit on the
