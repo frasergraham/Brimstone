@@ -4048,7 +4048,11 @@ async function _showCampaignScreen(campaignDef, autoMissionId, slotIndex = 1) {
  * (_showMissionBriefing / _renderDeployRoster), not on this screen.
  */
 function _progressMaxActive() {
-  return _progressSquadCap(_activeCampaign?.roster);
+  // The active squad mirrors the START-only deployment cap (PARTY_CAP survivors
+  // alongside the always-deployed leader); everyone else sits in reserve. The
+  // per-mission limit (maxSurvivorsFromRoster) is still applied, later, at the
+  // mission start dialog — so a tighter mission can still trim the squad there.
+  return Math.min(_progressSquadCap(_activeCampaign?.roster), PARTY_CAP);
 }
 
 /** Front-fill the active squad to the cap (called on fresh entry, not re-renders). */

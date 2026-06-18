@@ -427,30 +427,25 @@ export function partyPaneHTML(heroStats, roster, activeIndices, maxActive, opts 
 
   let html = '<div class="cprog-party-scroll">';
 
-  // Featured leader card — always deployed, never counts toward the cap.
-  html += '<div class="cprog-section-label leader-label">Leader</div>';
+  // Active squad — the always-deployed leader (never counts toward the cap)
+  // plus up to maxActive survivors, all on a single row.
+  html += `<div class="cprog-section-label active-label">Active Squad <span class="cprog-count">${active.length}/${maxActive}</span></div>`;
+  html += '<div class="cprog-grid cprog-squad-grid">';
   html += progressUnitCardHTML(heroUnit, {
     idx: 'leader', isHero: true,
     canHeal: herbs > 0 && heroStats.hp < heroStats.maxHp,
   });
-
-  // Active squad.
-  html += `<div class="cprog-section-label active-label">Active Squad <span class="cprog-count">${active.length}/${maxActive}</span></div>`;
-  if (maxActive === 0) {
-    html += '<div class="cprog-empty">You go alone on the next mission.</div>';
-  } else if (active.length === 0) {
-    html += '<div class="cprog-empty">No survivors selected — tap a reserve unit to deploy.</div>';
-  } else {
-    html += '<div class="cprog-grid">';
-    for (const i of active) {
-      const s = roster[i];
-      html += progressUnitCardHTML(_survivorUnit(s), {
-        idx: i,
-        canHeal: herbs > 0 && s.hp < s.maxHp,
-        control: { cls: 'cprog-demote', label: '−', title: 'Move to reserve' },
-      });
-    }
-    html += '</div>';
+  for (const i of active) {
+    const s = roster[i];
+    html += progressUnitCardHTML(_survivorUnit(s), {
+      idx: i,
+      canHeal: herbs > 0 && s.hp < s.maxHp,
+      control: { cls: 'cprog-demote', label: '−', title: 'Move to reserve' },
+    });
+  }
+  html += '</div>';
+  if (active.length === 0 && reserve.length > 0) {
+    html += '<div class="cprog-empty">Promote a reserve survivor to deploy them alongside the leader.</div>';
   }
 
   // Reserve.

@@ -200,6 +200,16 @@
 .lg-camp-tabs .lg-btn { flex:1; }
 .lg-party { display:flex; flex-direction:column; }
 
+/* Narrow unit cards: leader + active survivors share one row; reserve below. */
+.lg-party .cprog-grid { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:8px; }
+.lg-party .cprog-grid.reserve-grid { grid-template-columns:repeat(4, minmax(0,1fr)); }
+.lg-party .cprog-card { padding:8px 9px; }
+.lg-party .cprog-card.reserve { padding:7px 8px; }
+.lg-party .cprog-card-head { gap:7px; }
+.lg-party .cprog-portrait, .lg-party .cprog-glyph { width:38px; height:38px; }
+.lg-party .cprog-card.reserve .cprog-portrait, .lg-party .cprog-card.reserve .cprog-glyph { width:30px; height:30px; }
+.lg-party .cprog-name { font-size:.8rem; }
+
 /* Mission briefing */
 .lg-brief-head { margin-bottom:4px; }
 .lg-brief-kicker { font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--lg-label); }
