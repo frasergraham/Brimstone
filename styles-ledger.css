@@ -142,7 +142,7 @@
 .lg-btn-danger { border-color:rgba(200,80,80,.5); background:rgba(150,40,40,.25); color:#f0b0b0; }
 .lg-btn-danger:hover { background:rgba(180,50,50,.4); }
 .lg-chronicle { display:flex; flex-direction:column; overflow:auto; }
-.lg-mission { display:flex; align-items:center; gap:15px; padding:10px 6px; border-bottom:1px solid rgba(255,255,255,.05); border-radius:4px; }
+.lg-mission { display:flex; align-items:center; gap:15px; padding:10px 14px 10px 8px; border-bottom:1px solid rgba(255,255,255,.05); border-radius:4px; }
 .lg-mission.is-current { background:rgba(212,167,44,.08); }
 .lg-mission.is-playable:hover { background:rgba(212,167,44,.12); }
 .lg-mission-n { font-size:17px; width:30px; flex:none; color:var(--lg-faint); }
