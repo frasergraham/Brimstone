@@ -1,6 +1,6 @@
 {
   "name": "calebs-hollow",
-  "version": "1.7.3",
+  "version": "1.8.0",
   "description": "Caleb's Hollow hex turn-based game with multiplayer",
   "main": "electron/main.js",
   "type": "module",
