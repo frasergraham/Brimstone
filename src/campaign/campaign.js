@@ -50,7 +50,16 @@ import { evaluateUnlock } from './unlock.js';
 // the UI resolves the mission title). Deaths on a LOST/retried mission do NOT
 // permakill — the party is restored (existing behaviour). `_migrate` backfills
 // `fallen: []` onto pre-v7 saves so no progress is lost.
-const SAVE_VERSION = 7;
+//
+// v8: Persisted active-party (deployed roster) selection. The set of roster
+// indices the player marks "active" on the Party Management / Progress screen
+// was previously held in memory only (`_activeRosterIndices` in main.js) and
+// reset on every reload. A new `activeParty[]` of roster indices rides the
+// slot-aware save so each campaign+slot remembers its own deployed squad. The
+// stored indices are sanitized on read (`getActiveParty`) — out-of-range entries
+// are dropped so a shrunken roster (permadeath) falls back gracefully. `_migrate`
+// backfills `activeParty: []` onto pre-v8 saves.
+const SAVE_VERSION = 8;
 
 // Fresh-campaign hero loadout. A factory (not a shared literal) so each new
 // campaign gets its own object graph — the equipped sword lives in `items`.
@@ -729,6 +738,11 @@ export class Campaign {
     // dict-of-objects shape as unit backpacks and the live faction inventory.
     this.weapons           = {};
     this.storyFlags        = {};
+    // Persisted active-party selection: roster indices the player has marked
+    // "active" (deployed) on the Party Management / Progress screen. Held here so
+    // it round-trips through save()/load() per campaign+slot instead of evaporating
+    // on reload. Sanitized against the live roster on read via getActiveParty().
+    this.activeParty       = [];
     this.updatedAt         = Date.now();
   }
 
@@ -746,6 +760,7 @@ export class Campaign {
       weapons:           { ...this.weapons },
       heroStats:         JSON.parse(JSON.stringify(this.heroStats)),
       storyFlags:        { ...this.storyFlags },
+      activeParty:       Array.isArray(this.activeParty) ? [...this.activeParty] : [],
       updatedAt:         this.updatedAt,
     };
     localStorage.setItem(`brimstone-${this.saveSlot}`, JSON.stringify(data));
@@ -787,6 +802,11 @@ export class Campaign {
     if (this.heroStats.level == null) this.heroStats.level = 1;
     if (this.heroStats.xp == null) this.heroStats.xp = 0;
     this.storyFlags        = migrated.storyFlags ?? {};
+    // Persisted active-party selection. Stored as a plain index array; sanitized
+    // against the live roster lazily on read (getActiveParty), so a roster that
+    // shrank since the save was written degrades gracefully rather than indexing
+    // out of bounds.
+    this.activeParty       = Array.isArray(migrated.activeParty) ? [...migrated.activeParty] : [];
     this.updatedAt         = migrated.updatedAt ?? Date.now();
     // Persist the migrated form so we don't re-migrate every load.
     if (migrated.version !== savedVersion) this.save();
@@ -1229,6 +1249,56 @@ export class Campaign {
   }
 
   /**
+   * Sanitize an arbitrary list of roster indices against the current roster:
+   * coerce to integers, drop anything out of range, and de-duplicate while
+   * preserving order. The single chokepoint for "which indices are valid right
+   * now" — shared by setActiveParty (write) and getActiveParty (read) so a
+   * roster that shrank (permadeath) can never surface a stale index.
+   * @param {number[]} indices
+   * @returns {number[]} valid, unique roster indices in original order.
+   */
+  _sanitizeRosterIndices(indices) {
+    if (!Array.isArray(indices)) return [];
+    const size = Array.isArray(this.roster) ? this.roster.length : 0;
+    const seen = new Set();
+    const out = [];
+    for (const raw of indices) {
+      const i = Math.floor(Number(raw));
+      if (!Number.isFinite(i) || i < 0 || i >= size) continue;
+      if (seen.has(i)) continue;
+      seen.add(i);
+      out.push(i);
+    }
+    return out;
+  }
+
+  /**
+   * Record the player's active-party (deployed roster) selection and persist it.
+   * Indices are sanitized against the current roster before storing, so the saved
+   * blob never carries an out-of-range or duplicate index. Persists immediately
+   * (the screen mutates one unit at a time, like the heal/equip helpers).
+   * @param {number[]} indices  roster indices to mark active/deployed.
+   */
+  setActiveParty(indices) {
+    this.activeParty = this._sanitizeRosterIndices(indices);
+    this.save();
+  }
+
+  /**
+   * The persisted active-party selection, sanitized against the current roster
+   * and clamped to `maxActive`. Sanitizing on read (not just on write) means a
+   * save written before the roster shrank — or one loaded from another build —
+   * degrades gracefully to whatever indices still exist.
+   * @param {number} [maxActive]  optional cap (e.g. the mission/screen squad cap).
+   * @returns {number[]} valid active roster indices, length ≤ maxActive.
+   */
+  getActiveParty(maxActive = Infinity) {
+    const valid = this._sanitizeRosterIndices(this.activeParty);
+    const cap = Number.isFinite(maxActive) ? Math.max(0, Math.floor(maxActive)) : valid.length;
+    return valid.slice(0, cap);
+  }
+
+  /**
    * Heal one party member with a single herb, BETWEEN missions.
    *
    * This is the campaign-landing analogue of the mid-mission `executeHeal`
@@ -1431,6 +1501,7 @@ export class Campaign {
       weapons:           this.weapons,
       heroStats:         this.heroStats,
       storyFlags:        this.storyFlags,
+      activeParty:       Array.isArray(this.activeParty) ? [...this.activeParty] : [],
       updatedAt:         this.updatedAt,
     };
     try {
@@ -1478,6 +1549,7 @@ export class Campaign {
     if (this.heroStats.level == null) this.heroStats.level = 1;
     if (this.heroStats.xp == null) this.heroStats.xp = 0;
     this.storyFlags        = migrated.storyFlags ?? {};
+    this.activeParty       = Array.isArray(migrated.activeParty) ? [...migrated.activeParty] : [];
     this.updatedAt         = migrated.updatedAt ?? Date.now();
     this.save(); // persist to localStorage
     return true;
@@ -1565,6 +1637,18 @@ export function _migrate(data, fromVersion) {
       version: 7,
     };
     v = 7;
+  }
+
+  // v7 → v8: persisted active-party selection. Backfill an empty `activeParty[]`
+  // — pre-v8 saves never recorded the deployed squad (it lived in memory only),
+  // so on first load the squad re-seeds from the front of the roster as before.
+  if (v === 7) {
+    out = {
+      ...out,
+      activeParty: Array.isArray(out.activeParty) ? out.activeParty : [],
+      version: 8,
+    };
+    v = 8;
   }
 
   return out;

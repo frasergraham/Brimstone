@@ -1,0 +1,144 @@
+// Tests for the persisted active-party (deployed roster) selection. The set of
+// roster indices the player marks "active" on the Party Management / Progress
+// screen must survive an app restart, stay independent per save slot, and fall
+// back gracefully when the saved selection references units no longer in the
+// roster (e.g. permadeath shrank it).
+
+import { describe, test, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+import { Campaign } from '../src/campaign/campaign.js';
+import { getCampaignById } from '../src/campaign/campaign-registry.js';
+
+// ── localStorage mock for Node ───────────────────────────────────────────────
+const _store = {};
+globalThis.localStorage = {
+  getItem: (k) => _store[k] ?? null,
+  setItem: (k, v) => { _store[k] = String(v); },
+  removeItem: (k) => { delete _store[k]; },
+  clear: () => { for (const k of Object.keys(_store)) delete _store[k]; },
+};
+
+const hollowDef = getCampaignById('calebs_hollow_prologue');
+
+/** Stub roster entries so we have indices to mark active. */
+function _roster(n) {
+  return Array.from({ length: n }, (_, i) => ({
+    name: `S${i}`, title: null, hp: 10, maxHp: 10, attack: 1, defense: 1,
+    level: 1, xp: 0, items: {},
+  }));
+}
+
+describe('persisted active-party selection', () => {
+  beforeEach(() => localStorage.clear());
+
+  test('the active-party selection survives a "reload"', () => {
+    const c = new Campaign(hollowDef, 1);
+    c.roster = _roster(4);
+    c.setActiveParty([0, 2]);
+    c.save();
+
+    // "Reload": a fresh instance reading the same slot restores the selection.
+    const reloaded = new Campaign(hollowDef, 1);
+    assert.ok(reloaded.load());
+    reloaded.roster = _roster(4); // roster itself is restored from save in real use
+    assert.deepEqual(reloaded.getActiveParty(3), [0, 2]);
+  });
+
+  test('different slots keep independent active parties', () => {
+    const s1 = new Campaign(hollowDef, 1);
+    s1.roster = _roster(3);
+    s1.setActiveParty([0, 1]);
+    s1.save();
+
+    const s2 = new Campaign(hollowDef, 2);
+    s2.roster = _roster(3);
+    s2.setActiveParty([2]);
+    s2.save();
+
+    const s1b = new Campaign(hollowDef, 1);
+    s1b.load();
+    s1b.roster = _roster(3);
+    assert.deepEqual(s1b.getActiveParty(3), [0, 1]);
+
+    const s2b = new Campaign(hollowDef, 2);
+    s2b.load();
+    s2b.roster = _roster(3);
+    assert.deepEqual(s2b.getActiveParty(3), [2]);
+  });
+
+  test('falls back gracefully when the saved selection references missing units', () => {
+    const c = new Campaign(hollowDef, 1);
+    c.roster = _roster(5);
+    c.setActiveParty([0, 3, 4]);
+    c.save();
+
+    // The roster shrank to 2 (e.g. permadeath) before the next reload.
+    const reloaded = new Campaign(hollowDef, 1);
+    reloaded.load();
+    reloaded.roster = _roster(2);
+    // Indices 3 and 4 no longer exist — only the still-valid index 0 survives.
+    assert.deepEqual(reloaded.getActiveParty(3), [0]);
+  });
+
+  test('getActiveParty clamps to the requested cap', () => {
+    const c = new Campaign(hollowDef, 1);
+    c.roster = _roster(5);
+    c.setActiveParty([0, 1, 2, 3]);
+    c.save();
+
+    const reloaded = new Campaign(hollowDef, 1);
+    reloaded.load();
+    reloaded.roster = _roster(5);
+    assert.deepEqual(reloaded.getActiveParty(2), [0, 1]);
+  });
+
+  test('setActiveParty drops out-of-range / duplicate indices before saving', () => {
+    const c = new Campaign(hollowDef, 1);
+    c.roster = _roster(3);
+    c.setActiveParty([0, 0, 1, 9, -1]);
+    assert.deepEqual(c.getActiveParty(3), [0, 1]);
+  });
+
+  test('a pre-v8 save loads with an empty active party (migration backfill)', () => {
+    // Hand-write a v7 save lacking `activeParty`.
+    const c = new Campaign(hollowDef, 1);
+    c.roster = _roster(3);
+    c.save();
+    const key = `brimstone-${c.saveSlot}`;
+    const data = JSON.parse(localStorage.getItem(key));
+    delete data.activeParty;
+    data.version = 7;
+    localStorage.setItem(key, JSON.stringify(data));
+
+    const reloaded = new Campaign(hollowDef, 1);
+    assert.ok(reloaded.load());
+    reloaded.roster = _roster(3);
+    assert.deepEqual(reloaded.getActiveParty(3), []);
+  });
+
+  // End-to-end: mirror the main.js Party-screen flow — a fresh visit seeds the
+  // squad and persists it; the player benches one unit; an app "reload" reopens
+  // the screen and must show the same custom squad rather than re-front-filling.
+  test('a customized squad survives reopening the Party screen after a reload', () => {
+    const MAX = 3;
+    // Fresh entry: seed = front-fill to the cap (and persist, like main.js does).
+    const first = new Campaign(hollowDef, 1);
+    first.load();
+    first.roster = _roster(4);
+    const seeded = first.getActiveParty(MAX);
+    const startSquad = seeded.length > 0 ? seeded
+      : first.roster.map((_, i) => i).slice(0, MAX);
+    first.setActiveParty(startSquad);
+    assert.deepEqual(first.getActiveParty(MAX), [0, 1, 2]);
+
+    // Player benches index 1 and promotes index 3 on the screen.
+    first.setActiveParty([0, 2, 3]);
+
+    // "Reload the app": a brand-new Campaign instance reads the same slot.
+    const afterReload = new Campaign(hollowDef, 1);
+    afterReload.load();
+    afterReload.roster = _roster(4);
+    // Reopening the Party screen restores the CUSTOM squad, not a fresh front-fill.
+    assert.deepEqual(afterReload.getActiveParty(MAX), [0, 2, 3]);
+  });
+});
