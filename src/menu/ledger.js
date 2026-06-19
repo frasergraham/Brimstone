@@ -9,6 +9,7 @@
 // ============================================================================
 
 import { mmSortRows, mmFormatRow } from '../main-menu-games.js';
+import { mountServerSelector } from '../server-selector.js';
 
 /** The six rail destinations, top to bottom (mirrors the mock). */
 const DESTINATIONS = [
@@ -871,6 +872,7 @@ function _panelAccount(body) {
   if (!session?.username) {
     body.appendChild(_empty('Not signed in.'));
     body.appendChild(_signInForm(() => select('account')));
+    mountServerSelector(body);
     return;
   }
   const card = document.createElement('div');
@@ -900,6 +902,8 @@ function _panelAccount(body) {
   const out = _button('Sign out', 'ghost', () => _data?.signOut?.());
   out.style.marginTop = '18px';
   body.appendChild(out);
+
+  mountServerSelector(body);
 }
 
 /** Native passwordless sign-in form (no old auth dialog). */

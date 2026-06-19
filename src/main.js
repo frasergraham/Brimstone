@@ -1,7 +1,6 @@
 // Entry point: wires all modules, setup screen flow, resize
 import { onInactiveChange, tryGameCenterAuth, isNativeMobile, refreshPushToken, loadGameCenterFriends, shareInvite } from './platform.js'; // must be first — sets server globals for Capacitor builds
 import { AppMode, getMode, setMode, isInGame, isAnimating, shouldBufferMessages, onModeChange } from './app-mode.js';
-import { initServerSelector } from './server-selector.js';
 import { GameState, phaseForRound, getCycleLength } from './game.js';
 import { DAMAGE_SCALE } from './balance.js';
 import { Renderer3D, BLOCK_WORD_VARIANTS } from './renderer-3d.js';
@@ -115,16 +114,10 @@ if (!window.electronAPI) {
     .then(r => r.ok ? r.json() : null)
     .then(data => {
       if (data?.modes) _applyModeConfig(data.modes);
-      initServerSelector(data?.devMode ?? false);
     })
-    .catch(() => {
-      // offline / dev-server — all modes remain enabled; still try local dev-mode
-      initServerSelector(false);
-    });
-} else {
-  // Electron: always show selector (electronAPI implies dev)
-  initServerSelector(true);
+    .catch(() => { /* offline / dev-server — all modes remain enabled */ });
 }
+// The dev server selector mounts into the ledger Account pane (see mountServerSelector).
 
 let state, renderer, ui, witchAI, heroAI;
 
