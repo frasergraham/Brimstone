@@ -271,9 +271,101 @@ function _pickSpread(rand, tiles, count, minDist, forbiddenKeys = new Set()) {
   return placed;
 }
 
-// Place INN and GRAVEYARD in opposite corners (TL+BR or TR+BL, randomly assigned).
-// Corner zones are computed at call time from the current MAP_COLS/MAP_ROWS.
-function _pickCornerBuildings(rand, tiles) {
+// Conservative max sight clearance (in hexes) for faction starts. The two
+// starts must sit MORE than this far apart so neither leader can see the other
+// on turn 1. The game starts at DAWN (leader sight 4–5), but we clear the
+// maximum *base* phase sight (DAY = 6) so the starts stay out of sight even as
+// the cycle turns to day — a deliberately conservative buffer. (Rogue +1 and a
+// Scout +1 can push a unit to 7–8, but those units don't exist at game start
+// and rarely march straight back to the enemy spawn, so 6 is the chosen floor.)
+export const START_SIGHT_CLEARANCE = 6;
+
+// Place INN (hero start) and GRAVEYARD (witch start) on OPPOSITE sides of the
+// river, far enough apart that neither leader can see the other at game start
+// (hex distance > START_SIGHT_CLEARANCE). Seeded/deterministic: same seed →
+// same starts. The road network (built later) connects the banks via bridges,
+// so opposite-bank starts stay mutually reachable.
+//
+// Replaces the old fixed opposite-corner placement (TL+BR / TR+BL) — corners
+// made every game open the same way. Now both starts vary across the whole
+// playable area, constrained only by the opposite-bank + out-of-sight rule.
+//
+// Candidate tiles use the same constraints as the old corner picker: plain
+// GRASS, off the 1-tile border, and NOT river-adjacent (so the later building
+// footprint claim can't wall a river bank). Tiers degrade gracefully on tight
+// maps where a strict pair may not exist:
+//   1. opposite banks AND out of sight (dist > clearance)            — strict
+//   2. opposite banks, the most-distant pair available               — relax sight
+//   3. any two candidates, the most-distant pair                     — relax banks
+//   4. legacy opposite-corner fallback                               — last resort
+// `riverMap`/`riverEW` describe the carved river; see riverSide().
+function _pickFactionStarts(rand, tiles, riverMap, riverEW) {
+  const hasRiverNeighbor = (col, row) =>
+    getNeighbors(col, row).some(n => isRiver(tiles.get(hexKey(n.col, n.row))));
+
+  // Collect spawn-eligible candidates, classified by river bank.
+  const left = [], right = [];
+  for (const [, t] of tiles) {
+    if (legacyTileType(t) !== TileType.GRASS) continue;
+    if (t.col < 1 || t.col > MAP_COLS - 2 || t.row < 1 || t.row > MAP_ROWS - 2) continue;
+    if (hasRiverNeighbor(t.col, t.row)) continue;
+    (riverSide(t.col, t.row, riverMap, riverEW) === 'left' ? left : right)
+      .push({ col: t.col, row: t.row });
+  }
+  // Seeded shuffle so equal-quality choices vary per seed (determinism preserved
+  // because `rand` is the seeded stream and traversal order is stable).
+  shuffle(left, rand);
+  shuffle(right, rand);
+
+  // Best opposite-bank pair: among all (left,right) pairs whose distance clears
+  // the threshold, pick one at random; if none clear it, fall back to the
+  // single most-distant opposite-bank pair we can find.
+  const pickOppositeBankPair = () => {
+    const clearing = [];
+    let best = null, bestDist = -1;
+    for (const a of left) {
+      for (const b of right) {
+        const d = hexDistance(a.col, a.row, b.col, b.row);
+        if (d > bestDist) { bestDist = d; best = [a, b]; }
+        if (d > START_SIGHT_CLEARANCE) clearing.push([a, b]);
+      }
+    }
+    if (clearing.length) return clearing[Math.floor(rand() * clearing.length)];
+    return best; // most-distant opposite-bank pair (tier 2), or null if a side is empty
+  };
+
+  // Tier 3: ignore banks — most-distant pair among ALL candidates. Only used
+  // when the river leaves one bank with no eligible spawn tile (degenerate maps).
+  const pickAnyDistantPair = () => {
+    const all = [...left, ...right];
+    let best = null, bestDist = -1;
+    for (let i = 0; i < all.length; i++) {
+      for (let j = i + 1; j < all.length; j++) {
+        const d = hexDistance(all[i].col, all[i].row, all[j].col, all[j].row);
+        if (d > bestDist) { bestDist = d; best = [all[i], all[j]]; }
+      }
+    }
+    return best;
+  };
+
+  let pair = (left.length && right.length) ? pickOppositeBankPair() : null;
+  if (!pair) pair = pickAnyDistantPair();
+
+  // Tier 4: legacy opposite-corner placement — only if we somehow found < 2
+  // eligible candidates anywhere (extremely small / pathological map).
+  if (!pair) return _pickCornerBuildingsFallback(rand, tiles);
+
+  // Randomly assign which faction starts on which tile of the pair.
+  const [first, second] = rand() < 0.5 ? pair : [pair[1], pair[0]];
+  return [
+    { col: first.col,  row: first.row,  building: BuildingType.INN },
+    { col: second.col, row: second.row, building: BuildingType.GRAVEYARD },
+  ];
+}
+
+// Legacy opposite-corner placement (TL+BR or TR+BL), retained only as the
+// last-resort fallback for `_pickFactionStarts` on degenerate maps.
+function _pickCornerBuildingsFallback(rand, tiles) {
   const cz = [
     { minCol: 0,           maxCol: 2,           minRow: 0,           maxRow: 3           }, // TL
     { minCol: MAP_COLS-3,  maxCol: MAP_COLS-1,  minRow: 0,           maxRow: 3           }, // TR
@@ -913,10 +1005,11 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   }
 
   // 3. Place INN and GRAVEYARD — battle maps get 5+5 faction buildings on opposite
-  //    river sides; other maps use single INN/GRAVEYARD in opposite corners.
+  //    river sides; other maps place a single INN/GRAVEYARD on OPPOSITE river
+  //    banks, far enough apart to be out of sight of each other at game start.
   const cornerPlacements = mapSize === 'battle'
     ? _placeBattleSpawnBuildings(rand, tiles, riverMap, riverEW)
-    : _pickCornerBuildings(rand, tiles);
+    : _pickFactionStarts(rand, tiles, riverMap, riverEW);
   const cornerKeys       = new Set(cornerPlacements.map(b => hexKey(b.col, b.row)));
   const { allPlacements: villagePlacements, villageGroups } =
     _generateVillages(rand, tiles, cfg.villages, cfg.minVillageDist, cornerKeys, riverMap, riverEW);
