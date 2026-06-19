@@ -7079,6 +7079,34 @@ body.spectator-mode #game-screen   { display: flex !important; }
   background: rgba(212,167,44,0.07);
 }
 
+/* The debrief surviving-roster + reward survivors now use the rich Party
+   Management unit card (.cprog-card) instead of the simple .campaign-party-card.
+   Lay them out as a 2-up grid inside the debrief panel so the taller cards stay
+   compact; the panel itself already scrolls (max-height + overflow-y:auto). */
+.debrief-roster .debrief-party-grid {
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+  text-align: left;
+}
+/* The reward grid is itself the .reward-survivors flex container in the simple
+   layout; as a cprog grid it must be a real grid (drop the flex so the NEW-badge
+   wrappers tile cleanly). */
+.reward-survivors.debrief-party-grid {
+  display: grid;
+}
+/* Each reward wrapper is a grid cell holding a single rich card; let the card
+   fill it and gold-tint it to read as a fresh reward, like the simple card did. */
+.reward-survivor .cprog-card {
+  flex: 1 1 auto;
+  width: 100%;
+  border-color: rgba(212,167,44,0.4);
+  background: rgba(212,167,44,0.08);
+}
+@media (max-width: 480px) {
+  .debrief-roster .debrief-party-grid { grid-template-columns: 1fr; }
+}
+
 .reward-new-badge {
   position: absolute;
   top: -6px;

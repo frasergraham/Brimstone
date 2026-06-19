@@ -9,6 +9,8 @@ import assert from 'node:assert/strict';
 import {
   buildDebriefHeader, campaignPartyHTML, fallenSectionHTML,
   rewardsSectionHTML, survivorCardHTML,
+  debriefPartyHTML, debriefRewardsSectionHTML,
+  progressUnitCardHTML, survivorToUnit, heroStatsToUnit,
 } from '../src/campaign/campaign-ui.js';
 
 describe('campaign debrief — header selection', () => {
@@ -135,5 +137,111 @@ describe('campaign debrief — ✦ Rewards section (win only)', () => {
     assert.equal(rewardsSectionHTML(undefined), '');
     assert.equal(rewardsSectionHTML({ survivors: [], resources: { wood: 0 } }), '',
       'only zero deltas counts as nothing');
+  });
+});
+
+// ── Party-management card UX: the debrief reuses the EXACT party-screen card ──
+// (progressUnitCardHTML — the rich .cprog-card with portrait, level/XP, HP bar,
+// ATK/DEF, abilities) for BOTH the surviving roster and the reward survivors, so
+// the debrief visually matches the Ledger "Manage the Party" screen.
+
+describe('campaign debrief — surviving roster uses the party-management card', () => {
+  const heroSnap = { hp: 80, maxHp: 98, attack: 4, defense: 3, level: 2, xp: 30,
+    items: { sword: { count: 1, equipped: true } } };
+  const survivors = [
+    { name: 'Sarah', title: 'Farmer', hp: 5, maxHp: 6, attack: 2, defense: 1,
+      level: 1, xp: 0, abilities: [], items: {} },
+    { name: 'John', title: 'Innkeeper', hp: 4, maxHp: 7, attack: 1, defense: 2,
+      level: 1, xp: 0, abilities: [], items: {} },
+  ];
+
+  test('renders the hero + each survivor through the rich .cprog-card builder', () => {
+    const html = debriefPartyHTML(heroSnap, survivors);
+    assert.match(html, /cprog-card/, 'uses the party-management unit card');
+    assert.match(html, /Ishmael Charger/);
+    assert.match(html, /Sarah/);
+    assert.match(html, /John/);
+    // The rich card markers the simple card lacks: XP bar + level chip.
+    assert.match(html, /cprog-fill xp/, 'shows the XP bar (rich card only)');
+    assert.match(html, /cprog-level/, 'shows the level chip (rich card only)');
+  });
+
+  test('does NOT fall back to the old simple .campaign-party-card layout', () => {
+    const html = debriefPartyHTML(heroSnap, survivors);
+    assert.doesNotMatch(html, /campaign-party-card/,
+      'the debrief must not render the old simple card');
+  });
+
+  test('the hero card is byte-identical to the party-screen leader card', () => {
+    const html = debriefPartyHTML(heroSnap, survivors);
+    const heroCard = progressUnitCardHTML(heroStatsToUnit(heroSnap), { idx: 'leader', isHero: true });
+    assert.ok(html.includes(heroCard),
+      'the debrief hero card must embed the identical party-pane leader card');
+  });
+
+  test('each survivor card is byte-identical to the party-screen survivor card', () => {
+    const html = debriefPartyHTML(heroSnap, survivors);
+    survivors.forEach((s, i) => {
+      const card = progressUnitCardHTML(survivorToUnit(s), { idx: i });
+      assert.ok(html.includes(card),
+        `survivor ${s.name}'s debrief card must match the party-pane card`);
+    });
+  });
+
+  test('empty roster still renders the hero card alone', () => {
+    const html = debriefPartyHTML(heroSnap, []);
+    assert.match(html, /Ishmael Charger/);
+    assert.doesNotMatch(html, /Sarah/);
+  });
+});
+
+describe('campaign debrief — rewards use the party-management card', () => {
+  const grantedSurvivor = {
+    name: 'Thomas Putnam', title: 'Farmer',
+    hp: 22, maxHp: 22, attack: 3, defense: 2,
+    level: 1, xp: 0, abilities: ['rally'], abilityLabel: '🔥 Rally', items: {},
+  };
+
+  test('granted survivor renders through the rich .cprog-card with a NEW badge', () => {
+    const html = debriefRewardsSectionHTML({ survivors: [grantedSurvivor], resources: {} });
+    assert.match(html, /Rewards/);
+    assert.match(html, /cprog-card/, 'uses the party-management unit card');
+    assert.match(html, /Thomas Putnam/);
+    assert.match(html, /Rally/);                          // ability badge
+    assert.match(html, /reward-new-badge">NEW</, 'flags the new ally');
+    assert.doesNotMatch(html, /campaign-party-card/,
+      'the reward card must not use the old simple card');
+  });
+
+  test('reward card embeds the identical party-pane survivor card', () => {
+    const html = debriefRewardsSectionHTML({ survivors: [grantedSurvivor], resources: {} });
+    const card = progressUnitCardHTML(survivorToUnit(grantedSurvivor), { idx: 'reward-0' });
+    assert.ok(html.includes(card),
+      'the reward card must embed the identical party-pane unit card');
+  });
+
+  test('resource gains keep the chip line + ✦ Rewards heading', () => {
+    const html = debriefRewardsSectionHTML({ survivors: [], resources: { herbs: 2, food: 1 } });
+    assert.match(html, /✦ Rewards/);
+    assert.match(html, /\+2 herbs/);
+    assert.match(html, /\+1 food/);
+    assert.match(html, /reward-resource/);
+  });
+
+  test('survivors + resources together (Ch1M3 case)', () => {
+    const html = debriefRewardsSectionHTML({
+      survivors: [grantedSurvivor], resources: { wood: 2, food: 2 },
+    });
+    assert.match(html, /Thomas Putnam/);
+    assert.match(html, /cprog-card/);
+    assert.match(html, /\+2 wood/);
+    assert.match(html, /\+2 food/);
+  });
+
+  test('nothing granted → no section (empty string)', () => {
+    assert.equal(debriefRewardsSectionHTML({ survivors: [], resources: {} }), '');
+    assert.equal(debriefRewardsSectionHTML(null), '');
+    assert.equal(debriefRewardsSectionHTML(undefined), '');
+    assert.equal(debriefRewardsSectionHTML({ survivors: [], resources: { wood: 0 } }), '');
   });
 });
