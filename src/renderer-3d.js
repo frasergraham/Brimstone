@@ -4260,9 +4260,11 @@ export class Renderer3D {
     // Leave the rig in its final (collapsed) pose when the clip ends rather than
     // snapping back to frame 0 — the corpse should stay down while it fades.
     const onEnd = () => {
-      clone.oneShotPlaying = false;
-      // Do NOT clear activeGroup back to idle/null: keep the fallen pose held.
-      // The standee fades to 0 and is swapped out at the step boundary.
+      // Hold the collapsed final pose. Keep oneShotPlaying TRUE so the per-frame
+      // locomotion pump (which would otherwise restart idle and pop the corpse
+      // back upright) stays locked out, and keep activeGroup='death'. Pause the
+      // clip at its last frame. The dead standee fades to 0 and its clone is
+      // disposed by the sync diff at the round boundary, so the flag never lingers.
       if (typeof group.pause === 'function') group.pause();
     };
     const obs = group.onAnimationGroupEndObservable;
@@ -11970,7 +11972,11 @@ export class Renderer3D {
           // trail doesn't vanish abruptly at impact.
           try { particles.stop(); } catch (_) { /* no-op */ }
           const tail = (particles.maxLifeTime ?? 0.4) * 1000 + 120;
-          setTimeout(() => { try { particles.dispose(); } catch (_) { /* no-op */ } }, tail);
+          // dispose(false): Babylon's ParticleSystem.dispose() defaults to
+          // disposeTexture=true, which would tear down the SHARED, cached
+          // _magicParticleTex — making the first bolt the only one that ever
+          // renders (every later bolt reuses the freed texture). Keep it alive.
+          setTimeout(() => { try { particles.dispose(false); } catch (_) { /* no-op */ } }, tail);
         }
         carrier.dispose();
         mat.dispose();
@@ -12022,9 +12028,13 @@ export class Renderer3D {
   /** Lazily build + cache a soft radial-gradient texture for the magic
    *  particle system. Painted procedurally via DynamicTexture so there's no
    *  runtime asset/CDN dependency (matches the no-external-asset convention).
-   *  Shared across every magic bolt — disposed only with the scene. */
+   *  Shared across bolts while its GPU texture is alive — but disposing a
+   *  ParticleSystem can release the texture's InternalTexture even with
+   *  disposeTexture=false (observed in SwiftShader), which left every bolt after
+   *  the first with a dead, invisible texture. Repaint whenever the GPU resource
+   *  is gone so each bolt always has a live texture. */
   _magicParticleTexture() {
-    if (this._magicParticleTex) return this._magicParticleTex;
+    if (this._magicParticleTex && this._magicParticleTex._texture) return this._magicParticleTex;
     const BABYLON = this._babylon;
     if (!BABYLON || typeof BABYLON.DynamicTexture !== 'function') return null;
     const SZ = 64;
