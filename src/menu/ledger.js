@@ -917,8 +917,8 @@ function _resumeHero(row) {
       `<div class="lg-resume-meta">${esc(f.meta || '')}</div>` +
     `</div>`;
   const actions = document.createElement('div');
-  actions.className = 'lg-resume-actions';
-  actions.appendChild(_button('▶ Resume', 'gold', () => _activateRow(row)));
+  actions.className = 'lg-resume-actions lg-feed-actions';
+  _fillGameActions(actions, row, '▶ Resume');
   wrap.querySelector('.lg-resume-body').appendChild(actions);
   return wrap;
 }
@@ -927,11 +927,33 @@ function _feedRow(row, cta = null) {
   const f = mmFormatRow(row);
   const el = document.createElement('div');
   el.className = 'lg-feed-row' + (row.action_needed ? ' is-action' : '');
-  el.innerHTML =
-    `<div class="lg-feed-text"><div class="t">${esc(f.title)}</div><div class="m">${esc(f.meta || '')}</div></div>` +
-    `<span class="lg-feed-cta">${cta || (row.action_needed ? 'your turn ▸' : 'open ▸')}</span>`;
-  el.addEventListener('click', () => _activateRow(row));
+  const text = document.createElement('div');
+  text.className = 'lg-feed-text';
+  text.innerHTML = `<div class="t">${esc(f.title)}</div><div class="m">${esc(f.meta || '')}</div>`;
+  el.appendChild(text);
+  const actions = document.createElement('div');
+  actions.className = 'lg-feed-actions';
+  _fillGameActions(actions, row, cta);
+  el.appendChild(actions);
   return el;
+}
+
+/** [Resume] [Abandon] for an in-progress game row. Abandon confirms inline, then
+ *  re-renders the panel (the abandoned game drops out of the refreshed list). */
+function _fillGameActions(actions, row, cta = null) {
+  actions.replaceChildren();
+  actions.appendChild(_button(cta || (row.action_needed ? 'Your turn ▸' : '▶ Resume'), 'gold', () => _activateRow(row)));
+  if (!_data?.abandonable?.(row)) return;
+  actions.appendChild(_button('Abandon', 'danger', () => {
+    const q = document.createElement('span');
+    q.className = 'lg-confirm-q';
+    q.textContent = 'Abandon?';
+    actions.replaceChildren(
+      q,
+      _button('Yes', 'danger', () => { _data?.abandon?.(row); setTimeout(() => select(_activeId), 500); }),
+      _button('No', 'ghost', () => _fillGameActions(actions, row, cta)),
+    );
+  }));
 }
 
 // Activate a feed row WITHOUT ever falling into the legacy menu: campaign rows

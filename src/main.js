@@ -9931,6 +9931,36 @@ async function _ledgerLinkEmail(email) {
   return requestLinkEmail(session.token, email);
 }
 
+// True for in-progress games the player can jump back into AND abandon (a
+// completed game / replay or a "next mission" prompt has nothing to abandon).
+function _ledgerRowAbandonable(row) {
+  switch (row?.kind) {
+    case 'local-campaign': return !!row._missionDef;   // an in-progress mission save
+    case 'local-sp':
+    case 'game':
+    case 'battle':         return !!row.room_id;
+    default:               return false;
+  }
+}
+
+// Abandon a resumable game: delete the local save, or resign the online game.
+function _ledgerAbandonRow(row) {
+  switch (row?.kind) {
+    case 'local-sp':
+      _deleteSpSave(row.room_id);
+      break;
+    case 'local-campaign':
+      if (row._campaignDef && row._missionDef) {
+        deleteCampaignMissionSave(row._campaignDef.id, row._missionDef.id, row._slotIndex ?? 1);
+      }
+      break;
+    case 'game':
+    case 'battle':
+      if (row.room_id) _ensureAuthed(() => mp.resignGame(row.room_id));
+      break;
+  }
+}
+
 // When set, lobby pushes (onLobbyJoined/Update/List) route to the ledger
 // instead of the legacy _renderLobby/_renderPublicLobbies. The ledger registers
 // these via the DI onLobby/onLobbyList while its lobby view is mounted.
@@ -9989,6 +10019,8 @@ function _buildLedgerData() {
     online:           () => _ledgerOnline(),
     signOut:          () => _signOut(),
     activate:         (row) => _mmDefaultRowClick(row),   // resume / open / replay
+    abandon:          (row) => _ledgerAbandonRow(row),
+    abandonable:      (row) => _ledgerRowAbandonable(row),
     // Native passwordless sign-in: feed the name into the (hidden) auth input and
     // run the shared auth core — no old dialog ever shows.
     signInWithName:   (name, cb) => {

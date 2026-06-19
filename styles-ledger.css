@@ -115,6 +115,9 @@
 .lg-feed-text .m { font-size:12px; color:var(--lg-faint); }
 .lg-feed-cta { font-size:13px; color:var(--lg-purple-lt); white-space:nowrap; }
 .lg-feed-row.is-action .lg-feed-cta { color:var(--lg-green); }
+.lg-feed-actions { display:flex; align-items:center; gap:7px; flex-shrink:0; }
+.lg-feed-actions .lg-btn { font-size:12px; padding:6px 12px; }
+.lg-confirm-q { font-size:12px; color:#f0b0b0; white-space:nowrap; }
 
 /* Campaign — slots + chronicle */
 .lg-slots { display:flex; gap:12px; margin-bottom:4px; }
