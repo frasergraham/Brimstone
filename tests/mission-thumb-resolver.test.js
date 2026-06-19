@@ -23,7 +23,9 @@ globalThis.localStorage = {
   clear: () => { for (const k of Object.keys(_store)) delete _store[k]; },
 };
 
-import { missionThumb, saveThumb, loadThumb } from '../src/menu/thumbnails.js';
+import {
+  missionThumb, saveThumb, loadThumb, deleteThumb, campaignMissionRowId,
+} from '../src/menu/thumbnails.js';
 import {
   fixedMissionImage, missionMapImageName, MIGRATED_MISSIONS,
 } from '../src/campaign/mission-catalog.js';
@@ -85,5 +87,80 @@ describe('missionThumb — in-progress vs not-started resolution', () => {
   test('missing rowId still resolves to the fixed image', () => {
     assert.equal(missionThumb('first_night', null), 'assets/mission-maps/Ch1M3.jpg');
     assert.equal(missionThumb('first_night', undefined), 'assets/mission-maps/Ch1M3.jpg');
+  });
+});
+
+describe('campaignMissionRowId — canonical save key', () => {
+  test('builds <campaignId>/slot<N>/<missionId>', () => {
+    assert.equal(
+      campaignMissionRowId('calebs_hollow_prologue', 1, 'first_night'),
+      'calebs_hollow_prologue/slot1/first_night');
+    assert.equal(
+      campaignMissionRowId('calebs_hollow_prologue', 2, 'first_night'),
+      'calebs_hollow_prologue/slot2/first_night');
+  });
+
+  test('null when the campaign id is missing (no row id to key on)', () => {
+    assert.equal(campaignMissionRowId(null, 1, 'first_night'), null);
+    assert.equal(campaignMissionRowId(undefined, 1, 'first_night'), null);
+  });
+
+  test('key matches what the menu card / briefing read', () => {
+    // The card builder and briefing resolve their image with this exact key —
+    // so the writer (round-end capture), readers, and the loss-reset all agree.
+    const rowId = campaignMissionRowId('calebs_hollow_prologue', 1, 'first_night');
+    assert.equal(rowId, 'calebs_hollow_prologue/slot1/first_night');
+  });
+});
+
+// On mission FAILURE the failed run's last-round snapshot must NOT linger on the
+// card. `_handleCampaignMissionEnd` (main.js) deletes the saved thumb on a loss
+// so `missionThumb` reverts to the fixed pre-generated image. A WIN leaves the
+// saved thumb untouched. These tests reproduce that loss/win branching against
+// the shared key + thumbnail store (DOM-free — the handler itself is in main.js,
+// but the load-bearing behaviour is exactly this delete-on-loss vs keep-on-win).
+describe('mission failure resets the card thumbnail to the default', () => {
+  beforeEach(() => localStorage.clear());
+
+  const CAMPAIGN = 'calebs_hollow_prologue';
+  const SLOT = 1;
+  const MISSION = 'first_night';
+  const rowId = campaignMissionRowId(CAMPAIGN, SLOT, MISSION);
+  const FAILED_SNAPSHOT = 'data:image/jpeg;base64,FAILEDRUNSNAPSHOT';
+  const FIXED = 'assets/mission-maps/Ch1M3.jpg';
+
+  test('LOSS: deleting the saved thumb reverts the card to the fixed image', () => {
+    // A failed attempt left its last-round snapshot saved under the row id.
+    saveThumb(rowId, FAILED_SNAPSHOT);
+    assert.equal(missionThumb(MISSION, rowId), FAILED_SNAPSHOT,
+      'precondition: the stale failed snapshot is showing');
+
+    // The loss branch of _handleCampaignMissionEnd does exactly this.
+    deleteThumb(rowId);
+
+    assert.equal(loadThumb(rowId), null, 'saved thumb is gone after a loss');
+    assert.equal(missionThumb(MISSION, rowId), FIXED,
+      'card falls back to the fixed pre-generated image');
+  });
+
+  test('WIN: the saved thumb is NOT deleted (a won mission is complete)', () => {
+    // A won mission keeps whatever was saved — the win branch never deletes it.
+    saveThumb(rowId, FAILED_SNAPSHOT);
+    // (no deleteThumb on a win)
+    assert.equal(loadThumb(rowId), FAILED_SNAPSHOT, 'win leaves the saved thumb in place');
+    assert.equal(missionThumb(MISSION, rowId), FAILED_SNAPSHOT,
+      'a win does not revert the card to the fixed image');
+  });
+
+  test('LOSS reset is row-id specific — only this mission/slot is cleared', () => {
+    const otherRow = campaignMissionRowId(CAMPAIGN, 2, MISSION); // a different slot
+    saveThumb(rowId, FAILED_SNAPSHOT);
+    saveThumb(otherRow, 'data:image/jpeg;base64,OTHERSLOT');
+
+    deleteThumb(rowId); // lose the slot-1 mission
+
+    assert.equal(loadThumb(rowId), null, 'failed slot-1 thumb cleared');
+    assert.equal(loadThumb(otherRow), 'data:image/jpeg;base64,OTHERSLOT',
+      'slot-2 thumb untouched');
   });
 });

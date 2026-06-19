@@ -72,6 +72,18 @@ export function loadStats(id) {
 }
 
 /**
+ * Canonical localStorage row id for a campaign mission's saved thumbnail/stats.
+ * The SAME key `_captureRoundThumbnail` writes at round-end and the menu cards /
+ * briefing read via `missionThumb`/`loadThumb`: `<campaignId>/slot<N>/<missionId>`.
+ * Single source of truth so the writer, readers, and the loss-time reset all
+ * agree on the key.
+ */
+export function campaignMissionRowId(campaignId, slotIndex, missionId) {
+  if (!campaignId || missionId == null) return null;
+  return `${campaignId}/slot${slotIndex}/${missionId}`;
+}
+
+/**
  * Resolve the map image to show on a campaign mission card. An in-progress
  * mission has a live saved thumbnail (captured at round-end, keyed by its row id
  * `<campaignId>/slot<N>/<missionId>`) — show that, exactly like a skirmish. A
