@@ -26,9 +26,9 @@
  * @type {ReadonlyArray<{ id: string, campaignId: string, title: string, file: string }>}
  */
 export const MIGRATED_MISSIONS = Object.freeze([
-  { id: 'tutorial',            campaignId: 'calebs_hollow_prologue',   title: "The Road to Caleb's Hollow", file: 'tutorial' },
-  { id: 'prologue',            campaignId: 'calebs_hollow_prologue',   title: 'The Awakening - Tutorial',   file: 'Ch1M1' },
-  { id: 'gathering_survivors', campaignId: 'calebs_hollow_prologue',   title: "Trouble at The Wanderer's Inn", file: 'Ch1M2' },
+  { id: 'tutorial',            campaignId: 'calebs_hollow_prologue',   title: "The Road to Caleb's Hollow - Tutorial", file: 'tutorial' },
+  { id: 'prologue',            campaignId: 'calebs_hollow_prologue',   title: "Trouble at The Wanderer's Inn",   file: 'Ch1M1' },
+  { id: 'gathering_survivors', campaignId: 'calebs_hollow_prologue',   title: 'Gathering Survivors', file: 'Ch1M2' },
   { id: 'first_night',         campaignId: 'calebs_hollow_prologue',   title: 'The First Night',            file: 'Ch1M3' },
   { id: 'river_crossing',      campaignId: 'calebs_hollow_prologue',   title: 'The River Crossing',         file: 'Ch1M4' },
   { id: 'dark_ritual',         campaignId: 'calebs_hollow_prologue',   title: 'Dark Ritual',                file: 'Ch1M5' },
