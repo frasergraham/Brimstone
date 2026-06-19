@@ -311,8 +311,10 @@
    upward — see .lg-dd.is-up). No outer page scroll on this screen. */
 .ledger-pane-body.lg-skirmish { flex:1 1 auto; min-height:0; overflow:hidden; }
 .lg-skirmish .lg-champ-scroll { flex:1 1 auto; min-height:0; overflow-y:auto; padding-right:6px; }
-/* The "night ahead" caption, options, and Start row never shrink — always shown. */
-.lg-skirmish > .lg-cap:nth-of-type(2),
+/* The "night ahead" caption, options, and Start row never shrink — always shown.
+   (Pin every direct-child caption: `:nth-of-type(2)` counted by tag and matched
+   nothing, since the 2nd div child is .lg-champ-scroll, not a .lg-cap.) */
+.lg-skirmish > .lg-cap,
 .lg-skirmish .lg-opts,
 .lg-skirmish .lg-skirmish-start { flex:0 0 auto; }
 .lg-skirmish .lg-skirmish-start { margin-top:12px; }

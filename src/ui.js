@@ -175,6 +175,9 @@ export class UIController {
     this._stopCountdown();
     this._dismissGraceDialog();
     if (this._autorunTimer) { clearTimeout(this._autorunTimer); this._autorunTimer = null; }
+    // A pending mission-log toast dismissal must not fire after teardown and
+    // touch an orphaned element (shares the listener-leak hazard).
+    if (this._missionLogToastTimer) { clearTimeout(this._missionLogToastTimer); this._missionLogToastTimer = null; }
   }
 
   // ── Element access ───────────────────────────────────────────────────────────

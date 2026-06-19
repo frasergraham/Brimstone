@@ -9320,8 +9320,12 @@ function _ledgerStartSkirmish(factionId, opts = {}) {
   if (!def) return;
   const isDay = def.side === 'day';
   // Opponent: a random champion drawn from the OTHER side's roster — pick a Day
-  // troop and you face a random Night leader, and vice-versa.
-  const enemies = getFactionsForSide(isDay ? 'night' : 'day').map(f => f.id);
+  // troop and you face a random Night leader, and vice-versa. Demo-gated
+  // champions (see demo-config) are excluded so a "Coming Soon" leader can never
+  // spawn as the AI enemy either.
+  const enemies = getFactionsForSide(isDay ? 'night' : 'day')
+    .map(f => f.id)
+    .filter(id => isFactionAvailable(id));
   const enemyFactionId = enemies.length ? enemies[Math.floor(Math.random() * enemies.length)] : null;
   document.getElementById('ledger-screen')?.classList.remove('is-active');
   init(/*witchIsAI*/ isDay, /*heroIsAI*/ !isDay, /*autoplay*/ false, factionId, { ...opts, enemyFactionId });
