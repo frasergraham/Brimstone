@@ -6523,6 +6523,20 @@ async function _asyncWatchLastTurn(lastRound) {
 
   console.log('[async-replay] pre-state entities:', state.entities?.slice(0, 4).map(e => `${e.type}@${e.col},${e.row}`));
 
+  // Snapshot pre-resolution node/score state for the wrap-up reckoning + score
+  // bar animation (read from the pre-resolution entities now in `state`).
+  const prevNodes = (state.witchObjectives ?? []).map(obj => ({
+    col: obj.col, row: obj.row, label: obj.label,
+    owner: nodeController(obj, state.entities),
+  }));
+  const prevScore = { hero: state.nodeScore?.hero ?? 0, witch: state.nodeScore?.witch ?? 0 };
+
+  // Keep the replay timeline up after the animation so the end-of-round wrap-up
+  // CARD can attach to the per-turn cards — parity with the live online path.
+  // Without this the cards are torn down at the end of _animateResolutionSteps
+  // and the resumed turn falls back to the legacy round-summary modal.
+  _keepTimelineForReview = !!(ui && _asyncFaction);
+
   // Animate — entities slide from pre-state positions to post-state positions
   await _animateResolutionSteps(stepsArr, finalEntities, redrawOnline, _asyncFaction, mp?.myPlayerId ?? null);
   console.log('[async-replay] animation complete');
@@ -6538,43 +6552,55 @@ async function _asyncWatchLastTurn(lastRound) {
 
   // If skip was pressed mid-animation, bail out entirely (skip summary)
   if (playback.jumpToEnd) {
+    _keepTimelineForReview = false;
+    ui?.hideReplayTimeline?.();
     resetPlayback();
     return;
   }
 
-  // Show resolution summary with replay support
+  // Show the end-of-round review with replay support
   if (ui && _asyncFaction) {
     setMode(AppMode.RESOLVING);
-    let action;
-    do {
-      action = await ui._showResolutionSummary(stepsArr, lastRound.roundNum ?? (state.round - 1), {
-        humanFaction: _asyncFaction,
-        fogOfWar: state.fogOfWar,
-        gameOver: state.gameOver,
-        winner: state.winner,
-        winReason: state.winReason,
-      });
-      if (action === 'replay') {
-        // Restore pre-resolution state and re-animate
-        const replayPre = MirrorState.fromSnapshot(
-          typeof preState === 'string' ? JSON.parse(preState) : preState
-        );
-        Object.assign(state, replayPre);
-        state.hero      = replayPre.hero;
-        state.witch     = replayPre.witch;
-        state.myFaction = _asyncFaction;
-        redrawOnline();
-        await _animateResolutionSteps(stepsArr, finalEntities, redrawOnline, _asyncFaction, mp?.myPlayerId ?? null);
-        // Restore post-resolution state after replay
-        Object.assign(state, postResState);
-        state.hero      = postResState.hero;
-        state.witch     = postResState.witch;
-        state.myFaction = _asyncFaction;
-        await ui._triggerPostRoundEffects();
-        redrawOnline();
-        setMode(AppMode.RESOLVING);
-      }
-    } while (action === 'replay');
+
+    // Re-watch this round: restore the pre-resolution state and re-animate, then
+    // re-apply the post-resolution state. Shared by the wrap-up card's Replay
+    // button and the game-over modal's Replay (via _runEndOfRoundReview).
+    const _reReplay = async () => {
+      const replayPre = MirrorState.fromSnapshot(
+        typeof preState === 'string' ? JSON.parse(preState) : preState
+      );
+      Object.assign(state, replayPre);
+      state.hero      = replayPre.hero;
+      state.witch     = replayPre.witch;
+      state.myFaction = _asyncFaction;
+      redrawOnline();
+      await _animateResolutionSteps(stepsArr, finalEntities, redrawOnline, _asyncFaction, mp?.myPlayerId ?? null);
+      Object.assign(state, postResState);
+      state.hero      = postResState.hero;
+      state.witch     = postResState.witch;
+      state.myFaction = _asyncFaction;
+      await ui._triggerPostRoundEffects();
+      redrawOnline();
+      setMode(AppMode.RESOLVING);
+    };
+
+    // Route through the shared review helper so the resumed turn shows the new
+    // turn-card wrap-up (with icons) for a normal round, and the dedicated
+    // Victory/Defeat modal on game over — exactly like the live online path.
+    await _runEndOfRoundReview({
+      steps: stepsArr, roundNum: lastRound.roundNum ?? (state.round - 1),
+      humanFaction: _asyncFaction, fogOfWar: state.fogOfWar,
+      prevScore, prevNodes,
+      roundHistory: _onlineRoundHistory,
+      reReplay: _reReplay,
+      replayFull: async (winner, winReason) => {
+        await _replayFullGame(_onlineRoundHistory, winner, winReason,
+          state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch',
+          redrawOnline);
+        _doRestart();
+      },
+    });
+
     setMode(AppMode.PLANNING);
   }
 
@@ -8128,6 +8154,13 @@ async function _playReconnectReplay(replay) {
   }));
   const prevScore = { hero: state.nodeScore?.hero ?? 0, witch: state.nodeScore?.witch ?? 0 };
 
+  // Keep the replay timeline up after the animation so the end-of-round wrap-up
+  // CARD can attach to the per-turn cards — parity with the live online path
+  // (onResolutionComplete). Without this the cards are torn down at the end of
+  // _animateResolutionSteps and the resumed turn falls back to the legacy
+  // round-summary modal with no turn-card icons.
+  _keepTimelineForReview = !!(ui && mp?.myFaction && !state.gameOver);
+
   // Replay under the round's OWN phase (carried by the saved pre-state): the
   // live state's day cycle has already advanced past this round, which would
   // change the lighting and the sight ranges the fog veil / card gates use.
@@ -8153,6 +8186,8 @@ async function _playReconnectReplay(replay) {
   // If the user hit "skip" mid-animation, bail out: snap to final state and
   // skip the post-round summary entirely.
   if (playback.jumpToEnd) {
+    _keepTimelineForReview = false;
+    ui?.hideReplayTimeline?.();
     return;
   }
 
@@ -8162,23 +8197,38 @@ async function _playReconnectReplay(replay) {
 
   if (mp?.myFaction) {
     setMode(AppMode.SUMMARY);
-    let action;
-    do {
-      action = await ui._showResolutionSummary(steps, replay.roundNum, {
-        prevScore, prevNodes, humanFaction: mp.myFaction, fogOfWar: state.fogOfWar,
-        gameOver: false,
-      });
-      if (action === 'replay') {
-        await withPinnedPhase(state, preState?.phase, async () => {
-          state.entities = preEntities;
-          redraw();
-          await _animateResolutionSteps(steps, currentEntities, redraw, mp.myFaction, mp.myPlayerId ?? null);
-          state.entities = currentEntities;
-        });
+
+    // Re-watch this round's animation from the pre-resolution snapshot, under
+    // the round's own phase. Shared by the wrap-up card's Replay button and the
+    // game-over modal's Replay (via _runEndOfRoundReview).
+    const _reReplay = async () => {
+      await withPinnedPhase(state, preState?.phase, async () => {
+        state.entities = preEntities;
         redraw();
-        setMode(AppMode.SUMMARY);
-      }
-    } while (action === 'replay');
+        await _animateResolutionSteps(steps, currentEntities, redraw, mp.myFaction, mp.myPlayerId ?? null);
+        state.entities = currentEntities;
+      });
+      redraw();
+      setMode(AppMode.SUMMARY);
+    };
+
+    // Route through the shared review helper so the resumed turn shows the new
+    // turn-card wrap-up (with icons) for a normal round, and the dedicated
+    // Victory/Defeat modal on game over — exactly like the live online path.
+    await _runEndOfRoundReview({
+      steps, roundNum: replay.roundNum,
+      humanFaction: mp.myFaction, fogOfWar: state.fogOfWar,
+      prevScore, prevNodes,
+      roundHistory: _onlineRoundHistory,
+      reReplay: _reReplay,
+      replayFull: async (winner, winReason) => {
+        await _replayFullGame(_onlineRoundHistory, winner, winReason,
+          state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch',
+          redraw);
+        _doRestart();
+      },
+    });
+
     setMode(AppMode.PLANNING);
     ui._animateScoreBar(prevScore, prevNodes);
   }
