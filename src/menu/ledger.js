@@ -975,6 +975,12 @@ function _resumeHero(row) {
       `<div class="lg-resume-meta">${esc(f.meta || '')}</div>` +
       (_gameTimeMeta(row) ? `<div class="lg-resume-meta m2">${esc(_gameTimeMeta(row))}</div>` : '') +
     `</div>`;
+  if (thumb) {
+    const te = wrap.querySelector('.lg-resume-thumb');
+    te.classList.add('clickable');
+    te.setAttribute('title', 'View game details');
+    te.addEventListener('click', () => _openGameDetail(row));
+  }
   const actions = document.createElement('div');
   actions.className = 'lg-resume-actions lg-feed-actions';
   _fillGameActions(actions, row, '▶ Resume');
@@ -989,8 +995,10 @@ function _feedRow(row, cta = null) {
   const thumb = loadThumb(row.room_id);
   if (thumb) {
     const th = document.createElement('div');
-    th.className = 'lg-feed-thumb';
+    th.className = 'lg-feed-thumb clickable';
     th.style.backgroundImage = `url(${thumb})`;
+    th.setAttribute('title', 'View game details');
+    th.addEventListener('click', (e) => { e.stopPropagation(); _openGameDetail(row); });
     el.appendChild(th);
   }
   const text = document.createElement('div');
@@ -1004,6 +1012,63 @@ function _feedRow(row, cta = null) {
   _fillGameActions(actions, row, cta);
   el.appendChild(actions);
   return el;
+}
+
+// ── Game-detail overlay (thumbnail click) ────────────────────────────────────
+
+function _cap1(s) { s = String(s || ''); return s.charAt(0).toUpperCase() + s.slice(1); }
+
+/** Build the side-panel stats HTML for the detail overlay. */
+function _detailStatsHTML(d) {
+  const out = [`<div class="lg-detail-title gthc">${esc(d.title)}</div>`];
+  const meta = [];
+  if (d.round != null) meta.push(`Round ${d.round}`);
+  if (d.phaseLabel)    meta.push(esc(d.phaseLabel));
+  if (d.mapSize)       meta.push(esc(_cap1(d.mapSize)));
+  out.push(`<div class="lg-detail-meta">${meta.join(' · ')}</div>`);
+
+  if (d.score) {
+    out.push(`<div class="lg-detail-stat"><span>Node score</span><b>Hero ${d.score.hero} – ${d.score.witch} Witch</b>` +
+      `<i>first to ${d.score.threshold}</i></div>`);
+  }
+  if (d.kills) {
+    out.push(`<div class="lg-detail-stat"><span>Slain</span><b>Hero ${d.kills.hero} · Witch ${d.kills.witch}</b></div>`);
+  }
+  if (d.players != null) {
+    out.push(`<div class="lg-detail-stat"><span>Players</span><b>${d.players}</b></div>`);
+  }
+  if (d.participants) {
+    for (const [side, label] of [['hero', 'Hero'], ['witch', 'Witch']]) {
+      const list = d.participants[side] || [];
+      if (!list.length) continue;
+      out.push(`<div class="lg-detail-group is-${side}"><div class="hd">${label}</div>` +
+        list.map((u) => `<div class="u${u.alive ? '' : ' dead'}"><span class="nm">${esc(u.label)}</span>` +
+          `<span class="sb">${esc(u.sub)}</span></div>`).join('') + `</div>`);
+    }
+  }
+  return out.join('');
+}
+
+/** Open the game-detail modal: a bigger thumbnail beside a stats side panel. */
+function _openGameDetail(row) {
+  const d = _data?.detail?.(row);
+  if (!d) return;
+  const back = document.createElement('div');
+  back.className = 'lg-detail-back';
+  const panel = document.createElement('div');
+  panel.className = 'lg-detail';
+  panel.innerHTML =
+    `<div class="lg-detail-img${d.thumb ? ' has-img' : ''}"` +
+      `${d.thumb ? ` style="background-image:url(${d.thumb})"` : ''}>${d.thumb ? '' : '🜂'}</div>` +
+    `<div class="lg-detail-side">${_detailStatsHTML(d)}</div>` +
+    `<button class="lg-detail-close" aria-label="Close">✕</button>`;
+  const close = () => { back.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  back.addEventListener('click', (e) => { if (e.target === back) close(); });
+  panel.querySelector('.lg-detail-close').addEventListener('click', close);
+  document.addEventListener('keydown', onKey);
+  back.appendChild(panel);
+  document.body.appendChild(back);
 }
 
 /** [Resume] [Abandon] for an in-progress game row. Abandon confirms inline, then

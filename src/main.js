@@ -54,7 +54,7 @@ import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, c
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, CAMPAIGN_SLOT_COUNT, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
 import { CAMPAIGNS } from './campaign/campaign-registry.js';
-import { saveThumb, deleteThumb } from './menu/thumbnails.js';
+import { saveThumb, deleteThumb, loadThumb } from './menu/thumbnails.js';
 import { processStoryTriggers } from './campaign/missions.js';
 import { MissionLogicEngine } from './mission-logic/engine.js';
 import { createGameContext } from './mission-logic/game-context.js';
@@ -5063,6 +5063,76 @@ function _captureRoundThumbnail(idOverride = null) {
     .catch(() => {});
 }
 
+const _PHASE_NAMES = { DAWN: 'Dawn', DAY: 'Day', DUSK: 'Dusk', NIGHT: 'Night' };
+
+/** The serialized GameState snapshot backing a saved-game row (local games
+ *  only — online games keep their state server-side). */
+function _savedStateForRow(row) {
+  try {
+    if (row.kind === 'local-sp') {
+      return _loadSpSaves().find((s) => s.id === row.room_id)?.state ?? null;
+    }
+    if (row.kind === 'local-campaign') {
+      const m = String(row.room_id || '').match(/^(.+)\/slot(\d+)\/(.+)$/);
+      if (m) return loadCampaignMissionSave(m[1], m[3], parseInt(m[2], 10))?.state ?? null;
+    }
+  } catch { /* corrupt save — no detail */ }
+  return null;
+}
+
+const _prettyType = (t) => String(t || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
+/** Group a snapshot's entities into a per-side participant list: named units
+ *  (heroes, survivors) individually with HP; generic summons aggregated by type. */
+function _participantsFromEntities(entities) {
+  const sides = { hero: [], witch: [] };
+  const generic = { hero: {}, witch: {} };
+  for (const e of entities || []) {
+    const side = e.owner === 'witch' ? 'witch' : 'hero';
+    const alive = (e.hp ?? 0) > 0;
+    if (e.name) {
+      sides[side].push({ label: e.name, sub: `${_prettyType(e.type)} · ${Math.max(0, e.hp ?? 0)}/${e.maxHp ?? '?'} HP`, alive });
+    } else {
+      const g = generic[side][e.type] || (generic[side][e.type] = { total: 0, alive: 0 });
+      g.total++; if (alive) g.alive++;
+    }
+  }
+  for (const side of ['hero', 'witch']) {
+    for (const [type, g] of Object.entries(generic[side])) {
+      sides[side].push({ label: `${_prettyType(type)}${g.total > 1 ? ` ×${g.total}` : ''}`, sub: `${g.alive}/${g.total} standing`, alive: g.alive > 0 });
+    }
+  }
+  return sides;
+}
+
+/** Detail payload for the ledger's game-detail overlay (thumbnail click):
+ *  round, day-cycle phase, score, kills, and participants. Rich for local saves
+ *  (from the serialized state); basic (row fields) for online games. */
+function _gameDetail(row) {
+  const st = _savedStateForRow(row);
+  const phase = st?.phase ?? row.phase ?? null;
+  const base = {
+    title:      row.title || 'Game',
+    round:      st?.round ?? row.round ?? null,
+    phase,
+    phaseLabel: _PHASE_NAMES[phase] ?? phase,
+    mapSize:    st?.mapSize ?? row.map_size ?? row.mapSize ?? null,
+    thumb:      loadThumb(row.room_id),
+  };
+  if (!st) {
+    return { ...base, score: null, kills: null, participants: null,
+             players: row.players_count ?? row.players_total ?? null };
+  }
+  return {
+    ...base,
+    score: st.nodeScore
+      ? { hero: st.nodeScore.hero ?? 0, witch: st.nodeScore.witch ?? 0, threshold: st.nodeScoreThreshold ?? 4 }
+      : null,
+    kills: { hero: st.heroKills ?? 0, witch: st.witchKills ?? 0 },
+    participants: _participantsFromEntities(st.entities),
+  };
+}
+
 /** Render the in-progress saves list on the vs. AI screen using mm-row style. */
 function _renderSpSaves() {
   const list    = document.getElementById('sp-saves-list');
@@ -9263,6 +9333,7 @@ function _buildLedgerData() {
     activate:         (row) => _mmDefaultRowClick(row),   // resume / open / replay
     abandon:          (row) => _ledgerAbandonRow(row),
     abandonable:      (row) => _ledgerRowAbandonable(row),
+    detail:           (row) => _gameDetail(row),
     // Native passwordless sign-in: feed the name into the (hidden) auth input and
     // run the shared auth core — no old dialog ever shows.
     signInWithName:   (name, cb) => _ensureAuthed(() => cb?.(), name),
