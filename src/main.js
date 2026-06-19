@@ -6004,7 +6004,7 @@ function _localCampaignRows() {
         const num = _campaignMissionNumber(camp, m.id);
         rows.push({
           kind: 'local-campaign',
-          room_id: `${camp.id}/slot${slot}/${m.id}`,
+          room_id: campaignMissionRowId(camp.id, slot, m.id),
           title: `📖 ${m.title || m.id}`,
           round: null,
           phase: null,
@@ -6035,7 +6035,7 @@ function _localCampaignRows() {
       if (!mDef) continue;
       rows.push({
         kind: 'campaign-next',
-        room_id: `${camp.id}/slot${slot}/${nextId}`,
+        room_id: campaignMissionRowId(camp.id, slot, nextId),
         title: `📖 ${camp.title}`,
         action_needed: false,
         turn_deadline: null,

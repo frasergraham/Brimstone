@@ -99,8 +99,8 @@ export function mmDedupeCampaignRows(rows) {
 /**
  * Short "where in the campaign" marker for a campaign row's meta line, e.g.
  * "Mission 2/12" (or "Mission 2" when the total is unknown). The mission number
- * is 0-based from the tutorial — Mission 0 is the tutorial, so it reads
- * "Tutorial" instead of "Mission 0/…". Returns '' when the row carries no
+ * is 0-based from the tutorial — Mission 0 is the tutorial, which reads
+ * "Mission 0" (no denominator). Returns '' when the row carries no
  * mission number, so callers can safely push it unconditionally — empty parts
  * are dropped by the join. Reads `_missionNumber`/`_missionTotal` set by the
  * campaign-row builder.
@@ -108,7 +108,7 @@ export function mmDedupeCampaignRows(rows) {
 export function mmCampaignProgressLabel(row) {
   const n = row?._missionNumber;
   if (n == null) return '';
-  if (n === 0) return 'Tutorial';
+  if (n === 0) return 'Mission 0';
   const total = row?._missionTotal;
   return total != null ? `Mission ${n}/${total}` : `Mission ${n}`;
 }
@@ -156,10 +156,11 @@ export function mmFormatRow(row) {
   if (row.kind === 'local-campaign' || row.kind === 'campaign-next') {
     const missionTitle = (row.kind === 'local-campaign' ? row._missionTitle : row._nextMissionTitle);
     if (missionTitle) {
-      // Mission number is 0-based from the tutorial; Mission 0 is the tutorial,
-      // so it reads "Tutorial — …" rather than "Mission 0 — …".
+      // Mission number is 0-based from the tutorial — Mission 0 is the tutorial,
+      // so the tutorial row reads "Mission 0 — …" and the first real mission
+      // "Mission 1 — …".
       const n = row._missionNumber;
-      const prefix = n == null ? null : (n === 0 ? 'Tutorial' : `Mission ${n}`);
+      const prefix = n == null ? null : `Mission ${n}`;
       title = prefix ? `${prefix} — ${missionTitle}` : missionTitle;
     }
   }

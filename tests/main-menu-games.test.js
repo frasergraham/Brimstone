@@ -318,9 +318,9 @@ describe('mmFormatRow', () => {
     assert.ok(!view.meta.includes('Mission 3/'));
   });
 
-  // Tweak 3 — numbering is 0-based from the tutorial; Mission 0 is the tutorial,
-  // so it reads "Tutorial" rather than "Mission 0".
-  test('the tutorial (mission number 0) reads "Tutorial", not "Mission 0"', () => {
+  // Tweak 3 — numbering is 0-based from the tutorial; Mission 0 IS the tutorial,
+  // so it reads literally "Mission 0".
+  test('the tutorial (mission number 0) reads "Mission 0"', () => {
     const view = mmFormatRow({
       kind: 'campaign-next',
       title: '📖 Campaign',
@@ -328,9 +328,8 @@ describe('mmFormatRow', () => {
       _missionNumber: 0,
       _missionTotal: 12,
     });
-    assert.equal(view.title, "Tutorial — The Road to Caleb's Hollow - Tutorial");
-    assert.ok(view.meta.includes('Tutorial'));
-    assert.ok(!view.meta.includes('Mission 0'));
+    assert.equal(view.title, "Mission 0 — The Road to Caleb's Hollow - Tutorial");
+    assert.ok(view.meta.includes('Mission 0'));
   });
 
   test('the first real mission (prologue) reads "Mission 1 / 12"', () => {
@@ -408,9 +407,9 @@ describe('mmCampaignProgressLabel', () => {
   test('shows "Mission N" when the total is unknown', () => {
     assert.equal(mmCampaignProgressLabel({ _missionNumber: 5 }), 'Mission 5');
   });
-  test('mission number 0 is the tutorial — reads "Tutorial"', () => {
-    assert.equal(mmCampaignProgressLabel({ _missionNumber: 0, _missionTotal: 12 }), 'Tutorial');
-    assert.equal(mmCampaignProgressLabel({ _missionNumber: 0 }), 'Tutorial');
+  test('mission number 0 is the tutorial — reads "Mission 0"', () => {
+    assert.equal(mmCampaignProgressLabel({ _missionNumber: 0, _missionTotal: 12 }), 'Mission 0');
+    assert.equal(mmCampaignProgressLabel({ _missionNumber: 0 }), 'Mission 0');
   });
   test('returns empty string when there is no mission number', () => {
     assert.equal(mmCampaignProgressLabel({}), '');

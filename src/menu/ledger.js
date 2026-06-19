@@ -350,8 +350,8 @@ function _campaignBriefing(body) {
   textCol.className = 'lg-brief-col-text';
   const head = document.createElement('div');
   head.className = 'lg-brief-head';
-  // Mission number is 0-based from the tutorial; Mission 0 reads "Tutorial".
-  const kicker = (b.index ?? 0) === 0 ? 'Tutorial' : `Mission ${b.index}`;
+  // Mission number is 0-based from the tutorial — Mission 0 is the tutorial.
+  const kicker = `Mission ${b.index ?? 0}`;
   head.innerHTML =
     `<div class="lg-brief-kicker">${esc(kicker)}</div>` +
     `<div class="lg-brief-title gthc">${esc(b.title)}</div>`;
@@ -372,8 +372,8 @@ function _campaignBriefing(body) {
 }
 
 /** Displayed mission number label for a catalog index. The list is 0-based from
- *  the tutorial (index 0 = "Tutorial", index 1 = the first real mission), so the
- *  number shown matches the briefing's "Mission N". */
+ *  the tutorial (index 0 = the tutorial = "Mission 0", index 1 = the first real
+ *  mission), so the number shown matches the briefing's "Mission N". */
 function _missionNumLabel(index) {
   return index === 0 ? '0' : roman(index);
 }
