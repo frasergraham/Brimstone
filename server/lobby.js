@@ -1144,7 +1144,11 @@ function _executeResolution(room) {
 
   const finalState = serializeState(state);
 
-  // Serialize steps for the wire — playerEvents instead of heroEvents/witchEvents
+  // Serialize steps for the wire — playerEvents instead of heroEvents/witchEvents.
+  // `logicEvents` (mission-logic SHOW events: story beats, conversations, Mission
+  // Log objective toasts — docs/09) are plain JSON the resolver attached, so they
+  // forward verbatim when a logic mission runs server-side; absent for normal
+  // online games, so the field is omitted and the wire stays byte-identical.
   const serializedSteps = steps.map(step => ({
     stepIndex:      step.stepIndex,
     playerEvents:   step.playerEvents.map(pe => ({
@@ -1153,6 +1157,7 @@ function _executeResolution(room) {
       events:   _serializeEvents(pe.events),
     })),
     entitySnapshot: step.entitySnapshot ?? [],
+    ...(step.logicEvents ? { logicEvents: step.logicEvents } : {}),
   }));
 
   // Store round data for full-game replay (roundNum is pre-endRound value).
@@ -1191,6 +1196,11 @@ function _executeResolution(room) {
   } catch (err) {
     console.error(`[room ${room.id}] clearPlanStatus error:`, err);
   }
+
+  // Stamp when this round actually resolved (unix seconds) — drives the menu's
+  // "last turn N ago" for both the games list and the Battle status, so it
+  // reflects real resolution time, not when the list happens to be polled.
+  room.lastTurnAt = Math.floor(Date.now() / 1000);
 
   // Store serialized steps for the unified roundResolved message (sent after planning starts)
   room._pendingResolutionSteps = serializedSteps;
@@ -2954,7 +2964,9 @@ export function getActiveRoomsForPlayer(playerId) {
       turn_deadline:    room.turnDeadline ?? null,
       map_size:         room.config.mapSize ?? 'standard',
       players_per_side: room.config.playersPerSide ?? 1,
-      updated_at:       Math.floor(Date.now() / 1000),
+      // Real last-turn time (falls back to room creation before the first turn),
+      // NOT the poll time — see room.lastTurnAt.
+      updated_at:       room.lastTurnAt ?? Math.floor(room.createdAt / 1000),
       status:           room.status,
       action_needed:    actionNeeded,
       players_submitted: playersSubmitted,
@@ -3655,6 +3667,7 @@ function _battleRoomSummary(room) {
     round:      state?.round ?? 0,
     openSlots:  (maxPPS - heroCount) + (maxPPS - witchCount),
     isFull:     heroCount >= maxPPS && witchCount >= maxPPS,
+    lastTurnAt: room.lastTurnAt ?? null,
   };
 }
 
@@ -3709,6 +3722,7 @@ export function getBattleStatus(playerId = null) {
           myFaction:   seat.faction,
           mySubmitted: !!state?.playerReady?.get(seat.playerId),
           turnDeadline: room.turnDeadline ?? null,
+          lastTurnAt:  room.lastTurnAt ?? null,
         };
         break;
       }

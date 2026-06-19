@@ -167,6 +167,8 @@ Hints are suppressed after the mission is completed or the player clicks "Skip h
 
 **Difficulty check:** run `node scripts/headless-campaign.js <missionId> 50` to AI-play the mission and estimate win rates before shipping it.
 
+**Mission map image:** the menu shows a top-down board image on each mission card — the live saved thumbnail when a mission is in progress, else a fixed pre-generated image committed under `assets/mission-maps/<file>.jpg` (keyed by the mission's `file` basename, resolved by `fixedMissionImage()` in `mission-catalog.js`). Generate (or regenerate after a map change) with `node scripts/gen-mission-thumbnails.mjs` (all missions) or `node scripts/gen-mission-thumbnails.mjs <missionId>` (one) — it drives the real 3D renderer in headless Chromium and captures via the same `captureMapThumbnail()` path the in-game thumbnails use (needs the global Playwright/Chromium from the `verifier-browser` skill). Commit the generated `.jpg` alongside the mission JSON.
+
 ## Conversations (campaign cutscenes)
 
 A conversation is an in-world dialog between two bound characters, presented through the replay machinery: the camera frames the participants (in FIXED camera mode it stays put — billboard bubbles still render in-world, with an edge arrow when off-screen), dialog appears as speech-bubble billboards above the speakers, a 💬 turn card joins the replay timeline (SKIP while playing → REPLAY when done, plus a **CONTINUE** button on round-boundary/intro conversations that dismisses the card and opens planning), and the replay **NEXT** button steps dialog lines. Intro conversations present as a "turn 0 resolution" — planning chrome is hidden (`ui.exitPlanningMode`) and the app holds in RESOLVING until CONTINUE.

@@ -103,9 +103,15 @@ describe('sampleQuadBezier', () => {
 });
 
 describe('networkStrokesForTile — per-tile geometry', () => {
-  test('isolated tile (no neighbours) emits no strokes', () => {
-    const strokes = networkStrokesForTile({ col: 0, row: 0 }, []);
+  test('isolated ROAD tile (no neighbours) emits no strokes', () => {
+    const strokes = networkStrokesForTile({ col: 0, row: 0 }, [], { kind: 'road' });
     assert.deepEqual(strokes, []);
+  });
+
+  test('isolated RIVER tile (no neighbours) emits a pool ring so it stays visible', () => {
+    const strokes = networkStrokesForTile({ col: 0, row: 0 }, []); // default kind = river
+    assert.equal(strokes.length, 1);
+    assert.equal(strokes[0].isPool, true, 'lone river hex draws a fallback pool');
   });
 
   test('single-neighbour river tile emits one through-bezier extending off-tile', () => {
@@ -261,10 +267,12 @@ describe('buildRiverNetworkStrokes', () => {
     }
   });
 
-  test('isolated water tile (no water neighbours) is skipped', () => {
+  test('isolated water tile (no water neighbours) renders a fallback pool', () => {
     const tiles = new Map();
     tiles.set(hexKey(5, 5), mkTile(5, 5, TileType.RIVER));
-    assert.equal(buildRiverNetworkStrokes(tiles).length, 0);
+    const segs = buildRiverNetworkStrokes(tiles);
+    assert.equal(segs.length, 1, 'lone river hex still produces a segment');
+    assert.ok(segs[0].strokes.some(s => s.isPool), 'segment carries a pool stroke');
   });
 
   test('grass tiles are not part of the river network', () => {

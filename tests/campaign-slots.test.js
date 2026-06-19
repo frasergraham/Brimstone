@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import {
   Campaign, CAMPAIGN_SLOT_COUNT, clampSlotIndex,
   campaignSlotSaveSlot, legacyCampaignSaveSlot,
+  campaignActiveSlotKey, getActiveSlot, setActiveSlot,
 } from '../src/campaign/campaign.js';
 import {
   campaignMissionSaveKey, loadCampaignMissionSave, deleteCampaignMissionSave,
@@ -48,6 +49,47 @@ describe('slot-key derivation', () => {
     assert.equal(new Campaign(hollowDef, 2).saveSlot, 'campaign-calebs_hollow_prologue-slot2');
     assert.equal(new Campaign(hollowDef, 99).slotIndex, CAMPAIGN_SLOT_COUNT);
     assert.equal(new Campaign(hollowDef).slotIndex, 1);
+  });
+});
+
+// ── Active slot persistence (Task 5) ──────────────────────────────────────────
+
+describe('active slot persistence', () => {
+  beforeEach(() => localStorage.clear());
+
+  test('active-slot key is namespaced per campaign', () => {
+    assert.equal(campaignActiveSlotKey('foo'), 'brimstone-campaign-foo-activeSlot');
+    assert.equal(campaignActiveSlotKey('calebs_hollow_prologue'),
+      'brimstone-campaign-calebs_hollow_prologue-activeSlot');
+  });
+
+  test('defaults to slot 1 when never set', () => {
+    assert.equal(getActiveSlot('foo'), 1);
+  });
+
+  test('set then get round-trips the chosen slot', () => {
+    setActiveSlot('foo', 2);
+    assert.equal(getActiveSlot('foo'), 2);
+    setActiveSlot('foo', 3);
+    assert.equal(getActiveSlot('foo'), 3);
+  });
+
+  test('clamps out-of-range slots on write AND read', () => {
+    setActiveSlot('foo', 99);
+    assert.equal(getActiveSlot('foo'), CAMPAIGN_SLOT_COUNT);
+    setActiveSlot('foo', 0);
+    assert.equal(getActiveSlot('foo'), 1);
+    // A corrupt stored value still clamps on read.
+    localStorage.setItem(campaignActiveSlotKey('bar'), '999');
+    assert.equal(getActiveSlot('bar'), CAMPAIGN_SLOT_COUNT);
+  });
+
+  test('active slot is independent per campaign', () => {
+    setActiveSlot('a', 2);
+    setActiveSlot('b', 3);
+    assert.equal(getActiveSlot('a'), 2);
+    assert.equal(getActiveSlot('b'), 3);
+    assert.equal(getActiveSlot('c'), 1);
   });
 });
 

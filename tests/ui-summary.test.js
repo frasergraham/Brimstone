@@ -579,3 +579,114 @@ describe('campaign replay button suppression', () => {
     assert.ok(shouldShowReplayFullButton(true, undefined));
   });
 });
+
+// ── Clean game-over dialog (Tweak B) ────────────────────────────────────────
+//
+// The game-over victory/defeat dialog drops the per-turn wrap-up entirely:
+// no turn-summary event body, no replay-speed controls, no ↺ Replay button —
+// just the victory/defeat message + Return to Menu (+ Replay Full Game). The
+// per-round (non-game-over) wrap-up keeps all of those. These mirror the
+// gameOver gates added to _showResolutionSummary in ui.js.
+
+// The turn-summary body (combats/kills/resources/reckoning) renders only for a
+// non-game-over round.
+const rendersTurnSummaryBody = (gameOver) => !gameOver;
+// The replay-speed dropdown renders only for a non-game-over round.
+const rendersSpeedRow = (gameOver) => !gameOver;
+// The ↺ Replay / speed group is visible only for a non-game-over round.
+const showsReplayGroup = (gameOver) => !gameOver;
+// Game-over always offers Return to Menu.
+const showsReturnToMenu = (gameOver) => gameOver;
+
+describe('clean game-over dialog', () => {
+  test('game-over hides the per-turn summary body', () => {
+    assert.equal(rendersTurnSummaryBody(true), false);
+  });
+
+  test('normal round still shows the per-turn summary body', () => {
+    assert.equal(rendersTurnSummaryBody(false), true);
+  });
+
+  test('game-over hides the replay-speed controls', () => {
+    assert.equal(rendersSpeedRow(true), false);
+  });
+
+  test('normal round still shows the replay-speed controls', () => {
+    assert.equal(rendersSpeedRow(false), true);
+  });
+
+  test('game-over hides the ↺ Replay / speed group', () => {
+    assert.equal(showsReplayGroup(true), false);
+  });
+
+  test('normal round still shows the ↺ Replay / speed group', () => {
+    assert.equal(showsReplayGroup(false), true);
+  });
+
+  test('game-over always offers Return to Menu', () => {
+    assert.ok(showsReturnToMenu(true));
+  });
+
+  test('Replay Full Game is offered in skirmish AND online game-over (non-campaign w/ history)', () => {
+    // Parity: both skirmish (isCampaign=false) and online (isCampaign=undefined)
+    // surface the full-game replay so long as there is history.
+    assert.ok(shouldShowReplayFullButton(true, false));      // skirmish
+    assert.ok(shouldShowReplayFullButton(true, undefined));  // online
+  });
+});
+
+// ── Resume does not force the last-turn replay (Tweak A) ────────────────────
+//
+// Online/async resume must behave like skirmish/SP: land in planning with an
+// optional "Last Turn" button, NOT an automatic replay. Mirrors the resume
+// decision in _applyOnlinePlanningPhase / onGameJoined / onAsyncStateUpdate:
+// a delivered lastReplay is CACHED (so the button can find it) and the replay
+// history flag is set — never auto-played.
+
+function resumeReplayPlan(lastReplay, alreadySubmitted, isResync) {
+  // No replay payload, or the player already submitted, or this is a same-round
+  // heartbeat resync ⇒ nothing to cache and no button.
+  if (!lastReplay || typeof lastReplay.roundNum !== 'number' || alreadySubmitted || isResync) {
+    return { autoPlay: false, cache: false, showButton: false };
+  }
+  // Cache it for the on-demand button; never auto-play on resume.
+  return { autoPlay: false, cache: true, showButton: true };
+}
+
+describe('resume does not force the last-turn replay', () => {
+  const replay = { roundNum: 4, preStateJson: '{}', stepsJson: '[]' };
+
+  test('resume with a last replay caches it and shows the button — never auto-plays', () => {
+    const plan = resumeReplayPlan(replay, false, false);
+    assert.equal(plan.autoPlay, false);
+    assert.equal(plan.cache, true);
+    assert.equal(plan.showButton, true);
+  });
+
+  test('resume never auto-plays even when a replay is present', () => {
+    assert.equal(resumeReplayPlan(replay, false, false).autoPlay, false);
+  });
+
+  test('no last replay ⇒ no cache, no button', () => {
+    const plan = resumeReplayPlan(null, false, false);
+    assert.equal(plan.cache, false);
+    assert.equal(plan.showButton, false);
+  });
+
+  test('already-submitted reconnect ⇒ no replay button (nothing to re-watch into)', () => {
+    const plan = resumeReplayPlan(replay, true, false);
+    assert.equal(plan.cache, false);
+    assert.equal(plan.showButton, false);
+  });
+
+  test('same-round heartbeat resync ⇒ no replay action', () => {
+    const plan = resumeReplayPlan(replay, false, true);
+    assert.equal(plan.autoPlay, false);
+    assert.equal(plan.cache, false);
+  });
+
+  test('malformed replay (no roundNum) is ignored', () => {
+    const plan = resumeReplayPlan({ preStateJson: '{}', stepsJson: '[]' }, false, false);
+    assert.equal(plan.cache, false);
+  });
+});

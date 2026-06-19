@@ -61,7 +61,6 @@
       <button id="menu-btn" class="header-icon-btn" title="Menu">☰</button>
       <div id="turn-info"></div>
       <div class="header-buttons">
-        <button id="mission-info-btn" class="header-icon-btn" title="Mission Info" style="display:none">📜</button>
         <button id="replay-turn-btn" class="header-icon-btn replay-last-btn" title="Replay last turn" style="display:none">↺<span class="rt-label">Last Turn</span></button>
         <button id="end-turn-btn" class="header-icon-btn end-turn-header" data-tip="Lock in your plan — it resolves alongside your opponent’s">↩</button>
         <button id="plan-return-btn" class="header-icon-btn end-turn-header" title="Return to menu" style="display:none">← Menu</button>
@@ -81,12 +80,25 @@
     </div>
 
     <main id="game-main">
-      <!-- Chronicle sidebar — collapsible left-edge panel with pull-out tab -->
+      <!-- Chronicle sidebar — collapsible left-edge panel with pull-out tab.
+           Split horizontally: Mission Log (top, the live objective checklist
+           driven by the mission-logic graph) over the Chronicle (bottom, the
+           event log). The Mission Log section is hidden until the mission pushes
+           at least one objective. -->
       <div id="chronicle-sidebar" class="chronicle-panel collapsed">
         <!-- Pull-out tab — always visible so the panel can be reopened -->
         <button id="chronicle-tab" class="chronicle-tab" title="Toggle chronicle">
           <span class="chronicle-tab-label">Chronicle</span><span id="chronicle-tab-toggle" class="chronicle-tab-toggle">+</span>
         </button>
+        <div id="mission-log-section" class="mission-log-section" style="display:none">
+          <div class="chronicle-panel-header">
+            <span class="chronicle-title">🗒 Mission Log</span>
+          </div>
+          <!-- Mission briefing/description — header block above the objectives.
+               Hidden (no markup) when the mission carries no description. -->
+          <p id="mission-log-desc" class="mission-log-desc" style="display:none"></p>
+          <ul id="mission-log-list" class="mission-log-list"></ul>
+        </div>
         <div class="chronicle-panel-header">
           <span class="chronicle-title">📜 Chronicle</span>
         </div>
@@ -426,6 +438,22 @@
   <div id="spectate-game-over" style="display:none">
     <h2 id="sp-winner-text"></h2>
     <p  id="sp-win-reason"></p>
+  </div>
+
+  <!-- ── Campaign debrief overlay ─────────────────────────────────────────────
+       The post-mission Victory/Defeat screen. A dedicated overlay (NOT the dead
+       legacy #setup-screen debrief step) so the Ledger's setup-screen observer
+       never bounces it back to Continue. Populated + shown by
+       _handleCampaignMissionEnd in main.js; Continue routes into the Ledger's
+       Campaign panel. -->
+  <div id="debrief-overlay" style="display:none">
+    <div id="debrief-panel" class="debrief-panel">
+      <h1 id="debrief-title" class="debrief-title"></h1>
+      <p  id="debrief-text"  class="debrief-text"></p>
+      <div id="debrief-stats" class="debrief-stats"></div>
+      <div id="debrief-roster" class="debrief-roster"></div>
+      <button id="debrief-continue" class="debrief-continue">Continue →</button>
+    </div>
   </div>
 
   <!-- ── Tutorial overlay ─────────────────────────────────────────────────── -->

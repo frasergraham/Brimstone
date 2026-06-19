@@ -42,6 +42,9 @@ export const PIN_DOCS = Object.freeze({
   despawnUnit: { in: { in: RUN, target: 'The entity to remove (or set an NPC id in params).' }, out: { done: 'Fires after removal.' } },
   moveUnit: { in: { in: RUN, target: 'The NPC to move (or set an NPC id in params).' }, out: { done: 'Fires after the walk completes.' } },
   setFlag: { in: { in: RUN, value: 'Optional wired value (else the params value).' }, out: { done: 'Fires after the flag is written.' } },
+  setObjective: { in: { in: RUN, label: 'Optional wired label (else the params label).', target: 'Optional wired target count (else the params target).' }, out: { done: 'Fires after the Mission Log entry is added/updated.' } },
+  updateObjective: { in: { in: RUN, value: 'Optional absolute count (else `set`/`delta` params; default +1).' }, out: { done: 'Fires after the objective’s progress advances.' } },
+  completeObjective: { in: { in: RUN }, out: { done: 'Fires after the objective is marked complete.' } },
 
   // Presentation
   startConversation: { in: { in: RUN }, out: { done: 'Fires when the player DISMISSES the conversation — wire post-dialogue choreography here.' } },
@@ -81,6 +84,9 @@ export const NODE_DOCS = Object.freeze({
   despawnUnit: 'Remove a unit / NPC from the map.',
   moveUnit: 'Walk an NPC along a path (post-conversation choreography).',
   setFlag: 'Write a campaign / mission flag.',
+  setObjective: 'Push a Mission Log objective (id + label, optional target count).',
+  updateObjective: 'Advance a Mission Log objective’s progress (auto-completes at target).',
+  completeObjective: 'Mark a Mission Log objective complete (strikethrough).',
   startConversation: 'Play a conversation; its Done fires when dismissed.',
   storyBeat: 'Show a story toast (title + text).',
   winMission: 'End the mission as a WIN.',

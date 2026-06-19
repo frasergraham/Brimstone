@@ -342,6 +342,10 @@ export const PUNCH_MODEL_FILE   = 'punch.glb';
 // reaction fires.
 export const HIT_MODEL_FILE     = 'hit.glb';
 export const BLOCK_MODEL_FILE   = 'block.glb';
+// Death clip — animation-only Mixamo export. Loaded lazily like punch/hit/block,
+// cloned per-standee, and played ONCE on a dying unit's own clone as it falls.
+// The standee then fades out (see getFadeOutOpacity's staged death fade).
+export const DEATH_MODEL_FILE   = 'death.glb';
 
 // Crossfade rate between idle and walking, in 1/seconds. 5.0 = full transition
 // in 200ms. Slow enough to read as a deliberate state change, fast enough that
@@ -445,6 +449,39 @@ export function computePunchSpeedRatio(natCycleSec, targetMs, fallback = 2.0) {
   if (!(targetMs > 0)) return fallback;
   const ratio = natCycleSec / (targetMs / 1000);
   return Math.max(0.5, Math.min(8.0, ratio));
+}
+
+/** Staged opacity ramp for a dying unit's fade-out (pure; exported for tests).
+ *
+ *  The fade is in TWO linear phases keyed off the actual death-clip length so
+ *  the boundary lands exactly when the fall animation ends:
+ *    • Phase A — while the Death clip plays (`0 → clipMs`): opacity 1.0 → 0.5.
+ *      So at clip-end (`elapsed === clipMs`) opacity is EXACTLY 0.5.
+ *    • Phase B — after the clip ends, unit lying stationary on the ground
+ *      (`clipMs → clipMs + groundMs`): opacity 0.5 → 0.
+ *
+ *  `elapsedMs` is time since the fade (and the clip) started. `clipMs` is the
+ *  measured Death-clip duration in ms (NOT a guess — the renderer passes
+ *  `deathDurationSec * 1000`). `groundMs` is how long the corpse lingers fading
+ *  on the ground after the clip. The result is monotonically non-increasing and
+ *  clamped to [0, 1]. When `clipMs <= 0` (clip length unknown), the whole fade
+ *  collapses to a single 1 → 0 ramp over `groundMs` so the unit still dissolves.
+ */
+export function stagedDeathOpacity(elapsedMs, clipMs, groundMs) {
+  const t = Math.max(0, elapsedMs || 0);
+  const clip = Math.max(0, clipMs || 0);
+  const ground = Math.max(1, groundMs || 0);
+  if (clip <= 0) {
+    // No measured clip — degrade to a plain 1 → 0 fade over the ground window.
+    return Math.max(0, Math.min(1, 1 - t / ground));
+  }
+  if (t <= clip) {
+    // Phase A: 1.0 → 0.5 across the clip. Exactly 0.5 at t === clip.
+    return 1 - 0.5 * (t / clip);
+  }
+  // Phase B: 0.5 → 0 across the ground window after the clip ends.
+  const after = t - clip;
+  return Math.max(0, 0.5 * (1 - after / ground));
 }
 
 /** Zero out the root-bone's translation keyframes so the animation drives
@@ -628,6 +665,9 @@ export const ANIMATION_BANK = Object.freeze({
   punch:   'punch.glb',
   hit:     'hit.glb',
   block:   'block.glb',
+  // Death clip (Mixamo, animation-only). Played once on a dying unit's own
+  // per-unit clone as it falls; the standee then fades out (see getFadeOutOpacity).
+  death:   'death.glb',
 });
 
 /** Renderer-side bank of available unit rigs. Each entry pairs a model
@@ -648,6 +688,7 @@ export const UNIT_RIG_BANK = Object.freeze({
       punch:   ANIMATION_BANK.punch,
       hit:     ANIMATION_BANK.hit,
       block:   ANIMATION_BANK.block,
+      death:   ANIMATION_BANK.death,
     }),
   }),
   // Future:
@@ -979,6 +1020,16 @@ export const GROUND_LABEL_Y = 0.12;
  *  TRILINEAR; aspect ≈ GROUND_LABEL_WIDTH / GROUND_LABEL_HEIGHT. */
 export const GROUND_LABEL_TEX_W = 512;
 export const GROUND_LABEL_TEX_H = 128;
+
+/** Cross-fade duration (ms) for a building ground label moving to a different
+ *  hex face as the camera orbits. Instead of SNAPPING the plane to the new
+ *  edge/yaw the instant the camera crosses a 60° sector boundary, the label's
+ *  material alpha ramps 1→0 over the first half (fading off the old face), the
+ *  plane is re-oriented/re-positioned to the new face at the midpoint (while
+ *  invisible), then alpha ramps 0→1 over the second half (fading onto the new
+ *  face). Matches XRAY_FADE_MS so all transient label motion reads at one tempo.
+ *  Operator-tunable. */
+export const LABEL_CROSS_FADE_MS = 200;
 
 /** Opacity of the "stand here" disc — a subtle 30% white wash. */
 export const GROUND_CIRCLE_ALPHA = 0.3;
@@ -2164,6 +2215,9 @@ export class Renderer3D {
 
     // ── Babylon state — populated by _initBabylon() on first draw ───────────
     this._babylon       = null; // module namespace once loaded
+    // Lazily-built soft radial texture shared by every Magic Bolt particle
+    // system (see `_magicParticleTexture`). Lives for the scene's lifetime.
+    this._magicParticleTex = null;
     // ── Building GLB model state (see `_loadBuildingModels`) ──────────────
     // `_buildingTemplates`   : Map<relPath, { mesh, scale }> — one hidden
     //                          source mesh per unique GLB variant path across
@@ -2374,7 +2428,13 @@ export class Renderer3D {
     // the building mesh in `_buildTileMesh`; never rebuilt (map topology is
     // immutable once the game starts).
     this._buildingGroundLabelsByKey = new Map(); // hexKey → { plane, mat, tex, disc, discMat, cx, cz }
-    this._groundLabelYaw = null;  // last applied snap yaw — re-pump only on change
+    this._groundLabelYaw = null;  // last SETTLED snap yaw — re-pump only on change
+    // In-flight label cross-fade (single shared fade across all labels — every
+    // label re-faces in lockstep, so one fade drives them all). Null when no
+    // transition is running. `pending` is the placement to settle onto; `applied`
+    // flips true once the midpoint repositions the planes. See
+    // `_pumpBuildingLabelFades` + `labelCrossFade`.
+    this._groundLabelFade = null; // { from, pending, applied, startMs, durMs } | null
     this._fogMaterialCache = new Map();  // base hex color → darker StandardMaterial
     this._fogActiveSet     = new Set();  // hexKeys currently rendered as fogged
     // Renderer-level fog DISPLAY override, toggled with the `T` hotkey for
@@ -4147,6 +4207,78 @@ export class Renderer3D {
     });
   }
 
+  /** Play the Death (fall) clip ONCE on a dying unit's OWN clone, then start its
+   *  staged fade-out. Called from the resolution loop (main.js) the moment a
+   *  kill resolves — the replacement for the old `addDeathAnim + addFadeOutAnim`
+   *  pair.
+   *
+   *  Per-unit, like punch/hit/block: the clip plays on THIS entity's clone +
+   *  skeleton only, so siblings keep idling — never on the shared rig. The fade
+   *  starts in the SAME tick the clip starts, and its phase boundary is keyed
+   *  off the clip's REAL played length (`DEATH_TARGET_MS`, accounting for the
+   *  playback-speed multiplier) so opacity is exactly 0.5 when the fall ends,
+   *  then 0.5 → 0 over `DEATH_GROUND_FADE_MS` while the corpse lies still.
+   *
+   *  Degrades gracefully: if the clip hasn't cloned onto this unit yet (or the
+   *  unit has no rig — e.g. a cone-token), it kicks the idempotent load and
+   *  falls back to a plain timed fade so the kill still dissolves. */
+  playDeathAnimAndFade(entityId, _col = null, _row = null, _color = null) {
+    if (entityId == null) return;
+    const speedMul = this._playbackSpeedMul ?? 1.0;
+    // Played clip length in real time (the fade boundary keys off THIS, so it's
+    // exactly when the fall animation ends). Slowed by the playback multiplier
+    // so a sped-up/slowed-down replay keeps clip and fade in lockstep.
+    const clipMs = DEATH_TARGET_MS * speedMul;
+    const groundMs = DEATH_GROUND_FADE_MS * speedMul;
+
+    const standee = this._entityStandees?.get(entityId);
+    const clone = standee && standee.paladinClone;
+    const ent = this.state?.entities
+      ? this.state.entities.find(e => e && e.id === entityId) : null;
+    const src = ent ? this._loadedFallbackRigFor(ent) : null;
+    const group = clone && clone.groups && clone.groups.death;
+
+    if (!clone || !group) {
+      // Clip not cloned onto this unit yet (or no rig at all) — kick the
+      // idempotent load so it's ready next time, and fall back to a plain fade.
+      if (src) this._ensureRigDeath(src);
+      this.addFadeOutAnim(entityId, Math.max(1, clipMs + groundMs),
+        { isDeath: true, clipMs, groundMs });
+      return;
+    }
+
+    // Hand the skeleton to death: silence this unit's idle/walk/run/punch so
+    // none fight the fall. oneShotPlaying locks the locomotion toggle out.
+    for (const k of ['idle', 'walk', 'run', 'punch', 'hit', 'block']) clone.groups[k]?.stop?.();
+    clone.oneShotPlaying = true;
+    clone.activeGroup = 'death';
+
+    // Compress the source clip to play across clipMs of real time.
+    const dur = Number.isFinite(clone.deathDurationSec) ? clone.deathDurationSec : undefined;
+    const ratio = computePunchSpeedRatio(dur, clipMs, /*fallback*/ 1.0);
+
+    // Leave the rig in its final (collapsed) pose when the clip ends rather than
+    // snapping back to frame 0 — the corpse should stay down while it fades.
+    const onEnd = () => {
+      // Hold the collapsed final pose. Keep oneShotPlaying TRUE so the per-frame
+      // locomotion pump (which would otherwise restart idle and pop the corpse
+      // back upright) stays locked out, and keep activeGroup='death'. Pause the
+      // clip at its last frame. The dead standee fades to 0 and its clone is
+      // disposed by the sync diff at the round boundary, so the flag never lingers.
+      if (typeof group.pause === 'function') group.pause();
+    };
+    const obs = group.onAnimationGroupEndObservable;
+    if (obs && typeof obs.addOnce === 'function') obs.addOnce(onEnd);
+    else if (obs && typeof obs.add === 'function') obs.add(onEnd);
+
+    if (typeof group.stop === 'function') group.stop();
+    if (typeof group.start === 'function') group.start(false, Math.max(0.25, ratio));
+
+    // Start the staged fade in the SAME tick the clip starts.
+    this.addFadeOutAnim(entityId, Math.max(1, clipMs + groundMs),
+      { isDeath: true, clipMs, groundMs });
+  }
+
 
   /** Force-stop any in-flight punch and release the skeleton back to the
    *  idle/walk toggle. Used when a lunge is hard-cleared (round snap) so the
@@ -5054,6 +5186,7 @@ export class Renderer3D {
       { slot: 'punch', group: src.punchGroup, loop: false, speed: 1.0,                        oneShot: true, durKey: 'punchDurationSec' },
       { slot: 'hit',   group: src.hitGroup,   loop: false, speed: 1.0,                        oneShot: true, durKey: 'hitGroupDurationSec' },
       { slot: 'block', group: src.blockGroup, loop: false, speed: 1.0,                        oneShot: true, durKey: 'blockGroupDurationSec' },
+      { slot: 'death', group: src.deathGroup, loop: false, speed: 1.0,                        oneShot: true, durKey: 'deathDurationSec' },
     ];
   }
 
@@ -5295,6 +5428,49 @@ export class Renderer3D {
     return src.punchGroup;
   }
 
+  /** Lazily import death.glb and retarget it onto a fallback rig (idempotent
+   *  per rig). Pre-warmed when the rig loads so the first kill plays the fall
+   *  pose rather than snapping to a fade. Mirrors `_ensureRigPunch`. */
+  _ensureRigDeath(src, basePath = this._assetsBasePath || 'assets') {
+    if (!src || src.deathGroup || src._deathLoadPromise) return;
+    src._deathLoadPromise = Promise.resolve()
+      .then(() => this._loadDeathForRig(src, basePath))
+      .catch(err => { console.warn('[Renderer3D] rig death load failed.', err); return null; });
+  }
+
+  /** Import death.glb and retarget its clip onto `src`'s skeleton by bone name
+   *  (mirrors _loadPunchForRig). One-shot, non-looping, rest at frame 0 (stop)
+   *  until played. Stashes the source clip length on `src.deathDurationSec` so
+   *  the staged fade can place opacity at exactly 0.5 on clip-end. */
+  async _loadDeathForRig(src, basePath = this._assetsBasePath || 'assets') {
+    if (!this._babylon || !this._scene || !src || src.deathGroup) return src?.deathGroup || null;
+    const BABYLON = this._babylon;
+    if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') return null;
+    let result;
+    try {
+      result = await BABYLON.SceneLoader.ImportMeshAsync(
+        null, `${basePath}/${PALADIN_MODEL_DIR}`, DEATH_MODEL_FILE, this._scene,
+        this._glbProgressHandler('rig'));
+    } catch (err) {
+      console.warn(`[Renderer3D] death.glb import for ${src.cloneTag} failed`, err);
+      return null;
+    }
+    const native = (result.animationGroups || []).find(g => g) || null;
+    if (!native) { this._disposeWalkingImport(result); return null; }
+
+    // One-shot fall: loop=false, rest at frame 0 (stop) until played.
+    const clone = this._retargetNativeClipOntoRig(
+      native, src, `${src.cloneTag}DeathRetargeted`,
+      { keepY: !src.hipCentered, loop: false, rest: 'stop' });
+    if (clone) {
+      src.deathDurationSec = animDurationSeconds(native);
+      src.deathGroup = clone;
+      this._propagateClipToUnits(src, 'death');
+    }
+    this._disposeWalkingImport(result);
+    return src.deathGroup;
+  }
+
   /** Play one standee `clone`'s OWN punch clip for a single strike: silence its
    *  idle/walk/run so none fight its skeleton, mark `oneShotPlaying` so the
    *  locomotion toggle yields, and re-resolve idle/walk when the one-shot ends.
@@ -5480,6 +5656,9 @@ export class Renderer3D {
       // Pre-warm the strike clip so the first combat lunge punches rather than
       // sliding in silently.
       this._ensureRigPunch(src);
+      // Pre-warm the death clip so the first kill plays the fall pose rather
+      // than snapping straight to a fade.
+      this._ensureRigDeath(src);
       return src;
     })();
     this._rigLoadPromises.set(file, promise);
@@ -5935,18 +6114,33 @@ export class Renderer3D {
    *  a battle/splash kill resolves, so the unit dissolves at the end of the
    *  action that killed it rather than snapping out at the step boundary.
    *  Babylon owns a continuous render loop, so the next frame's _pumpFadeOuts
-   *  picks this up — no anim loop to kick. */
-  addFadeOutAnim(entityId, duration = 600) {
+   *  picks this up — no anim loop to kick.
+   *
+   *  Staged DEATH fade: pass `{ isDeath: true, clipMs, groundMs }` to ramp
+   *  1.0 → 0.5 across the death clip (opacity exactly 0.5 at clip-end), then
+   *  0.5 → 0 over `groundMs` while the corpse lies on the ground. Plain calls
+   *  (no opts / `isDeath` false) keep the legacy single 1 → 0 linear ramp. */
+  addFadeOutAnim(entityId, duration = 600, opts = null) {
     if (entityId == null || !this._fadeOutAnims) return;
-    this._fadeOutAnims.set(entityId, { startTime: Date.now(), duration: Math.max(1, duration) });
+    const entry = { startTime: Date.now(), duration: Math.max(1, duration) };
+    if (opts && opts.isDeath) {
+      entry.isDeath = true;
+      entry.clipMs = Math.max(0, opts.clipMs || 0);
+      entry.groundMs = Math.max(1, opts.groundMs || 0);
+    }
+    this._fadeOutAnims.set(entityId, entry);
   }
 
   /** Current opacity for an entity (1 when not fading, 0 when fully faded).
-   *  Same linear ramp as the 2D renderer so UI math is renderer-agnostic. */
+   *  Plain fades use the same linear ramp as the 2D renderer; death fades use
+   *  the staged 1 → 0.5 (clip) → 0 (ground) ramp via `stagedDeathOpacity` so
+   *  opacity is exactly 0.5 the instant the fall animation ends. */
   getFadeOutOpacity(entityId) {
     const anim = this._fadeOutAnims?.get(entityId);
     if (!anim) return 1;
-    const t = (Date.now() - anim.startTime) / anim.duration;
+    const elapsedMs = Date.now() - anim.startTime;
+    if (anim.isDeath) return stagedDeathOpacity(elapsedMs, anim.clipMs, anim.groundMs);
+    const t = elapsedMs / anim.duration;
     return Math.max(0, 1 - t);
   }
   getEntityScreenPositions(_col, _row, _entities, _rect)                     { return []; }
@@ -6164,6 +6358,11 @@ export class Renderer3D {
     this._light             = light;
     this._sunLight          = sunLight;
     this._shadowGenerator   = shadowGenerator;
+
+    // Isolate the overlay rendering groups' depth so they neither occlude
+    // against the world nor pollute its depth buffer — see the method's docs.
+    this._isolateOverlayDepthGroups(scene);
+
     // Default (pre-map) shadow fit — replaced with the real map bounds at the
     // end of `_buildMap`.
     this._applySunShadowFit(null);
@@ -8424,6 +8623,33 @@ export class Renderer3D {
       for (let i = 0; i < strokes.length; i++) {
         const rawPts = strokes[i];
         if (!rawPts || rawPts.length < 2) continue;
+        // ── Lone-hex pool fallback ──────────────────────────────────────────
+        // A river hex with no water neighbours carries a single `isPool` ring
+        // stroke (see `networkStrokesForTile` / `poolRingStroke`). Render it as
+        // a flat filled water disc at the river bed level so the lone hex is
+        // still visible, instead of trying to feed a closed ring through the
+        // ribbon/curvature pipeline (which would build a degenerate annulus).
+        if (rawPts.isPool && networkName === 'river') {
+          const c = rawPts.poolCentre || { x: 0, z: 0 };
+          const radius = rawPts.poolRadius || (RIVER_POOL_RADIUS * width / RIVER_RIBBON_WIDTH);
+          const disc = BABYLON.MeshBuilder.CreateDisc(
+            `river_pool_${tile.col}_${tile.row}_${i}`,
+            { radius, tessellation: 24, sideOrientation: BABYLON.Mesh.DOUBLESIDE },
+            scene,
+          );
+          // CreateDisc lies in the XY plane facing +Z; rotate flat so it lies in
+          // the XZ ground plane (facing +Y) and drop it to the river bed depth.
+          disc.rotation.x = Math.PI / 2;
+          disc.position.x = c.x;
+          disc.position.z = c.z;
+          disc.position.y = RIVER_BED_Y;
+          disc.isPickable = false;
+          ribbons.push(disc);
+          const plist = ribbonsByTileKey.get(tkey) || [];
+          plist.push(disc);
+          ribbonsByTileKey.set(tkey, plist);
+          continue;
+        }
         // Rounded terminus cap. A 1-neighbour ROAD stub dead-ends at its tile
         // centre (rawPts[0]); round that end into a fading semicircle so the
         // road dissolves into the ground instead of stopping in a hard
@@ -10443,8 +10669,12 @@ export class Renderer3D {
       plane, mat, tex, disc, discMat, cx: hexX, cz: hexZ,
     });
     // Force the pump to re-apply orientation on the next frame so labels
-    // built after the cached yaw was set still get placed.
+    // built after the cached yaw was set still get placed. Cancel any in-flight
+    // cross-fade too so the next pump snaps every label (incl. this new one)
+    // straight onto the current face rather than stranding the newcomer.
     this._groundLabelYaw = null;
+    this._groundLabelFade = null;
+    if (mat && typeof mat.alpha === 'number') mat.alpha = 1;
   }
 
   /** Paint a ground-label DynamicTexture: the building name in the same
@@ -10484,11 +10714,27 @@ export class Renderer3D {
     if (typeof tex.update === 'function') tex.update();
   }
 
-  /** Per-frame: snap every building ground label to the hex-edge direction
-   *  that is currently the most horizontal on screen (`groundLabelPlacement`),
-   *  and hug the near-camera edge of its entrance hex. The snap only changes
-   *  when the camera yaw crosses a 60° sector boundary, so the early-out on
-   *  the cached yaw makes the steady-state cost one comparison per frame. */
+  /** Apply a `groundLabelPlacement` result to every label plane: yaw + hug the
+   *  near-camera edge of each entrance hex. The orientation is shared across all
+   *  labels (every label re-faces in lockstep), so one placement drives them all. */
+  _applyGroundLabelPlacement(placement) {
+    const map = this._buildingGroundLabelsByKey;
+    if (!map || !placement) return;
+    for (const entry of map.values()) {
+      if (!entry.plane) continue;
+      entry.plane.rotation.y = placement.yaw;
+      entry.plane.position.x = entry.cx + placement.offsetX;
+      entry.plane.position.z = entry.cz + placement.offsetZ;
+    }
+  }
+
+  /** Per-frame: when the camera yaw crosses a 60° sector boundary the labels'
+   *  most-horizontal-on-screen hex edge changes (`groundLabelPlacement`). Rather
+   *  than SNAP every label to the new edge/yaw, start a cross-fade — the labels
+   *  fade off the old face and fade onto the new one (`_pumpBuildingLabelFades`).
+   *  Steady-state cost is one comparison per frame thanks to the cached yaw. The
+   *  very first placement (cached yaw still null) snaps with no fade — there is
+   *  no "old face" to fade away from. */
   _pumpBuildingGroundLabels() {
     if (!this._camera) return;
     const map = this._buildingGroundLabelsByKey;
@@ -10500,13 +10746,66 @@ export class Renderer3D {
       target.x - cam.position.x,
       target.z - cam.position.z,
     );
-    if (!placement || placement.yaw === this._groundLabelYaw) return;
-    this._groundLabelYaw = placement.yaw;
+    if (!placement) return;
+    // Target yaw — accounting for an in-flight fade whose pending placement we
+    // may need to re-target if the camera keeps spinning before it settles.
+    const settledYaw = this._groundLabelYaw;
+    const inFlightYaw = this._groundLabelFade?.pending?.yaw;
+    // First-ever placement (or labels rebuilt): snap, no fade.
+    if (settledYaw === null && !this._groundLabelFade) {
+      this._groundLabelYaw = placement.yaw;
+      this._applyGroundLabelPlacement(placement);
+      return;
+    }
+    // No change vs the destination we're already heading to / sitting on.
+    if (placement.yaw === (inFlightYaw ?? settledYaw)) return;
+    // Yaw changed → (re)start the cross-fade toward the new placement. A fade
+    // already in flight is re-targeted from the CURRENT alpha so a fast spin
+    // glides instead of snapping, and never strands a label at alpha 0.
+    const sample = map.values().next().value;
+    const curAlpha = (sample?.mat && typeof sample.mat.alpha === 'number')
+      ? sample.mat.alpha
+      : 1;
+    this._groundLabelFade = {
+      from:    curAlpha,
+      pending: placement,
+      applied: false,
+      startMs: this._nowMs(),
+      durMs:   LABEL_CROSS_FADE_MS,
+    };
+  }
+
+  /** Per-frame: advance the in-flight building-label cross-fade. Ramps every
+   *  label's material alpha down off the old face, repositions all planes to the
+   *  new face at the midpoint, then ramps alpha back up. Cheap — runs only while
+   *  a fade is in flight, and clears itself once settled. */
+  _pumpBuildingLabelFades(now) {
+    const fade = this._groundLabelFade;
+    if (!fade) return;
+    const map = this._buildingGroundLabelsByKey;
+    if (!map || map.size === 0) { this._groundLabelFade = null; return; }
+    const { alpha, repositioned } = labelCrossFade({
+      from:    fade.from,
+      startMs: fade.startMs,
+      durMs:   fade.durMs,
+      now,
+    });
+    // Midpoint: snap all planes onto the new face exactly once (while invisible).
+    if (repositioned && !fade.applied) {
+      this._applyGroundLabelPlacement(fade.pending);
+      this._groundLabelYaw = fade.pending.yaw;
+      fade.applied = true;
+    }
     for (const entry of map.values()) {
-      if (!entry.plane) continue;
-      entry.plane.rotation.y = placement.yaw;
-      entry.plane.position.x = entry.cx + placement.offsetX;
-      entry.plane.position.z = entry.cz + placement.offsetZ;
+      if (entry.mat && typeof entry.mat.alpha === 'number') entry.mat.alpha = alpha;
+    }
+    const u = fade.durMs > 0 ? (now - fade.startMs) / fade.durMs : 1;
+    if (u >= 1) {
+      // Settle: pin alpha to full and drop the fade so steady state is free.
+      for (const entry of map.values()) {
+        if (entry.mat && typeof entry.mat.alpha === 'number') entry.mat.alpha = 1;
+      }
+      this._groundLabelFade = null;
     }
   }
 
@@ -11584,8 +11883,14 @@ export class Renderer3D {
 
   // ─── Projectile animation ────────────────────────────────────────────────
 
-  /** Spawn a small projectile mesh and animate it from source → target hex
-   *  along a low parabolic arc. Mesh disposes when the animation ends. */
+  /** Spawn a projectile and animate it from source → target hex along a low
+   *  parabolic arc. The visual style is chosen by `projectileStyle` from the
+   *  weapon-derived type:
+   *    • 'magic'  (witch Magic Bolt) → a glowing PURPLE particle trail + burst
+   *    • 'streak' (bows / firearms)  → a bright stretched streak along travel
+   *    • 'orb'    (fallback)         → a plain emissive sphere
+   *  All transient meshes/materials/particle systems self-dispose when the
+   *  animation ends (mirrors `addSoundHorn`'s cleanup). */
   addProjectileAnim(projectileType, fromCol, fromRow, toCol, toRow, opts = {}) {
     if (!this._scene || !this._babylon) return;
     const BABYLON = this._babylon;
@@ -11593,44 +11898,162 @@ export class Renderer3D {
     const { x: toX,   z: toZ   } = hexToWorld(toCol,   toRow);
     const duration = opts.duration ?? 320;
     const FRAMES   = Math.max(6, Math.round(duration / 1000 * 60));
+    const { effect, color01 } = projectileStyle(projectileType);
+    const [r, g, b] = color01;
 
-    const ball = BABYLON.MeshBuilder.CreateSphere(
-      `proj_${projectileType ?? 'sparkle'}_${fromCol}_${fromRow}_${Date.now()}`,
-      { diameter: 0.25 }, this._scene,
-    );
-    ball.isPickable = false;
-    const mat = new BABYLON.StandardMaterial(`projmat_${ball.uniqueId}`, this._scene);
-    const [r, g, b] = projectileColor01(projectileType);
-    mat.diffuseColor  = new BABYLON.Color3(r, g, b);
-    mat.emissiveColor = new BABYLON.Color3(r, g, b);
-    mat.specularColor = new BABYLON.Color3(0, 0, 0);
-    ball.material = mat;
-
-    // Generate a 3-key arc: source, apex (midpoint + bump), target.
+    // Shared low-parabolic arc keyframes: source → apex (midpoint+bump) →
+    // target. Every style flies the same path; only the carrier mesh differs.
     const apexY = 0.6 + Math.hypot(toX - fromX, toZ - fromZ) * 0.12;
     const midX  = (fromX + toX) * 0.5;
     const midZ  = (fromZ + toZ) * 0.5;
-    ball.position.set(fromX, 0.5, fromZ);
+    const arcKeys = [
+      { frame: 0,          value: new BABYLON.Vector3(fromX, 0.5, fromZ) },
+      { frame: FRAMES / 2, value: new BABYLON.Vector3(midX,  apexY, midZ) },
+      { frame: FRAMES,     value: new BABYLON.Vector3(toX,   0.5, toZ) },
+    ];
+
+    // Carrier mesh — a streak (stretched & oriented) for arrows/bolts, else a
+    // small sphere. The magic effect rides an invisible sphere as its emitter.
+    let carrier;
+    const nameTag = `proj_${projectileType ?? 'sparkle'}_${fromCol}_${fromRow}_${Date.now()}`;
+    if (effect === 'streak') {
+      // Thin, long box stretched along local +Z; we point local +Z down the
+      // travel direction so the streak reads as an in-flight bolt, not an orb.
+      const len = 0.9;
+      carrier = BABYLON.MeshBuilder.CreateBox(
+        nameTag, { width: 0.07, height: 0.07, depth: len }, this._scene,
+      );
+      const dirX = toX - fromX;
+      const dirZ = toZ - fromZ;
+      // Yaw so local +Z aligns with (dirX, dirZ) on the ground plane. atan2
+      // gives the angle from +Z toward +X — Babylon's left-handed Y rotation.
+      carrier.rotation = new BABYLON.Vector3(0, Math.atan2(dirX, dirZ), 0);
+    } else {
+      // 'magic' emitter sphere and 'orb' fallback share the same small sphere;
+      // the magic one is made invisible so only its particles show.
+      carrier = BABYLON.MeshBuilder.CreateSphere(
+        nameTag, { diameter: 0.25 }, this._scene,
+      );
+    }
+    carrier.isPickable = false;
+    carrier.position.set(fromX, 0.5, fromZ);
+
+    const mat = new BABYLON.StandardMaterial(`projmat_${carrier.uniqueId}`, this._scene);
+    mat.diffuseColor  = new BABYLON.Color3(r, g, b);
+    mat.emissiveColor = new BABYLON.Color3(r, g, b);
+    mat.specularColor = new BABYLON.Color3(0, 0, 0);
+    carrier.material = mat;
+
+    if (effect === 'streak') {
+      // Bright, fully emissive so the streak pops against any phase light.
+      mat.emissiveColor = new BABYLON.Color3(
+        Math.min(1, r * 1.2), Math.min(1, g * 1.2), Math.min(1, b * 1.2));
+    }
+
+    // Magic: a purple particle system that follows the carrier (kept invisible
+    // so the bolt reads as pure glowing energy, never a hard sphere).
+    let particles = null;
+    if (effect === 'magic') {
+      carrier.visibility = 0;
+      particles = this._makeMagicProjectileParticles(carrier, color01);
+    }
 
     const animPos = new BABYLON.Animation('projPos', 'position', 60,
       BABYLON.Animation.ANIMATIONTYPE_VECTOR3, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-    animPos.setKeys([
-      { frame: 0,           value: new BABYLON.Vector3(fromX, 0.5, fromZ) },
-      { frame: FRAMES / 2,  value: new BABYLON.Vector3(midX,  apexY, midZ) },
-      { frame: FRAMES,      value: new BABYLON.Vector3(toX,   0.5, toZ) },
-    ]);
+    animPos.setKeys(arcKeys);
 
     const promise = new Promise(resolve => {
-      this._scene.beginDirectAnimation(ball, [animPos], 0, FRAMES, false, 1, () => {
+      this._scene.beginDirectAnimation(carrier, [animPos], 0, FRAMES, false, 1, () => {
         if (typeof opts.onArrive === 'function') {
           try { opts.onArrive(); } catch (_) { /* swallow — playback continues */ }
         }
-        ball.dispose();
+        if (particles) {
+          // Stop emitting, then dispose after the live particles fade so the
+          // trail doesn't vanish abruptly at impact.
+          try { particles.stop(); } catch (_) { /* no-op */ }
+          const tail = (particles.maxLifeTime ?? 0.4) * 1000 + 120;
+          // dispose(false): Babylon's ParticleSystem.dispose() defaults to
+          // disposeTexture=true, which would tear down the SHARED, cached
+          // _magicParticleTex — making the first bolt the only one that ever
+          // renders (every later bolt reuses the freed texture). Keep it alive.
+          setTimeout(() => { try { particles.dispose(false); } catch (_) { /* no-op */ } }, tail);
+        }
+        carrier.dispose();
         mat.dispose();
         resolve();
       });
     });
     this._trackAnim(promise);
+  }
+
+  /** Build a small purple `ParticleSystem` parented to `emitter` (the moving
+   *  carrier mesh) so the Magic Bolt leaves a glowing energy trail with a soft
+   *  burst at its head. Returns the started system, or null when particle
+   *  systems aren't available (headless test BABYLON stub). The caller owns
+   *  stopping + disposing it. */
+  _makeMagicProjectileParticles(emitter, color01) {
+    const BABYLON = this._babylon;
+    if (!BABYLON || typeof BABYLON.ParticleSystem !== 'function') return null;
+    const [r, g, b] = color01;
+    const ps = new BABYLON.ParticleSystem(
+      `magicProj_${emitter.uniqueId}`, 120, this._scene);
+    ps.particleTexture = this._magicParticleTexture();
+    ps.emitter = emitter;                       // follow the flying carrier
+    if (BABYLON.Vector3) {
+      ps.minEmitBox = new BABYLON.Vector3(-0.04, -0.04, -0.04);
+      ps.maxEmitBox = new BABYLON.Vector3( 0.04,  0.04,  0.04);
+    }
+    if (BABYLON.Color4) {
+      ps.color1    = new BABYLON.Color4(r, g, b, 1.0);
+      ps.color2    = new BABYLON.Color4(
+        Math.min(1, r + 0.25), Math.min(1, g + 0.1), Math.min(1, b + 0.05), 1.0);
+      ps.colorDead = new BABYLON.Color4(r * 0.4, g * 0.2, b * 0.5, 0.0);
+    }
+    ps.minSize = 0.14;
+    ps.maxSize = 0.34;
+    ps.minLifeTime = 0.18;
+    ps.maxLifeTime = 0.42;
+    ps.emitRate = 220;
+    if (BABYLON.ParticleSystem.BLENDMODE_ADD !== undefined) {
+      ps.blendMode = BABYLON.ParticleSystem.BLENDMODE_ADD;  // additive glow
+    }
+    ps.gravity = BABYLON.Vector3 ? new BABYLON.Vector3(0, 0, 0) : undefined;
+    ps.minEmitPower = 0.05;
+    ps.maxEmitPower = 0.25;
+    ps.updateSpeed  = 0.02;
+    try { ps.start(); } catch (_) { /* stub start may be a no-op */ }
+    return ps;
+  }
+
+  /** Lazily build + cache a soft radial-gradient texture for the magic
+   *  particle system. Painted procedurally via DynamicTexture so there's no
+   *  runtime asset/CDN dependency (matches the no-external-asset convention).
+   *  Shared across bolts while its GPU texture is alive — but disposing a
+   *  ParticleSystem can release the texture's InternalTexture even with
+   *  disposeTexture=false (observed in SwiftShader), which left every bolt after
+   *  the first with a dead, invisible texture. Repaint whenever the GPU resource
+   *  is gone so each bolt always has a live texture. */
+  _magicParticleTexture() {
+    if (this._magicParticleTex && this._magicParticleTex._texture) return this._magicParticleTex;
+    const BABYLON = this._babylon;
+    if (!BABYLON || typeof BABYLON.DynamicTexture !== 'function') return null;
+    const SZ = 64;
+    const tex = new BABYLON.DynamicTexture(
+      'magicParticleTex', { width: SZ, height: SZ }, this._scene, false);
+    tex.hasAlpha = true;
+    const ctx = typeof tex.getContext === 'function' ? tex.getContext() : null;
+    if (ctx && typeof ctx.createRadialGradient === 'function') {
+      const grad = ctx.createRadialGradient(SZ / 2, SZ / 2, 0, SZ / 2, SZ / 2, SZ / 2);
+      grad.addColorStop(0,   'rgba(255,255,255,1)');
+      grad.addColorStop(0.3, 'rgba(220,170,255,0.9)');
+      grad.addColorStop(0.7, 'rgba(155,89,182,0.4)');
+      grad.addColorStop(1,   'rgba(155,89,182,0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, SZ, SZ);
+      if (typeof tex.update === 'function') tex.update();
+    }
+    this._magicParticleTex = tex;
+    return tex;
   }
 
   /** No-op for the 3D path — projectile meshes self-dispose when their
@@ -14722,6 +15145,40 @@ export class Renderer3D {
     };
   }
 
+  /** Give each OVERLAY rendering group (attack arrows, unit icons) its own
+   *  cleared depth slate before it renders, so overlays neither depth-test
+   *  against the world nor leak their depth writes back into the shared buffer.
+   *
+   *  Why this exists — the depth-buffer glitch it fixes:
+   *  The scene clears the framebuffer's depth ONCE per frame
+   *  (`scene.autoClearDepthAndStencil`, default true), then renders rendering
+   *  groups in ascending order (0 world → ATTACK_OVERLAY_GROUP → UNIT_ICON_GROUP)
+   *  WITHOUT clearing depth between them — Babylon's `RenderingManager` only
+   *  re-clears a group's depth when that group has an explicit auto-clear setup,
+   *  and none did, so by default all groups shared one depth buffer for the whole
+   *  frame. That meant the OPAQUE, depth-writing attack-arrow tubes
+   *  (ATTACK_OVERLAY_GROUP) wrote their depth into the buffer the WORLD group (0)
+   *  had already filled; on strict GPU drivers those stale overlay depth values
+   *  corrupted the world group's depth-dependent passes (shadow-map receive + the
+   *  foliage depth-prepass), producing the operator's "trees render as flat
+   *  light-blue/white silhouettes + shadows with no caster" symptom. It is
+   *  intermittent and worsens with enemy count because more arrows = more opaque
+   *  depth writes polluting the buffer.
+   *
+   *  `setRenderingAutoClearDepthStencil(group, autoClear=true, depth=true,
+   *  stencil=false)` clears DEPTH (not stencil — the X-ray ghost stencil lives in
+   *  the world group and must survive) ahead of each overlay group. The world
+   *  group (0) is intentionally left untouched so it keeps the scene-level
+   *  frame-start clear and its own depth sorting. Net effect: overlays are true
+   *  "always-on-top" layers that can neither be occluded by world geometry nor
+   *  write depth back into it. Idempotent; safe with a stub scene (node tests). */
+  _isolateOverlayDepthGroups(scene) {
+    if (!scene || typeof scene.setRenderingAutoClearDepthStencil !== 'function') return;
+    // autoClear=true, depth=true, stencil=false
+    scene.setRenderingAutoClearDepthStencil(ATTACK_OVERLAY_GROUP, true, true, false);
+    scene.setRenderingAutoClearDepthStencil(UNIT_ICON_GROUP,      true, true, false);
+  }
+
   /** Size the sun's shadow camera to the given map bounds (or the pre-map
    *  default when null) and pin it there: Babylon's autoUpdateExtends /
    *  autoCalcShadowZBounds are switched OFF so the frustum stops re-fitting
@@ -15034,9 +15491,11 @@ export class Renderer3D {
     // Compass rose: rotate the top-left needle to keep pointing at map north
     // as the camera orbits. Skips the DOM write when alpha hasn't moved.
     this._pumpCompassRose();
-    // Building ground labels: re-snap to the most-horizontal-on-screen hex
-    // edge when the camera yaw crosses a sector boundary.
+    // Building ground labels: start a cross-fade to the most-horizontal-on-screen
+    // hex edge when the camera yaw crosses a sector boundary, then advance any
+    // in-flight fade (alpha down off the old face, reposition, alpha up).
     this._pumpBuildingGroundLabels();
+    this._pumpBuildingLabelFades(now);
     // Power-node outer-edge identifier outlines breathe between
     // NODE_OUTLINE_PULSE_MIN and NODE_OUTLINE_PULSE_MAX.
     this._pumpNodeOutlinePulse(now);
@@ -16350,6 +16809,13 @@ export function roadTileRibbonWidth(networkName, tile, baseWidth) {
 // fight without visibly hovering. 0.005 reads as flush — the new directional
 // sun cast shadows ACROSS the old raised ribbons that made them look levitated.
 export const RIVER_RIBBON_WIDTH = 0.85;
+/** Radius (world units) of the fallback water pool drawn on a LONE river hex —
+ *  a river tile with zero water neighbours that the connected-river ribbon
+ *  pipeline would otherwise skip entirely. Sized to read as a small puddle that
+ *  sits comfortably inside the hex (apothem = SQRT3/2 ≈ 0.866 at radius 1) and
+ *  roughly matches the in-map river's half-width footprint. Mirrors the 2D
+ *  renderer's pool disc radius. Operator-tunable. */
+export const RIVER_POOL_RADIUS = 0.42;
 /** Road ribbon width — narrower than the river (matches the 2D path's strokeWidth
  *  ratio: rivers wider than roads). ~0.35 × hex-width. */
 export const ROAD_RIBBON_WIDTH  = 0.6;
@@ -16746,6 +17212,25 @@ export function _edgeTo(here, there, radius = HEX_RADIUS_WORLD) {
   };
 }
 
+/** Build a closed ring of `{x,z}` samples (a circle) around a world-space
+ *  centre, used as the geometry for a lone river hex's fallback pool. The
+ *  ring is tagged `isPool` so `_buildNetworkMesh` recognises it and builds a
+ *  filled water disc rather than a 5-path ribbon. The first and last samples
+ *  coincide so the ring closes cleanly. Pure (no Babylon). */
+export function poolRingStroke(centre, radius = HEX_RADIUS_WORLD, segments = 16) {
+  const r = RIVER_POOL_RADIUS * radius;
+  const n = Math.max(3, segments | 0);
+  const ring = [];
+  for (let i = 0; i <= n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    ring.push({ x: centre.x + Math.cos(a) * r, z: centre.z + Math.sin(a) * r });
+  }
+  ring.isPool = true;
+  ring.poolCentre = { x: centre.x, z: centre.z };
+  ring.poolRadius = r;
+  return ring;
+}
+
 /**
  * Compute the bezier strokes for a single river OR road tile.
  *
@@ -16758,10 +17243,12 @@ export function _edgeTo(here, there, radius = HEX_RADIUS_WORLD) {
  *                  roads draw a centre→edge stub (dead-end at a building).
  *
  * Returns an array of "strokes" — each stroke is an array of `{x, z}` sample
- * points (≥ 2 entries) suitable for turning into a tube. May return [] for
- * tiles that should not draw (e.g. an isolated river hex with 0 neighbours).
+ * points (≥ 2 entries) suitable for turning into a tube. A lone RIVER hex with
+ * 0 neighbours returns a single closed pool ring (tagged `isPool`) so it still
+ * renders a visible water disc; a lone ROAD tile returns [] (nothing to join).
  *
  * Mirrors src/renderer.js's per-tile geometry:
+ *   • 0 neighbours → river: fallback pool ring (puddle). Road: nothing.
  *   • 1 neighbour  → river: through-bezier from the off-tile extension to the
  *                    edge. Road: straight stub from centre to edge midpoint.
  *   • 2 neighbours → smooth bezier through centre between the two edges.
@@ -16769,11 +17256,22 @@ export function _edgeTo(here, there, radius = HEX_RADIUS_WORLD) {
  *                     spokes from centre to the remaining edges.
  */
 export function networkStrokesForTile(tile, neighbours, opts = {}) {
-  if (!tile || !Array.isArray(neighbours) || neighbours.length === 0) return [];
+  if (!tile || !Array.isArray(neighbours)) return [];
   const radius = opts.radius ?? HEX_RADIUS_WORLD;
   const segments = opts.segments ?? NETWORK_BEZIER_SEGMENTS;
   const kind = opts.kind ?? 'river';
   const here = hexToWorld(tile.col, tile.row, radius);
+  if (neighbours.length === 0) {
+    // A lone hex with no network neighbour. Roads simply don't draw an
+    // isolated stub (nothing to connect to). A river hex, however, must stay
+    // VISIBLE — render a fallback pool/puddle: a closed ring of samples around
+    // the hex centre, tagged `isPool` so `_buildNetworkMesh` builds a filled
+    // water disc instead of a ribbon. Mirrors the 2D `planRiverTileBranches`
+    // pool fallback so game + editor render the lone hex the same way.
+    if (kind === 'road') return [];
+    const ring = poolRingStroke(here, radius);
+    return [ring];
+  }
   const edges = neighbours.map(n => {
     const there = hexToWorld(n.col, n.row, radius);
     return _edgeTo(here, there, radius);
@@ -16901,7 +17399,9 @@ export function buildRiverNetworkStrokes(tiles, hexKeyFn = hexKey, getNeighborsF
     if (!isWater(tile)) continue;
     const nbrs = getNeighborsFn(tile.col, tile.row)
       .filter(n => isWater(tiles.get(hexKeyFn(n.col, n.row))));
-    if (nbrs.length === 0) continue;
+    // A lone river hex (0 water neighbours) is no longer skipped — its
+    // `networkStrokesForTile` returns a pool ring (tagged `isPool`) so the hex
+    // still renders a visible water puddle instead of nothing.
     const strokes = networkStrokesForTile(tile, nbrs);
     if (strokes.length > 0) out.push({ tile, strokes });
   }
@@ -18031,6 +18531,40 @@ export function xrayFadeFactor({ from = 0, dir = 'in', startMs = 0, durMs = 0, n
 }
 
 /**
+ * Single-plane "fade off the old face, fade onto the new face" cross-fade for a
+ * building ground label that has moved to a different hex edge. The fade is a
+ * V-shape over the duration: alpha ramps `from`→0 across the first half (the
+ * label dimming off its old face), reaches 0 at the midpoint where the caller
+ * re-orients/repositions the plane to the new face, then ramps 0→1 across the
+ * second half (the label brightening onto the new face).
+ *
+ * `from` is the alpha the fade STARTED at — usually 1, but a fade that reverses
+ * a still-in-flight fade should pass the current alpha so the down-ramp glides
+ * from wherever the label is rather than snapping to full first.
+ *
+ * Returns `{ alpha, repositioned }`:
+ *   - `alpha`        — 0..1 the material alpha should be this frame.
+ *   - `repositioned` — true once `now` has reached/passed the midpoint, i.e.
+ *                      the plane should now be sitting on the NEW face. The
+ *                      caller applies the new orientation exactly once on the
+ *                      first frame this flips true.
+ * A zero/negative duration snaps straight to the settled state (alpha 1, already
+ * repositioned). Kept Babylon-free so the curve is unit-testable.
+ */
+export function labelCrossFade({ from = 1, startMs = 0, durMs = 0, now = 0 }) {
+  if (!(durMs > 0)) return { alpha: 1, repositioned: true };
+  const u = Math.min(1, Math.max(0, (now - startMs) / durMs));
+  if (u < 0.5) {
+    // First half: ramp `from` → 0 (twice as fast since it spans half the time).
+    const f = from + (0 - from) * (u / 0.5);
+    return { alpha: Math.min(1, Math.max(0, f)), repositioned: false };
+  }
+  // Second half: ramp 0 → 1, label now on the new face.
+  const f = (u - 0.5) / 0.5;
+  return { alpha: Math.min(1, Math.max(0, f)), repositioned: true };
+}
+
+/**
  * Pure visibility predicate for entity-attached props (HP bars, halos) given
  * a fog-visible-set and the entity's hex key. Wrapped as a helper so the
  * HP-bar-follows-fog rule can be unit-tested without instantiating Babylon.
@@ -18127,6 +18661,20 @@ export { FACE_TURN_MS, FACING_EPSILON };
  *  the lunge) and the follow-through carries into the return slide, reading
  *  as a strike rather than slow-mo. Operator-tunable in one place. */
 export const PUNCH_TARGET_MS = 500;
+
+/** Real-time the death (fall) clip is compressed to play across (ms). The
+ *  Mixamo death clip is ~3s at source; ~1100ms reads as a decisive collapse
+ *  without overstaying the ~6s combat-sequence budget. The unit's opacity
+ *  ramps 1.0 → 0.5 across exactly this window (the fade boundary is keyed off
+ *  the clip's measured length, not this constant — see playDeathAnimAndFade).
+ *  Operator-tunable in one place. */
+export const DEATH_TARGET_MS = 1100;
+
+/** Real-time the corpse lingers fading 0.5 → 0 on the ground AFTER the fall
+ *  clip ends. Long enough to read as "lying dead then dissolving", short
+ *  enough that the resolution loop's step boundary swaps the entity out before
+ *  this lapses. Operator-tunable. */
+export const DEATH_GROUND_FADE_MS = 700;
 
 /** Fraction through the punch clip's frame range at which the strike "lands"
  *  (the mid/impact pose). The 3D cinematic battle arm freezes the punch here
@@ -18557,17 +19105,26 @@ export const ATTACK_BADGE_Y = 2.65;
 export const ATTACK_BADGE_SIZE = 0.55;
 
 /** Babylon `renderingGroupId` for planning-mode attack overlays (arrow
- *  tubes + ×N target badges). Strictly above all world geometry (group 0
- *  — terrain, ribbons, buildings, standees, hex outlines, plan ghosts) and
- *  the floating unit-icon billboard (group 2, owned by the icon fix in
- *  task t-40ab45b0) so the planning UI always draws on top — rendering
- *  groups bypass the depth buffer, which is what we need at the locked
- *  45° tilt where a unit cone can otherwise occlude an arrow shaft or
- *  badge that lives at the same screen pixel.
+ *  tubes + ×N target badges). Sits ABOVE all world geometry (group 0 —
+ *  terrain, ribbons, buildings, standees, hex outlines, move arrows, plan
+ *  ghosts) so the attack arrows always draw over the board, but BELOW the
+ *  unit-icon group (2) so the unit icons and the hit/crush percentages
+ *  painted into their badge texture always draw LAST, on top of every
+ *  arrow. (Previously this was group 3 — above the icons — which let the
+ *  arrows cover the icons + percentages: the draw-order bug this fix
+ *  corrects.)
  *
- *  Default Babylon `MaxRenderingGroupId` is 4 (valid range 0..3), so
- *  3 is the highest legal group without configuring the scene. */
-export const ATTACK_OVERLAY_GROUP = 3;
+ *  Depth isolation: this group's depth buffer is cleared before it renders
+ *  (see the `setRenderingAutoClearDepthStencil` block in `_initBabylon`),
+ *  so the arrows neither depth-test against world geometry (a tall tree must
+ *  never occlude an arrow shaft at the same screen pixel under the locked
+ *  45° tilt) nor leak their opaque depth writes back into the shared buffer
+ *  — the latter is what corrupted the world group's depth-dependent passes
+ *  (shadow receive / foliage depth-prepass), the "flat trees + orphan
+ *  shadows" symptom. The unit-icon group (2) is cleared the same way.
+ *
+ *  Default Babylon `MaxRenderingGroupId` is 4 (valid range 0..3). */
+export const ATTACK_OVERLAY_GROUP = 1;
 
 /**
  * Tally attacks per target hex from a `planGhostSteps` array. Returns
@@ -20067,20 +20624,38 @@ export function movementHighlightPosition(col, row) {
 }
 
 /**
- * Projectile colour by type (linear-RGB, 0..1). Used by `addProjectileAnim`
- * for the sphere's diffuse/emissive colour. Unknown types fall back to a
- * neutral pale yellow.
+ * Projectile visual style by weapon-derived `projectileType` — the single
+ * source of truth that BOTH renderers dispatch on. Each entry names an
+ * `effect` family and a `color01` (linear-RGB, 0..1):
+ *
+ *   • 'sparkle' (witch Magic Bolt) → 'magic'  — a glowing PURPLE particle
+ *     trail/burst. (Was historically mis-coloured GREEN in 3D.)
+ *   • 'bolt'    (bows / crossbows / firearms / slings) → 'streak' — a bright
+ *     elongated streak oriented along the flight path.
+ *   • anything else → 'orb' — a plain pale sphere, so a new ranged weapon
+ *     renders *something* until its bespoke effect lands.
+ *
+ * Keeping the mapping pure + exported lets tests pin the type→effect table
+ * without spinning up a Babylon scene, and guarantees the 2D and 3D paths
+ * agree on which weapon gets which look.
+ */
+export function projectileStyle(projectileType) {
+  switch (projectileType) {
+    case 'sparkle':  // witch Magic Bolt
+      return { effect: 'magic',  color01: [0.62, 0.28, 0.95] };  // purple
+    case 'bolt':     // bows, crossbows, firearms, slings
+      return { effect: 'streak', color01: [0.95, 0.85, 0.55] };  // bright tan
+    default:
+      return { effect: 'orb',    color01: [1.0, 0.95, 0.7] };    // pale yellow
+  }
+}
+
+/**
+ * Projectile colour by type (linear-RGB, 0..1). Thin wrapper over
+ * `projectileStyle` kept for back-compat with existing callers/tests.
  */
 export function projectileColor01(projectileType) {
-  switch (projectileType) {
-    case 'sparkle':  // witch
-      return [0.4, 1.0, 0.5];
-    case 'arrow':    // hero
-    case 'crossbow':
-      return [0.85, 0.6, 0.25];
-    default:
-      return [1.0, 0.95, 0.7];
-  }
+  return projectileStyle(projectileType).color01;
 }
 
 // ─── Reaction effects: Sound Horn ring + Power-Node-Discovered burst ────────

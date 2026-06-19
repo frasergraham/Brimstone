@@ -10,7 +10,6 @@ import { hasBuilding } from './tiles.js';
 import { hexKey } from './hex.js';
 import { tickEffects, EFFECTS, dispatchTrigger } from './effects.js';
 import { getFaction } from './factions.js';
-import { DAMAGE_SCALE } from './balance.js';
 
 // ── Event types ─────────────────────────────────────────────────────────────
 
@@ -67,9 +66,14 @@ export function applyPostRoundEffects(state) {
 function nightAttritionEffect(state) {
   if (state.phase !== Phase.NIGHT) return [];
 
-  // attritionLevel is a 1–3 tier (see attritionForCycle); actual HP damage is
-  // that tier × DAMAGE_SCALE so attrition stays proportional to scaled HP.
-  const dmg = state.attritionLevel * DAMAGE_SCALE;
+  // attritionLevel is a 1–3 tier (see attritionForCycle). Each exposed survivor
+  // now rolls 2d6 for the night's bite (replacing the old fixed DAMAGE_SCALE
+  // base), scaled by the tier so later cycles still escalate. 2d6 averages 7 —
+  // matching the prior tier-1 value (1 × DAMAGE_SCALE = 7) — but with variance.
+  // The roll uses state.nextDie(6) (the game's deterministic die stream, forced
+  // dice in tutorials) so resolution stays a pure fn of (state, plans, seed).
+  // `attritionActive` gates the whole pass (tier 0 ⇒ no attrition).
+  const attritionActive = state.attritionLevel > 0;
   const events = [];
 
   // All living survivors, split by shelter status.
@@ -107,7 +111,7 @@ function nightAttritionEffect(state) {
     });
   }
 
-  if (dmg > 0) {
+  if (attritionActive) {
     for (const e of exposed) {
       const t = state.tiles.get(hexKey(e.col, e.row));
       if (t && t.fortifyLevel > 0) {
@@ -125,6 +129,9 @@ function nightAttritionEffect(state) {
         continue;
       }
 
+      // Roll 2d6 for this survivor's night bite (deterministic via nextDie),
+      // scaled by the attrition tier so later cycles still escalate.
+      const dmg = (state.nextDie(6) + state.nextDie(6)) * state.attritionLevel;
       // Route through applyIncomingDamage so wounded etc. amplify attrition
       // the same way they amplify combat / DOTs.
       const incoming = e.applyIncomingDamage(dmg, (sd) => state.nextDie(sd));
@@ -155,7 +162,7 @@ function nightAttritionEffect(state) {
     }
   }
 
-  if (allSurvivors.length === 0 || dmg === 0) {
+  if (allSurvivors.length === 0 || !attritionActive) {
     events.push({
       type:       PostRoundEventType.SAFE,
       entityId:   null,

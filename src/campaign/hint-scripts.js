@@ -100,9 +100,9 @@ const CH1M2_STEPS = [
   {
     id: 'm2_mission_info',
     title: 'Your Orders',
-    body: 'Forgot the objective? The scroll re-opens the mission briefing any time.',
+    body: 'Forgot the objective? Open the Chronicle — its Mission Log tracks your goals as they update.',
     trigger: 'click',
-    spotlight: { type: 'element', selector: '#mission-info-btn', arrow: 'up' },
+    spotlight: { type: 'element', selector: '#chronicle-tab', arrow: 'left' },
     tooltipPos: 'center',
   },
   {

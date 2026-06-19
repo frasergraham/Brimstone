@@ -256,4 +256,59 @@ describe('mission-logic / integration with GameState', () => {
     assert.equal(queued.filter(e => e.kind === 'storyBeat').length, 0,
       'restored one-shot did not re-fire');
   });
+
+  test('Mission Log objectives advance via real pumpMissionLogic + survive state-sync', () => {
+    // Push "kill 3 zombies" at mission start; advance it from the heroKills
+    // count via the postResolution kill-count pump; confirm the toast events and
+    // the authoritative objective state, then round-trip through state-sync.
+    const state = new GameState(true, true);
+    const graph = {
+      version: 1, variables: [],
+      nodes: [
+        { id: 'start', type: 'onMissionStart' },
+        { id: 'set', type: 'setObjective', params: { id: 'zk', label: 'Kill three zombies', target: 3 } },
+        { id: 'ev', type: 'onKillCount', params: { faction: 'hero', count: 1 } },
+        { id: 'upd', type: 'updateObjective', params: { id: 'zk' } }, // +1 each pump
+      ],
+      edges: [exec('start', 'out', 'set'), exec('ev', 'out', 'upd')],
+    };
+    const engine = attach(state, graph);
+
+    state.pumpMissionLogic('missionStart');
+    assert.deepEqual(engine.objectives(), [
+      { id: 'zk', label: 'Kill three zombies', target: 3, current: 0, completed: false },
+    ]);
+    // An 'added' objectiveLog toast was queued for the client.
+    assert.equal(state.logicPresentation.filter(e => e.kind === 'objectiveLog' && e.change === 'added').length, 1);
+
+    // Hero kills tick up; postResolution fires onKillCount → updateObjective.
+    state.heroKills = 1;
+    state.pumpMissionLogic('postResolution');
+    assert.equal(engine.objectives()[0].current, 1);
+
+    state.heroKills = 2;
+    state.pumpMissionLogic('postResolution');
+    assert.equal(engine.objectives()[0].current, 2);
+
+    state.heroKills = 3;
+    state.pumpMissionLogic('postResolution');
+    assert.equal(engine.objectives()[0].current, 3);
+    assert.equal(engine.objectives()[0].completed, true, 'struck through at 3/3');
+    // The final toast is a completion.
+    assert.equal(state.logicPresentation.filter(e => e.kind === 'objectiveLog' && e.change === 'completed').length, 1);
+
+    // Round-trip the authoritative log through state-sync.
+    const snap = serializeState(state);
+    assert.ok(Array.isArray(snap.logicState.objectives), 'objectives ride in logicState');
+    assert.equal(snap.logicState.objectives[0].completed, true);
+
+    const restored = deserializeState(snap);
+    const ctx2 = createGameContext(restored, { createEnemyFn, emit: (e) => restored.logicPresentation.push(e) });
+    const engine2 = new MissionLogicEngine(graph, ctx2);
+    engine2.load(restored._restoredLogicState);
+    restored.attachLogicEngine(engine2);
+    assert.deepEqual(engine2.objectives(), [
+      { id: 'zk', label: 'Kill three zombies', target: 3, current: 3, completed: true },
+    ], 'the completed Mission Log survives a resume');
+  });
 });

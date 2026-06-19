@@ -20,7 +20,7 @@ import { compileTurnBattleSummary, compileTurnXpSummary } from './battle-utils.j
 import { buildWrapupCombatsHtml, wrapupIconHtml } from './wrapup-summary.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
-import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos, TurnCardAutoScroll, shouldAutoScrollToActive, computeFadeFlags } from './ui-render.js';
+import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildMissionLogHtml, buildMissionLogDescriptionHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos, TurnCardAutoScroll, shouldAutoScrollToActive, computeFadeFlags } from './ui-render.js';
 import {
   hideActionPopup, getEntityScreenPos, computeArcPositions,
   positionArcPopup, startArcTracking, positionPopup,
@@ -140,6 +140,16 @@ export class UIController {
     this._planSubmitted = false;   // true after plan is locked in
     this.onPlanSubmit   = null;    // callback(plan) — set by main.js
 
+    // ── Round-summary wrap-up dismissal-by-click ─────────────────────────────
+    // While the wrap-up card is up, _wrapUpResolve holds its Continue resolver
+    // and _wrapUpFaction whose units the local player owns; a board click on one
+    // of those units resolves the wrap-up as Continue and stashes the unit id in
+    // _pendingPlanSelectId to pre-select once planning begins. All cleared on
+    // dismissal / planning entry so nothing leaks across rounds.
+    this._wrapUpResolve      = null;
+    this._wrapUpFaction      = null;
+    this._pendingPlanSelectId = null;
+
     // ── AI-assist (debug) ────────────────────────────────────────────────────
     // When enabled via the in-game `/aiassist` console command (backtick), an
     // "🤖 AI Plan" button appears during planning. Clicking it asks main.js
@@ -175,6 +185,9 @@ export class UIController {
     this._stopCountdown();
     this._dismissGraceDialog();
     if (this._autorunTimer) { clearTimeout(this._autorunTimer); this._autorunTimer = null; }
+    // A pending mission-log toast dismissal must not fire after teardown and
+    // touch an orphaned element (shares the listener-leak hazard).
+    if (this._missionLogToastTimer) { clearTimeout(this._missionLogToastTimer); this._missionLogToastTimer = null; }
   }
 
   // ── Element access ───────────────────────────────────────────────────────────
@@ -445,9 +458,6 @@ export class UIController {
       const backdrop = this._el('game-menu-backdrop');
       if (backdrop) backdrop.style.display = 'none';
     };
-    this._el('mission-info-btn')?.addEventListener('click', () => {
-      this.onMissionInfo?.();
-    }, sig);
     this._el('menu-btn')?.addEventListener('click', () => {
       const backdrop = this._el('game-menu-backdrop');
       if (backdrop) backdrop.style.display = backdrop.style.display === 'none' ? 'flex' : 'none';
@@ -750,6 +760,20 @@ export class UIController {
         (!this.myPlayerId || e.ownerId === this.myPlayerId)
       );
       if (myLeader) this._selectEntity(myLeader);
+    }
+
+    // If the player dismissed the round summary by clicking one of their units,
+    // honour that pick once planning is live (overrides the round-1 leader
+    // auto-select above — the explicit click wins). Cleared whether or not the
+    // unit is still controllable so it never leaks into a later round.
+    if (this._pendingPlanSelectId != null) {
+      const pickId = this._pendingPlanSelectId;
+      this._pendingPlanSelectId = null;
+      const pick = this.state?.entities.find(e =>
+        e.id === pickId && e.alive && e.owner === faction && !e.isNpc &&
+        (!this.myPlayerId || !e.ownerId || e.ownerId === this.myPlayerId)
+      );
+      if (pick) this._selectEntity(pick);
     }
 
     this._refreshPlanOverlay();
@@ -1649,6 +1673,22 @@ export class UIController {
     const hex = this._canvasToHex(x, y);
     if (hex.col < 0 || hex.col >= MAP_COLS || hex.row < 0 || hex.row >= MAP_ROWS) return;
 
+    // Round-summary wrap-up is on screen: clicking one of YOUR units resolves it
+    // as Continue (identical teardown to the Continue button) and pre-selects
+    // that unit once planning begins. Clicking empty ground / an enemy is left
+    // to the summary's own scrub flow (handled by the SUMMARY early-return
+    // below), so normal selection and replay scrubbing are untouched.
+    if (this._wrapUpResolve) {
+      const mine = this._myUnitAt(hex);
+      if (mine) {
+        this._pendingPlanSelectId = mine.id;
+        const resolve = this._wrapUpResolve;
+        resolve('next');   // clears _wrapUpResolve via finish(); see showReplayWrapUp
+        return;
+      }
+      return;   // wrap-up up but no own unit clicked — don't fall through
+    }
+
     // Spectators: view tile/unit info only — no actions or planning
     if (this.spectator) {
       this._showTileDetail(hex);
@@ -1709,6 +1749,22 @@ export class UIController {
     } else {
       this._handleSelection(hex);
     }
+  }
+
+  /**
+   * Return the local player's controllable unit at a hex, or null. Used by the
+   * round-summary wrap-up dismissal — mirrors the owner filter in
+   * _handleSelection (own faction, not an NPC, and in MP only the local
+   * player's units), but keyed off _wrapUpFaction since planning isn't live yet.
+   */
+  _myUnitAt(hex) {
+    const faction = this._wrapUpFaction;
+    if (!faction || !this.state) return null;
+    return this.state.entities.find(e =>
+      e.alive && e.owner === faction && !e.isNpc &&
+      e.col === hex.col && e.row === hex.row &&
+      (!this.myPlayerId || !e.ownerId || e.ownerId === this.myPlayerId)
+    ) ?? null;
   }
 
   _handleSelection(hex) {
@@ -3869,10 +3925,79 @@ export class UIController {
     }, 0);
   }
 
-  /** Toggle visibility of the mission info header button. */
-  showMissionInfoBtn(visible) {
-    const btn = this._el('mission-info-btn');
-    if (btn) btn.style.display = visible ? '' : 'none';
+  /**
+   * Render the Mission Log — the live objective checklist at the top of the
+   * Chronicle sidebar (it replaced the old static mission-goals header button).
+   * `objectives` is the authoritative list from the mission-logic engine
+   * (`engine.objectives()`): an ordered array of
+   *   { id, label, current, target, completed }
+   * This is pure presentation — it READS the engine's state, never writes it
+   * (Sim/Show split). The section hides itself until at least one objective is
+   * pushed, so non-logic / normal games show no Mission Log at all.
+   */
+  /** Minimal HTML-escape for user/author text injected into the Mission Log. */
+  _escHtml(s) {
+    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  renderMissionLog(objectives, description = '') {
+    const section = this._el('mission-log-section');
+    const list = this._el('mission-log-list');
+    if (!section || !list) return;
+    const desc = this._el('mission-log-desc');
+    const objs = Array.isArray(objectives) ? objectives : [];
+    if (objs.length === 0) {
+      section.style.display = 'none';
+      list.innerHTML = '';
+      if (desc) { desc.innerHTML = ''; desc.style.display = 'none'; }
+      return;
+    }
+    section.style.display = '';
+    // Mission briefing/description header — ABOVE the objectives (Show: pure,
+    // HTML-escaped read of the mission's static description text).
+    if (desc) {
+      const descHtml = buildMissionLogDescriptionHtml(description);
+      desc.innerHTML = descHtml;
+      desc.style.display = descHtml ? '' : 'none';
+    }
+    list.innerHTML = buildMissionLogHtml(objs);
+  }
+
+  /**
+   * Toast for a Mission Log change (objective added / progressed / completed).
+   * Auto-dismisses; presentation-only. `change` ∈ {'added','progress','completed'};
+   * `objective` is the changed entry { id, label, current, target, completed }.
+   */
+  showMissionLogToast({ change, objective } = {}) {
+    if (!objective) return;
+    let toast = document.getElementById('mission-log-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'mission-log-toast';
+      toast.className = 'mission-log-toast';
+      const wrapper = this._el('canvas-wrapper');
+      if (wrapper) wrapper.appendChild(toast);
+    }
+    const icon = change === 'completed' ? '✓'
+      : change === 'added' ? '🗒'
+      : '•';
+    const verb = change === 'completed' ? 'Objective complete'
+      : change === 'added' ? 'New objective'
+      : 'Objective updated';
+    const progress = (change !== 'completed' && objective.target != null)
+      ? ` (${Math.max(0, objective.current ?? 0)}/${objective.target})`
+      : '';
+    toast.className = 'mission-log-toast' + (change === 'completed' ? ' completed' : '');
+    toast.innerHTML = `<span class="mlt-icon">${icon}</span>`
+      + `<span class="mlt-body"><span class="mlt-verb">${verb}</span>`
+      + `<span class="mlt-label">${this._escHtml(objective.label ?? '')}${progress}</span></span>`;
+    toast.classList.remove('mission-log-toast-out');
+    // Force reflow so re-triggering the same toast restarts its animation.
+    void toast.offsetWidth;
+    clearTimeout(this._missionLogToastTimer);
+    this._missionLogToastTimer = setTimeout(() => {
+      toast.classList.add('mission-log-toast-out');
+    }, 3200);
   }
 
   /**
@@ -5032,6 +5157,13 @@ export class UIController {
           html += `<div class="summary-game-over ${cls}">${winReason}</div>`;
         }
 
+        // Game-over dialog is JUST the victory/defeat message + buttons — no
+        // per-turn summary (combats/kills/resources/reckoning) and no speed
+        // controls. Write the message and skip the turn-summary body below.
+        if (gameOver) {
+          eventsEl.innerHTML = html;
+        } else {
+
         // Combat summary — aggregate damage between each pair of combatants
         const battleLines = compileTurnBattleSummary(
           steps ?? [], this.state.entities, ResEventType, PlanActionType,
@@ -5176,10 +5308,12 @@ export class UIController {
         if (this.state._takeoverMessages) this.state._takeoverMessages = [];
 
         eventsEl.innerHTML = html || `<div class="summary-neutral">No notable events this round.</div>`;
+        } // end !gameOver turn-summary body
       }
 
-      // Render replay-speed dropdown (compact single-button toggle + popup)
-      const speedRowEl = this._el('round-summary-speed-row');
+      // Render replay-speed dropdown (compact single-button toggle + popup).
+      // Game-over dialog has no speed controls.
+      const speedRowEl = gameOver ? null : this._el('round-summary-speed-row');
       if (speedRowEl) {
         const SPEED_ICONS = { cinematic: '🎬', fast: '⏩', vfast: '⏭' };
         const SPEED_DESCS = { cinematic: 'Dialog for important battles', fast: 'Cinematic pace, no popups', vfast: '1.5× speed, no popups' };
@@ -5230,14 +5364,26 @@ export class UIController {
 
       const nextBtn   = this._el('round-summary-next');
       const replayBtn = this._el('round-summary-replay');
+      const replayGroup = el.querySelector('.round-summary-replay-group');
       const actionsEl = el.querySelector('.round-summary-actions');
 
-      // Game-over: replace normal actions with play-again / view-map buttons
+      // Game-over dialog is JUST the victory/defeat message + a Return to Menu
+      // button (and Replay Full Game in skirmish/online). Drop the per-turn
+      // wrap-up controls entirely: no ↺ Replay, no speed dropdown.
       let gameOverBtns = null;
       if (gameOver && actionsEl) {
-        // Hide normal buttons
-        if (nextBtn)   nextBtn.style.display   = 'none';
-        // Keep replay visible
+        if (nextBtn) nextBtn.style.display = 'none';
+        // Hide the ↺ Replay + speed-row group; clear any stale speed markup left
+        // from an earlier non-game-over render of this same modal.
+        if (replayGroup) replayGroup.style.display = 'none';
+        const staleSpeedRow = this._el('round-summary-speed-row');
+        if (staleSpeedRow) {
+          staleSpeedRow.innerHTML = '';
+          if (staleSpeedRow._closePopup) {
+            document.removeEventListener('click', staleSpeedRow._closePopup);
+            staleSpeedRow._closePopup = null;
+          }
+        }
         gameOverBtns = document.createElement('div');
         gameOverBtns.className = 'round-summary-gameover-btns';
         gameOverBtns.innerHTML =
@@ -5245,6 +5391,7 @@ export class UIController {
           (hasFullReplay && !isCampaign ? `<button class="plan-btn secondary" data-action="replay-full">Replay Full Game</button>` : '');
         actionsEl.appendChild(gameOverBtns);
       } else if (nextBtn) {
+        if (replayGroup) replayGroup.style.display = '';
         nextBtn.style.display = '';
         nextBtn.textContent   = 'Plan Turn →';
       }
@@ -5257,6 +5404,9 @@ export class UIController {
         replayBtn?.removeEventListener('click', onReplay);
         if (gameOverBtns) gameOverBtns.remove();
         if (nextBtn) nextBtn.style.display = '';
+        // Restore the ↺ Replay / speed group hidden by the game-over branch so
+        // the shared modal renders normally for the next round.
+        if (replayGroup) replayGroup.style.display = '';
         if (speedRowEl?._closePopup) {
           document.removeEventListener('click', speedRowEl._closePopup);
           speedRowEl._closePopup = null;
@@ -6155,7 +6305,11 @@ export class UIController {
    * @param {object} opts { titleHtml, bodyHtml, canReplay }
    * @returns {Promise<'next'|'replay'>}
    */
-  showReplayWrapUp({ titleHtml = 'Turn Complete', combats = [], discoveries = [], loot = [], attrition = [], attritionLevel = 0, canReplay = true } = {}) {
+  showReplayWrapUp({ titleHtml = 'Turn Complete', combats = [], discoveries = [], loot = [], attrition = [], attritionLevel = 0, canReplay = true, humanFaction = null } = {}) {
+    // Remember whose units the local player controls so a board click on one of
+    // them can dismiss this wrap-up as Continue. Falls back to state.myFaction
+    // (set for online/async) when not passed explicitly.
+    this._wrapUpFaction = humanFaction ?? this.state?.myFaction ?? null;
     const track = this._el('replay-timeline-track');
     const wrap  = this._el('replay-timeline');
     if (!track || !wrap) return Promise.resolve('next');
@@ -6182,12 +6336,17 @@ export class UIController {
       const finish = (action) => {
         if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
         card.querySelectorAll('.replay-wrapup-btn').forEach(b => { b.onclick = null; });
+        this._wrapUpResolve = null;   // wrap-up dismissed — stop intercepting board clicks
         this._exitReplayReview();
         resolve(action);
       };
       card.querySelectorAll('.replay-wrapup-btn').forEach(btn => {
         btn.onclick = () => finish(btn.getAttribute('data-act'));
       });
+      // Expose the resolver so a board/unit click while the summary is up can
+      // resolve it as Continue (the same teardown as the Continue button) —
+      // see _onClick. Cleared in finish() so it never leaks across rounds.
+      this._wrapUpResolve = finish;
       // Autorun: auto-advance the wrap-up after a watchable pause so the mission
       // plays unattended. Manual clicks still work and cancel the timer.
       if (this.aiAutorun && !this.tutorialMode) {

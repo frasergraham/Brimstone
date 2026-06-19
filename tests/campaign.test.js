@@ -8,9 +8,10 @@ import { EntityType, createMinion, createZombie, createWoodGolem, createSurvivor
 import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import {
   Campaign, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves,
-  reconcileRosterAfterMission, applyCarriedHeroLoadout,
+  reconcileRosterAfterMission, applyCarriedHeroLoadout, rosterSnapshotFromName,
 } from '../src/campaign/campaign.js';
 import { getFaction } from '../src/factions.js';
+import { hasLineOfSight } from '../src/actions.js';
 import { ObjectiveType, processStoryTriggers } from '../src/campaign/missions.js';
 import { CAMPAIGNS, getCampaignById } from '../src/campaign/campaign-registry.js';
 import { roundsUntilScoring } from '../src/ai.js';
@@ -689,15 +690,15 @@ describe('Campaign class', () => {
   test('new campaign starts with an empty fallen memorial', () => {
     const c = new Campaign(hollowDef);
     assert.deepEqual(c.fallen, []);
-    assert.equal(c.version, 7); // SAVE_VERSION bumped 6 → 7
+    assert.equal(c.version, 8); // SAVE_VERSION bumped 7 → 8 (persisted active party)
   });
 
-  test('fallen round-trips through save/load (v7)', () => {
+  test('fallen round-trips through save/load (v8)', () => {
     const c = new Campaign(hollowDef);
     c.recordFallen([{ name: 'Abigail', title: 'Scout', level: 3, diedInMission: 'first_night' }]);
     c.save();
     const raw = JSON.parse(localStorage.getItem(`brimstone-campaign-calebs_hollow_prologue-slot1`));
-    assert.equal(raw.version, 7);
+    assert.equal(raw.version, 8);
     assert.equal(raw.fallen.length, 1);
 
     const c2 = new Campaign(hollowDef);
@@ -708,8 +709,9 @@ describe('Campaign class', () => {
     assert.equal(c2.fallen[0].level, 3);
   });
 
-  test('a v6 save migrates to v7 with fallen backfilled to []', () => {
-    // Hand-write a v6 blob (no `fallen` field) into the slot key, then load it.
+  test('a v6 save migrates forward with fallen + activeParty backfilled to []', () => {
+    // Hand-write a v6 blob (no `fallen`/`activeParty` field) into the slot key,
+    // then load it — both new fields should backfill to empty.
     const v6 = {
       campaignId: 'calebs_hollow_prologue', version: 6,
       currentMission: 'prologue', completedMissions: ['tutorial'],
@@ -722,15 +724,17 @@ describe('Campaign class', () => {
 
     const c = new Campaign(hollowDef);
     assert.ok(c.load());
-    assert.equal(c.version, 7, 'migrated to v7');
+    assert.equal(c.version, 8, 'migrated to v8');
     assert.deepEqual(c.fallen, [], 'fallen backfilled to empty');
+    assert.deepEqual(c.activeParty, [], 'activeParty backfilled to empty');
     assert.equal(c.roster.length, 1, 'roster preserved through migration');
     assert.equal(c.roster[0].name, 'Bob');
     assert.equal(c.resources.herbs, 2, 'resources preserved');
     // The migrated form is persisted back so we don't re-migrate next load.
     const persisted = JSON.parse(localStorage.getItem('brimstone-campaign-calebs_hollow_prologue-slot1'));
-    assert.equal(persisted.version, 7);
+    assert.equal(persisted.version, 8);
     assert.ok(Array.isArray(persisted.fallen));
+    assert.ok(Array.isArray(persisted.activeParty));
   });
 
   test('fallen rides through the server sync blob (restoreFromServerData)', () => {
@@ -797,7 +801,7 @@ describe('Campaign class', () => {
     const c = new Campaign(hollowDef);
     const m = c.getMissionDef('prologue');
     assert.ok(m);
-    assert.equal(m.title, 'The Awakening');
+    assert.equal(m.title, "Trouble at The Wanderer's Inn");
   });
 
   test('getMapBuilder returns builder from campaignDef', () => {
@@ -850,6 +854,175 @@ describe('Campaign class', () => {
     });
     assert.ok(!c.completedMissions.has('prologue'));
     assert.equal(c.currentMission, 'prologue');
+  });
+
+  // ── Task A: post-mission survivor rewards (rewards.survivors hook) ─────────
+  test('rosterSnapshotFromName builds a roster entry from a named roster char', () => {
+    const snap = rosterSnapshotFromName('Mary Quinn');
+    assert.ok(snap, 'expected a snapshot for a known roster name');
+    assert.equal(snap.name, 'Mary Quinn');
+    assert.equal(snap.title, 'Nurse');
+    assert.equal(snap.hp, snap.maxHp);     // arrives at full health
+    assert.equal(snap.level, 1);
+    assert.deepEqual(snap.items, {});      // no carried gear
+    assert.ok(Array.isArray(snap.abilities));
+  });
+
+  test('rosterSnapshotFromName returns null for an unknown name', () => {
+    assert.equal(rosterSnapshotFromName('Nobody At All'), null);
+  });
+
+  test('grantRewardSurvivors adds a named survivor to the roster', () => {
+    const c = new Campaign(hollowDef);
+    const granted = c.grantRewardSurvivors([{ name: 'Thomas Putnam' }]);
+    // Returns the full roster snapshots (icon/stats/abilities), not just names,
+    // so the debrief can render each as a card. The snapshot IS the roster entry.
+    assert.equal(granted.length, 1);
+    assert.equal(granted[0].name, 'Thomas Putnam');
+    assert.ok(granted[0].maxHp > 0, 'snapshot carries stats for the card');
+    assert.ok(Array.isArray(granted[0].abilities), 'snapshot carries abilities');
+    assert.equal(c.roster.length, 1);
+    assert.equal(c.roster[0], granted[0], 'granted snapshot is the rostered object');
+  });
+
+  test('grantRewardSurvivors with an empty spec adds a random roster survivor', () => {
+    const c = new Campaign(hollowDef);
+    const granted = c.grantRewardSurvivors([{}]);
+    assert.equal(granted.length, 1);
+    assert.equal(c.roster.length, 1);
+    assert.equal(c.roster[0].name, granted[0].name);
+    assert.ok(SURVIVOR_ROSTER.some(s => s.name === granted[0].name),
+      'granted survivor must be a real roster character');
+  });
+
+  test('grantRewardSurvivors never duplicates a party member or fallen survivor', () => {
+    const c = new Campaign(hollowDef);
+    c.roster = [{ name: 'Mary Quinn', hp: 35, maxHp: 35 }];
+    c.fallen = [{ name: 'Thomas Putnam' }];
+    // Many empty specs — must draw distinct, fresh names each time.
+    const granted = c.grantRewardSurvivors([{}, {}, {}]);
+    assert.equal(granted.length, 3);
+    const names = new Set(granted.map(g => g.name));
+    assert.equal(names.size, 3, 'granted names must be distinct');
+    assert.ok(!names.has('Mary Quinn'), 'must not re-grant a party member');
+    assert.ok(!names.has('Thomas Putnam'), 'must not resurrect a fallen survivor');
+  });
+
+  test('completing Mission 3 (first_night) grants the promised survivor', () => {
+    const c = new Campaign(hollowDef);
+    // Stand at first_night with the chain already cleared.
+    for (const id of ['tutorial', 'prologue', 'gathering_survivors']) c.completedMissions.add(id);
+    c.currentMission = 'first_night';
+    const before = c.roster.length;
+    c.applyMissionResult('first_night', {
+      won: true,
+      survivors: [],            // no survivors carried out of the mission
+      resources: {},
+      heroStats: { hp: 14, maxHp: 14, attack: 3, defense: 2, items: {} },
+    });
+    assert.ok(c.completedMissions.has('first_night'));
+    assert.equal(c.roster.length, before + 1,
+      'beating Mission 3 must add the promised new ally to the roster');
+    assert.ok(SURVIVOR_ROSTER.some(s => s.name === c.roster[0].name));
+  });
+
+  // ── Reward summary surfaced to the debrief ────────────────────────────────
+  test('applyMissionResult returns the granted survivor snapshots + resource deltas', () => {
+    const c = new Campaign(hollowDef);
+    for (const id of ['tutorial', 'prologue', 'gathering_survivors']) c.completedMissions.add(id);
+    c.currentMission = 'first_night';
+    const res = c.applyMissionResult('first_night', {
+      won: true, survivors: [], resources: {},
+      heroStats: { hp: 14, maxHp: 14, attack: 3, defense: 2, items: {} },
+    });
+    assert.equal(res.won, true);
+    // Ch1M3 grants one survivor — returned as a full snapshot (card-ready), and
+    // it IS the object pushed onto the roster (granted after the reconcile).
+    assert.equal(res.rewards.survivors.length, 1, 'one survivor granted');
+    const snap = res.rewards.survivors[0];
+    assert.ok(snap.name && snap.maxHp > 0, 'snapshot has icon-name + stats');
+    assert.ok(Array.isArray(snap.abilities), 'snapshot carries abilities');
+    assert.equal(c.roster.at(-1), snap, 'granted snapshot is the rostered object');
+    // Ch1M3 rewards: wood:2, metal:1, food:2 — positive deltas only.
+    assert.deepEqual(res.rewards.resources, { wood: 2, metal: 1, food: 2 });
+  });
+
+  test('applyMissionResult on a LOSS returns an empty reward summary (no grants)', () => {
+    const c = new Campaign(hollowDef);
+    for (const id of ['tutorial', 'prologue', 'gathering_survivors']) c.completedMissions.add(id);
+    c.currentMission = 'first_night';
+    const before = c.roster.length;
+    const res = c.applyMissionResult('first_night', { won: false });
+    assert.equal(res.won, false);
+    assert.deepEqual(res.rewards, { survivors: [], resources: {} });
+    assert.equal(c.roster.length, before, 'a loss grants nothing');
+    assert.ok(!c.completedMissions.has('first_night'), 'a loss never completes the mission');
+  });
+
+  test('applyMissionResult returns empty rewards for a mission with no rewards block', () => {
+    const c = new Campaign(hollowDef);
+    c.currentMission = 'tutorial';
+    const res = c.applyMissionResult('tutorial', {
+      won: true, survivors: [], resources: {},
+      heroStats: { hp: 14, maxHp: 14, attack: 3, defense: 2, items: {} },
+    });
+    assert.equal(res.won, true);
+    assert.deepEqual(res.rewards, { survivors: [], resources: {} });
+  });
+
+  test('Mission 3 reward survivor persists across save/load', () => {
+    localStorage.clear();
+    const c = new Campaign(hollowDef);
+    for (const id of ['tutorial', 'prologue', 'gathering_survivors']) c.completedMissions.add(id);
+    c.currentMission = 'first_night';
+    c.applyMissionResult('first_night', {
+      won: true, survivors: [], resources: {},
+      heroStats: { hp: 14, maxHp: 14, attack: 3, defense: 2, items: {} },
+    });
+    const grantedName = c.roster[0].name;
+    const reloaded = new Campaign(hollowDef);
+    assert.ok(reloaded.load(), 'save should reload');
+    assert.equal(reloaded.roster.length, 1);
+    assert.equal(reloaded.roster[0].name, grantedName);
+    localStorage.clear();
+  });
+
+  // ── Task B: beating The Awakening completes a skipped tutorial ─────────────
+  test('completing The Awakening (prologue) marks the tutorial complete too', () => {
+    const c = new Campaign(hollowDef);
+    // Tutorial was SKIPPED: not in completedMissions when we beat The Awakening.
+    assert.ok(!c.completedMissions.has('tutorial'));
+    c.currentMission = 'prologue';
+    c.applyMissionResult('prologue', {
+      won: true, survivors: [], resources: {},
+      heroStats: { hp: 14, maxHp: 14, attack: 3, defense: 2, items: {} },
+    });
+    assert.ok(c.completedMissions.has('prologue'));
+    assert.ok(c.completedMissions.has('tutorial'),
+      'beating The Awakening must also flag the skipped tutorial complete');
+  });
+
+  test('The Awakening tutorial-completion is idempotent and does not fire on defeat', () => {
+    const c = new Campaign(hollowDef);
+    c.currentMission = 'prologue';
+    // Defeat: nothing should be marked complete.
+    c.applyMissionResult('prologue', {
+      won: false, survivors: [], resources: {},
+      heroStats: { hp: 0, maxHp: 14, attack: 3, defense: 2, items: {} },
+    });
+    assert.ok(!c.completedMissions.has('tutorial'));
+    assert.ok(!c.completedMissions.has('prologue'));
+    // Now win — tutorial flips complete and stays complete on a replay.
+    c.applyMissionResult('prologue', {
+      won: true, survivors: [], resources: {},
+      heroStats: { hp: 14, maxHp: 14, attack: 3, defense: 2, items: {} },
+    });
+    assert.ok(c.completedMissions.has('tutorial'));
+    c.applyMissionResult('prologue', {
+      won: true, survivors: [], resources: {},
+      heroStats: { hp: 14, maxHp: 14, attack: 3, defense: 2, items: {} },
+    });
+    assert.equal([...c.completedMissions].filter(id => id === 'tutorial').length, 1);
   });
 
   test('permadeath: dead survivors are removed from roster', () => {
@@ -2727,6 +2900,106 @@ describe('processWaves near_hero spawn appears in view', () => {
     // If the fallback silently re-picked from 2-3, this would fail.
     assert.ok(d === 1 || d === 4,
       `fallback spawn distance ${d} should be 1 or 4 (2-3 ring is saturated)`);
+  });
+});
+
+// ── Mission Log briefing header round-trips through state-sync ────────────────
+
+describe('Mission Log — briefing survives save/resume (state-sync)', () => {
+  test('missionBriefing serializes and restores (so the header persists)', () => {
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    state.isCampaign = true;
+    state.missionBriefing = 'Cut down the dead and face what rises in their wake.';
+
+    const restored = deserializeState(serializeState(state));
+    assert.equal(restored.missionBriefing, state.missionBriefing,
+      'the Mission Log briefing must survive a mid-mission resume');
+  });
+
+  test('a non-campaign game carries an empty briefing (no leak into normal play)', () => {
+    const state = new GameState(true, true, 'skirmish');
+    assert.equal(state.missionBriefing, '');
+    const restored = deserializeState(serializeState(state));
+    assert.equal(restored.missionBriefing, '');
+  });
+});
+
+// ── Ch1M1 golem: spawns IN LINE OF SIGHT + a story beat fires ────────────────
+
+describe('Ch1M1 — the Wood Golem rises in view with a story beat', () => {
+  // Drive the REAL Ch1M1 logic graph through the real engine + game context.
+  // After 3 hero kills the golem must (a) spawn at a hex the hero can actually
+  // SEE (LOS, not merely near), and (b) be accompanied by a Show story beat.
+  function runGolemSpawn() {
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    state.phase = 'day'; // hero day sight = 3 (matches the live mission cadence)
+
+    const emitted = [];
+    const createEnemyFn = (type, col, row) =>
+      (type === 'wood_golem' ? createWoodGolem(col, row, 'witch') : createZombie(col, row, 'witch'));
+    const ctx = createGameContext(state, {
+      createEnemyFn,
+      emit: (ev) => emitted.push(ev),
+      random: () => 0.5, // deterministic candidate pick
+    });
+    const graph = hollowDef.missions.find((m) => m.id === 'prologue').logic;
+    const eng = new MissionLogicEngine(graph, ctx);
+
+    eng.dispatch('missionStart');
+    // Cumulative hero-kill pulses (the live loop fires onKillCount with the
+    // running total) — the third crosses the >=3 threshold and spawns the golem.
+    eng.dispatch('killCount', { faction: 'hero', count: 1 });
+    eng.dispatch('killCount', { faction: 'hero', count: 2 });
+    eng.dispatch('killCount', { faction: 'hero', count: 3 });
+    return { state, emitted };
+  }
+
+  test('the golem spawns on a hex the hero has line of sight to', () => {
+    const { state } = runGolemSpawn();
+    const golem = state.entities.find((e) => e.type === EntityType.WOOD_GOLEM);
+    assert.ok(golem, 'a wood golem spawned after 3 kills');
+    // The whole point of the fix: the player must SEE it rise, not just be near.
+    assert.ok(
+      hasLineOfSight(state, golem.col, golem.row, state.hero.col, state.hero.row),
+      `golem at (${golem.col},${golem.row}) must be in the hero's line of sight`,
+    );
+    const d = hexDistance(golem.col, golem.row, state.hero.col, state.hero.row);
+    assert.ok(d >= 1 && d <= 4, `golem distance ${d} should be within sight range`);
+  });
+
+  test('a story beat accompanies the golem, fired AFTER the spawn (Sim → Show)', () => {
+    const { emitted } = runGolemSpawn();
+    const beats = emitted.filter((e) => e.kind === 'storyBeat');
+    assert.equal(beats.length, 1, 'exactly one golem story beat');
+    assert.match(beats[0].text, /golem/i, 'the beat narrates the golem rising');
+    const spawnIdx = emitted.findIndex((e) => e.kind === 'spawn');
+    const beatIdx = emitted.findIndex((e) => e.kind === 'storyBeat');
+    assert.ok(spawnIdx >= 0, 'the golem spawn was emitted');
+    assert.ok(spawnIdx < beatIdx, 'Sim spawn precedes the Show story beat');
+  });
+
+  test('the golem spawn + beat fire exactly once even on repeated kill pulses', () => {
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    state.phase = 'day';
+    const emitted = [];
+    const ctx = createGameContext(state, {
+      createEnemyFn: (type, col, row) => createWoodGolem(col, row, 'witch'),
+      emit: (ev) => emitted.push(ev),
+      random: () => 0.5,
+    });
+    const eng = new MissionLogicEngine(hollowDef.missions.find((m) => m.id === 'prologue').logic, ctx);
+    eng.dispatch('missionStart');
+    eng.dispatch('killCount', { faction: 'hero', count: 3 });
+    eng.dispatch('killCount', { faction: 'hero', count: 4 });
+    eng.dispatch('killCount', { faction: 'hero', count: 5 });
+    assert.equal(state.entities.filter((e) => e.type === EntityType.WOOD_GOLEM).length, 1);
+    assert.equal(emitted.filter((e) => e.kind === 'storyBeat').length, 1);
   });
 });
 

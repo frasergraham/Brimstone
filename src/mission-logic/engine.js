@@ -44,7 +44,15 @@ export class MissionLogicEngine {
     this._dataIn = idx.dataIn;
 
     // Persistent, serializable runtime state (docs/09 §3.1).
-    this.state = { firedOnce: new Set(), counters: {}, variables: {} };
+    //
+    // `objectives` is the authoritative Mission Log: an ORDERED list of
+    //   { id, label, current, target, completed }
+    // mutated only by SIM nodes (setObjective / updateObjective / completeObjective)
+    // deterministically from (state, plans, seed). It is presentation-free — the
+    // toast + Chronicle "Mission Log" panel are SHOW (they READ this list, never
+    // write it). It round-trips through serialize()/load() so the live to-do list
+    // survives online resync + save/resume (Guideline 5/6).
+    this.state = { firedOnce: new Set(), counters: {}, variables: {}, objectives: [] };
 
     // Per-dispatch scratch (reset each traversal).
     this._outputs = null; // Map<nodeId, outputsObject>
@@ -144,6 +152,8 @@ export class MissionLogicEngine {
       firedOnce: [...this.state.firedOnce],
       counters: { ...this.state.counters },
       variables: { ...this.state.variables },
+      // Deep-copy each objective so the snapshot can't be mutated by later runs.
+      objectives: (this.state.objectives ?? []).map((o) => ({ ...o })),
     };
   }
 
@@ -153,6 +163,14 @@ export class MissionLogicEngine {
     this.state.firedOnce = new Set(snap.firedOnce ?? []);
     this.state.counters = { ...(snap.counters ?? {}) };
     this.state.variables = { ...(snap.variables ?? {}) };
+    this.state.objectives = (snap.objectives ?? []).map((o) => ({ ...o }));
+  }
+
+  /** Read-only view of the Mission Log (authoritative objective list). The UI
+   *  reads this to render the to-do panel; it never writes. Returns a shallow
+   *  copy so callers can't mutate engine state. */
+  objectives() {
+    return (this.state.objectives ?? []).map((o) => ({ ...o }));
   }
 
   // ── traversal ──────────────────────────────────────────────────────────────

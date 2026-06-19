@@ -38,6 +38,7 @@ import { sightRange, computeLineOfSight, hasLineOfSight, assignSlotOnTile } from
 import { ITEMS } from './items.js';
 import { ABILITIES } from './abilities.js';
 import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
+import { isFactionAvailable } from './demo-config.js';
 import { compileTurnBattleSummary, compileTurnBattlePairs, collectTurnFinds, deferredMoveEntityIds } from './battle-utils.js';
 import { collectWrapUpAttrition } from './post-round-effects.js';
 import { applyEffect } from './effects.js';
@@ -52,9 +53,10 @@ import { nodeController } from './game.js';
 import { MissionConductor, areHintsSuppressed, markHintsSeen, resetAllHintsForCampaign } from './mission-conductor.js';
 import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel, getEquippedWeaponIdOf, normalizeItems, flattenItemCounts } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
-import { Campaign, CAMPAIGN_SLOT_COUNT, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
+import { Campaign, CAMPAIGN_SLOT_COUNT, getActiveSlot, setActiveSlot, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
 import { CAMPAIGNS } from './campaign/campaign-registry.js';
-import { saveThumb, deleteThumb, loadThumb, saveStats, loadStats } from './menu/thumbnails.js';
+import { campaignMissionNumber as _campaignMissionNumber, campaignMissionTotal as _campaignMissionTotal, hasCampaignToContinue } from './campaign/continue-resolver.js';
+import { saveThumb, deleteThumb, loadThumb, saveStats, loadStats, campaignMissionRowId } from './menu/thumbnails.js';
 import { processStoryTriggers } from './campaign/missions.js';
 import { MissionLogicEngine } from './mission-logic/engine.js';
 import { createGameContext } from './mission-logic/game-context.js';
@@ -72,10 +74,11 @@ import {
   RESOURCE_ICONS as _RESOURCE_ICONS, hpColor as _hpColor,
   loadCampaignPortraits as _loadCampaignPortraits, getCampaignPortrait as _getCampaignPortrait,
   campaignCardHTML as _campaignCardHTML, survivorCardHTML as _survivorCardHTML,
-  campaignPartyHTML as _campaignPartyHTML, objectiveDescription as _objectiveDescription,
+  buildDebriefHeader, objectiveDescription as _objectiveDescription,
   weaponName as _weaponName, weaponStatString as _weaponStatString,
   partyPaneHTML as _partyPaneHTML, missionListPaneHTML as _missionListPaneHTML,
   progressSquadCap as _progressSquadCap, fallenSectionHTML as _fallenSectionHTML,
+  debriefPartyHTML as _debriefPartyHTML, debriefRewardsSectionHTML as _debriefRewardsSectionHTML,
   missionRows as _missionRows,
   departureMessage as _departureMessage, arrivalMessage as _arrivalMessage,
 } from './campaign/campaign-ui.js';
@@ -362,7 +365,7 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
 
   ui = new UIController(canvas, state, renderer, localWitchAI, redraw, localHeroAI, autoplay);
   ui.onQuitToMenu = () => location.reload();
-  ui.showMissionInfoBtn(false); // hidden by default; campaign init enables it
+  ui.renderMissionLog([]); // empty by default; mission-logic objectives populate it
 
   // AI-assist (debug): carry the console-toggled flags onto the fresh UI and let
   // it request AI-generated plans for the human's planning faction.
@@ -778,7 +781,40 @@ function _logicEventsToStory(events) {
 
 function _drainLogicStoryEvents() {
   if (!state?.logicPresentation?.length) return [];
-  return _logicEventsToStory(state.logicPresentation.splice(0));
+  const drained = state.logicPresentation.splice(0);
+  // Mission Log (docs/09): objective add/update/complete events fire a toast and
+  // refresh the Chronicle's Mission Log panel here (presentation-only — they read
+  // the engine's authoritative objective list, never write it). Any other
+  // non-story kinds left in the stream (spawn/flag/scriptedAction) are handled by
+  // their own drains; _logicEventsToStory ignores them.
+  for (const ev of drained) {
+    if (ev.kind === 'objectiveLog') { ui?.showMissionLogToast?.(ev); }
+  }
+  if (drained.some((e) => e.kind === 'objectiveLog')) _syncMissionLog();
+  return _logicEventsToStory(drained);
+}
+
+/** Refresh the Chronicle's Mission Log panel from the engine's authoritative
+ *  objective list. Safe no-op for non-logic games (engine is null → []). */
+function _syncMissionLog() {
+  ui?.renderMissionLog?.(state?.logicEngine?.objectives?.() ?? [], state?.missionBriefing ?? '');
+}
+
+/** Drain ONLY the queued objectiveLog presentation events (toast + panel sync),
+ *  leaving story beats / conversations / scripted actions in the stream for their
+ *  own handlers. Called right after a round resolves so kill-count objective
+ *  markers tick in step with the kills. No-op for non-logic games. */
+function _presentRoundObjectiveLogs() {
+  const queue = state?.logicPresentation;
+  if (!queue?.length) return;
+  let drainedAny = false;
+  state.logicPresentation = queue.filter((ev) => {
+    if (ev.kind !== 'objectiveLog') return true;
+    ui?.showMissionLogToast?.(ev);
+    drainedAny = true;
+    return false;
+  });
+  if (drainedAny) _syncMissionLog();
 }
 
 // Present a TURN's mission-logic Show events DURING the replay, in order: a story
@@ -790,14 +826,23 @@ let _beatCardSeq = 0;
 // so the caller can skip the redundant manual-step gate for this step.
 async function _presentStepLogicEvents(events, afterStepIndex) {
   let gatedBeat = false;
+  let sawObjective = false;
   for (const ev of events ?? []) {
     if (ev.kind === 'conversation') {
       await _playMissionConversation(ev.id, { manageHud: false, runOnComplete: false, nodeId: ev.nodeId, roles: ev.roles });
     } else if (ev.kind === 'storyBeat') {
       await _presentStoryBeatCard(ev, afterStepIndex);
       gatedBeat = true;
+    } else if (ev.kind === 'objectiveLog') {
+      // Mission Log update earned on THIS turn (e.g. an area-triggered objective):
+      // toast it and refresh the panel right at this point in the replay. The
+      // objective STATE already mutated inside the sealed resolution — this is the
+      // SHOW half, so it never gates the step (no NEXT needed for a toast).
+      ui?.showMissionLogToast?.(ev);
+      sawObjective = true;
     }
   }
+  if (sawObjective) _syncMissionLog();
   return gatedBeat;
 }
 
@@ -1155,7 +1200,7 @@ async function _runEndOfRoundReview({
       action = await ui.showReplayWrapUp({
         titleHtml: wrap.title, combats: wrap.combats, discoveries: wrap.discoveries,
         loot: wrap.loot, attrition: wrap.attrition, attritionLevel,
-        canReplay: roundHistory.length > 0,
+        canReplay: roundHistory.length > 0, humanFaction,
       });
       if (action === 'replay') await reReplay();
     } while (action === 'replay');
@@ -1324,6 +1369,14 @@ async function _runLocalResolution(skipSummary = false) {
   // state._waveProcessor (set during mission load) before checkVictory, so
   // triggered wave spawns can pre-empt an otherwise-firing eliminate_all win.
   state.finalizeRound();
+
+  // Mission Log (docs/09): finalizeRound() ran pumpMissionLogic('postResolution'),
+  // which may have advanced kill-count objectives (e.g. "kill 3 zombies"). Toast
+  // those + refresh the panel now, right at the end of this round's resolution,
+  // so the marker ticks 1/3 → 2/3 → 3/3 in step with the kills. The Sim state
+  // already mutated; this drains only the SHOW objectiveLog half (story beats +
+  // conversations stay queued for the next planning gate, unchanged).
+  _presentRoundObjectiveLogs();
 
   // Show encounter dialogs for survivors spawned at power nodes during endRound
   if (ui && !_autoplay && state.nodeSpawnedSurvivors?.length) {
@@ -1545,7 +1598,7 @@ async function _replayLastRoundInlineLocal() {
         action = await ui.showReplayWrapUp({
           titleHtml: wrap.title, combats: wrap.combats, discoveries: wrap.discoveries,
           loot: wrap.loot, attrition: wrap.attrition, attritionLevel: 0,
-          canReplay: true,
+          canReplay: true, humanFaction,
         });
         if (action === 'replay') { resetPlayback(); await playOnce(); resetPlayback(); }
       } while (action === 'replay');
@@ -1718,8 +1771,10 @@ function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
   }
   if (result?.killed) {
     const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
-    renderer.addDeathAnim(tgtCol, tgtRow, deadColor);
-    renderer.addFadeOutAnim(targetSnap.id, 600);
+    // 3D: plays the Death (fall) clip on this unit's own clone, then a staged
+    // fade (1 → 0.5 across the clip, 0.5 → 0 on the ground). 2D (editor-only):
+    // legacy death-ring burst + fade. Same call site online + offline.
+    renderer.playDeathAnimAndFade(targetSnap.id, tgtCol, tgtRow, deadColor);
   }
   // Brute blast — expanding red ring covering the target hex + 6 neighbours.
   // Mirrors the horn's ring effect; fires before splash floaters so the
@@ -1736,8 +1791,7 @@ function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
     _applyDisplayHp(sh.id, -(sh.damage ?? 1));
     if (sh.killed) {
       const deadColor = sh.owner === 'hero' ? '#d4a72c' : '#9b59b6';
-      renderer.addDeathAnim(sh.col, sh.row, deadColor);
-      renderer.addFadeOutAnim(sh.id, 600);
+      renderer.playDeathAnimAndFade(sh.id, sh.col, sh.row, deadColor);
     }
   }
   redrawFn();
@@ -3406,6 +3460,18 @@ function initOnline(mirrorState, myFaction, mpClient) {
 
   redrawOnline();
 
+  // Capture a fresh board thumbnail for the menu lists once assets are ready,
+  // keyed by the online room id (== the games-list row's room_id). This is the
+  // ONLY way the persistent Battle — whose rounds resolve server-side while the
+  // player is away, so the round-end capture rarely fires — ever gets a
+  // thumbnail; live games simply refresh theirs on each view.
+  const _thumbRoomId = mpClient?.roomId ?? mp?.roomId;
+  if (_thumbRoomId && typeof renderer.whenReady === 'function') {
+    renderer.whenReady()
+      .then(() => { try { _captureRoundThumbnail(_thumbRoomId); } catch { /* best-effort */ } })
+      .catch(() => {});
+  }
+
   requestAnimationFrame(() => {
     // Resize now that game-screen layout is complete and canvas has real dimensions.
     renderer.resize();
@@ -3843,9 +3909,8 @@ function _resumeCampaignMission(missionId) {
   // Hide chronicle by default for story mode
   ui._setChronicleOpen(false);
 
-  // Wire mission info button
-  ui.showMissionInfoBtn(true);
-  ui.onMissionInfo = () => _showMissionInfoModal();
+  // Mission Log (Chronicle panel) reflects the logic-graph objectives, if any.
+  _syncMissionLog();
 
   // Re-wire micro-lesson hints (round/`when`-anchored, so a resumed game only
   // shows hints still relevant to the current round)
@@ -3915,11 +3980,29 @@ function _progressMaxActive() {
   return Math.min(_progressSquadCap(_activeCampaign?.roster), PARTY_CAP);
 }
 
-/** Front-fill the active squad to the cap (called on fresh entry, not re-renders). */
+/**
+ * Seed the working active-squad selection on fresh entry (not on re-renders).
+ * Restores the player's persisted choice (Campaign.activeParty, sanitized against
+ * the current roster) when one exists; otherwise front-fills to the cap and
+ * persists that default so the selection is sticky from the first visit.
+ */
 function _seedActiveRosterForProgress() {
   if (!_activeCampaign) { _activeRosterIndices = []; return; }
   const maxActive = _progressMaxActive();
+  const saved = _activeCampaign.getActiveParty(maxActive);
+  if (saved.length > 0) {
+    _activeRosterIndices = saved;
+    return;
+  }
+  // No saved squad (fresh campaign / pre-v8 save) — front-fill and persist.
   _activeRosterIndices = _activeCampaign.roster.map((_, i) => i).slice(0, maxActive);
+  _activeCampaign.setActiveParty(_activeRosterIndices);
+}
+
+/** Commit the working active-squad selection to the campaign save so it survives
+ *  a reload. Mirrors the heal/equip helpers, which persist immediately. */
+function _persistActiveRoster() {
+  if (_activeCampaign) _activeCampaign.setActiveParty(_activeRosterIndices);
 }
 
 function _renderCampaignProgressScreen() {
@@ -3981,6 +4064,7 @@ function _wireCampaignProgressHandlers() {
       const idx = parseInt(btn.dataset.idx, 10);
       if (_activeRosterIndices.length < maxActive && !_activeRosterIndices.includes(idx)) {
         _activeRosterIndices.push(idx);
+        _persistActiveRoster();
         _renderCampaignProgressScreen();
       }
     });
@@ -3990,6 +4074,7 @@ function _wireCampaignProgressHandlers() {
     btn.addEventListener('click', () => {
       const idx = parseInt(btn.dataset.idx, 10);
       _activeRosterIndices = _activeRosterIndices.filter(i => i !== idx);
+      _persistActiveRoster();
       _renderCampaignProgressScreen();
     });
   });
@@ -4124,6 +4209,7 @@ function _renderDeployRoster(heroStats, roster, maxActive) {
       const idx = parseInt(btn.dataset.idx);
       if (_activeRosterIndices.length < maxActive && !_activeRosterIndices.includes(idx)) {
         _activeRosterIndices.push(idx);
+        _persistActiveRoster();
         _renderDeployRoster(heroStats, roster, maxActive);
       }
     });
@@ -4132,6 +4218,7 @@ function _renderDeployRoster(heroStats, roster, maxActive) {
     btn.addEventListener('click', () => {
       const idx = parseInt(btn.dataset.idx);
       _activeRosterIndices = _activeRosterIndices.filter(i => i !== idx);
+      _persistActiveRoster();
       _renderDeployRoster(heroStats, roster, maxActive);
     });
   });
@@ -4200,30 +4287,21 @@ function _showMissionBriefing(missionId) {
   // mission's authored value clamped to the START-only PARTY_CAP (≤3 survivors),
   // so the picker can never select more than 3 — the rest stay benched.
   const maxActive = Math.min(missionDef.maxSurvivorsFromRoster ?? 0, PARTY_CAP);
-  // Preserve a squad already chosen on the Progress screen; otherwise default to
-  // front-filling the active slots. Either way clamp to this mission's cap and
-  // drop any indices that fall outside the current roster.
-  _activeRosterIndices = (_activeRosterIndices || [])
-    .filter(i => i >= 0 && i < _activeCampaign.roster.length)
-    .slice(0, maxActive);
+  // Preserve a squad already chosen on the Progress screen (or persisted from a
+  // prior session); otherwise default to front-filling the active slots. Either
+  // way clamp to this mission's cap and drop any indices outside the roster. Fall
+  // back to the persisted selection when the in-memory working copy is empty
+  // (e.g. entered straight into the briefing on app launch, bypassing Progress).
+  let chosen = (_activeRosterIndices || [])
+    .filter(i => i >= 0 && i < _activeCampaign.roster.length);
+  if (chosen.length === 0) chosen = _activeCampaign.getActiveParty();
+  _activeRosterIndices = chosen.slice(0, maxActive);
   if (_activeRosterIndices.length === 0) {
     _activeRosterIndices = _activeCampaign.roster.map((_, i) => i).slice(0, maxActive);
   }
   _renderDeployRoster(_activeCampaign.heroStats, _activeCampaign.roster, maxActive);
 }
 
-
-function _showMissionInfoModal() {
-  if (!_activeMissionDef) return;
-  const def = _activeMissionDef;
-  const winDesc = _objectiveDescription(def.objectives?.win);
-  const loseObj = def.objectives?.lose;
-  const loseDesc = Array.isArray(loseObj)
-    ? loseObj.map(o => _objectiveDescription(o)).join('; ')
-    : _objectiveDescription(loseObj);
-  const text = `${def.briefing}\n\n☀ Victory: ${winDesc}\n💀 Defeat: ${loseDesc}`;
-  ui.showStoryModal(def.title, text);
-}
 
 function _createEnemyEntity(type, col, row, state = null) {
   switch (type) {
@@ -4435,6 +4513,9 @@ function _attachMissionLogic(state, missionDef) {
   const engine = new MissionLogicEngine(missionDef.logic, ctx);
   if (state._restoredLogicState) engine.load(state._restoredLogicState);
   state.attachLogicEngine(engine);
+  // Surface the mission briefing as the Mission Log header (Show-only). Stored
+  // on the GameState so it round-trips through state-sync for resume.
+  state.missionBriefing = missionDef.briefing || missionDef.description || '';
 }
 
 function _initCampaignMission(missionDef) {
@@ -4463,6 +4544,11 @@ function _initCampaignMission(missionDef) {
   mapData.disableScoring  = !!missionDef.disableScoring;
   mapData.disableCycleBar = !!missionDef.disableCycleBar;
   mapData.disableScoreWin  = !!missionDef.disableScoreWin;
+  // Campaign opt-out for the two ambient per-side spawn mechanics. A mission
+  // can drop them individually or together via `ambientSpawns: false`.
+  const ambientOff = missionDef.ambientSpawns === false;
+  mapData.disableNodeSurvivorSpawn = ambientOff || !!missionDef.disableNodeSurvivorSpawn;
+  mapData.disableWitchSupport      = ambientOff || !!missionDef.disableWitchSupport;
   if (missionDef.nodeScoreThreshold != null) {
     mapData.nodeScoreThreshold = missionDef.nodeScoreThreshold;
   }
@@ -4490,6 +4576,29 @@ function _initCampaignMission(missionDef) {
   // any planning/resolution so plan-1 onward earns XP. Round-tripped by
   // state-sync so a mid-mission resume keeps the flag.
   state.isCampaign = true;
+
+  // Browser-verification probe (mirrors the scenario loader's __scenarioState):
+  // the verifier-browser harness drives the live mission-logic engine through
+  // this handle to screenshot graph-driven beats (e.g. the Ch1M1 golem rising)
+  // without grinding a full AI game. Read-only handle; inert in normal play.
+  // Set right after `state` exists so it's available regardless of later init.
+  if (typeof window !== 'undefined') {
+    window.__campaignState = state;
+    if (!Object.getOwnPropertyDescriptor(window, '__ui')) {
+      Object.defineProperty(window, '__ui', { configurable: true, get: () => ui });
+    }
+    // Verification hook: force the end-of-mission debrief without grinding the
+    // mission to completion. Sets the winner + gameOver and runs the live
+    // _handleCampaignMissionEnd so the harness can screenshot a real WIN or LOSE
+    // debrief. Inert in normal play (never called).
+    window.__triggerCampaignDebrief = (won = true) => {
+      if (!state) return;
+      // gameOver is a derived getter (winner !== null) — setting winner is enough.
+      state.winner = won ? 'hero' : 'witch';
+      state.winReason = won ? 'objective' : 'defeat';
+      _handleCampaignMissionEnd();
+    };
+  }
 
   // Apply custom phase cycle from mission definition
   if (missionDef.phaseCycle) {
@@ -4712,6 +4821,12 @@ function _initCampaignMission(missionDef) {
   _setupLocalUI(canvas, witchAI, null, false);
   _roundHistory = [];
 
+  // Browser-verification probe: expose the live renderer (mirrors the scenario
+  // loader's window.__renderer3d) so scripts/gen-mission-thumbnails.mjs can
+  // capture a mission's starting-board thumbnail via the SAME captureMapThumbnail
+  // path the in-game saved thumbnails use. Read-only handle; inert in normal play.
+  if (typeof window !== 'undefined') window.__renderer3d = renderer;
+
   // Hide chronicle by default for story mode — less clutter during narrative
   ui._setChronicleOpen(false);
 
@@ -4771,9 +4886,8 @@ function _initCampaignMission(missionDef) {
     return;
   }
 
-  // Wire mission info button callback
-  ui.showMissionInfoBtn(true);
-  ui.onMissionInfo = () => _showMissionInfoModal();
+  // Mission Log (Chronicle panel) reflects the logic-graph objectives, if any.
+  _syncMissionLog();
 
   // Micro-lesson hints (MissionConductor in 'hints' mode)
   _setupMissionHints(missionDef);
@@ -4810,6 +4924,45 @@ function _setupMissionHints(missionDef) {
   _missionConductor.start(); // no-op in hints mode; hints fire at planning start
 }
 
+// AbortController scoping the debrief overlay's listeners (Continue button). A
+// fresh controller per debrief so a previous mission's handler can never linger
+// on the shared #debrief-continue element and double-fire (see
+// reference_ui_teardown_listener_leaks).
+let _debriefAbort = null;
+
+// The live Ledger api ({ show, hide, select }), stashed at init so the debrief's
+// Continue can hand back to the campaign panel without fighting the setup-screen
+// observer. Null until the Ledger boots (special URL modes never init it).
+let _ledgerApi = null;
+
+/**
+ * Continue out of the campaign debrief: hide the overlay and route into the
+ * Ledger's Campaign panel. select('campaign') re-reads _ledgerCampaignData()
+ * fresh, so the just-completed mission shows done and the next one unlocked; the
+ * active slot was already persisted at launch, so the player lands on the right
+ * playthrough. Falls back to a hard reload if the Ledger never initialized.
+ */
+function _leaveDebriefToLedger() {
+  const ov = document.getElementById('debrief-overlay');
+  if (ov) ov.style.display = 'none';
+  _debriefAbort?.abort();
+  _debriefAbort = null;
+  // The mission is over and the game torn down; drop the in-game screen so the
+  // Ledger sits over a clean backdrop.
+  const gs = document.getElementById('game-screen');
+  if (gs) gs.style.display = 'none';
+  if (_ledgerApi) {
+    // Land on the mission LIST, not the briefing for the mission we just played
+    // (showCampaignList clears the primed _campBriefing).
+    if (_ledgerApi.showCampaignList) _ledgerApi.showCampaignList();
+    else { _ledgerApi.show(); _ledgerApi.select('campaign'); }
+  } else {
+    // No Ledger (shouldn't happen in normal play) — fall back to a reload, which
+    // boots the menu fresh.
+    location.reload();
+  }
+}
+
 function _handleCampaignMissionEnd() {
   if (!_activeCampaign || !_activeMissionDef || !state) return;
 
@@ -4834,6 +4987,10 @@ function _handleCampaignMissionEnd() {
   // Computed before the debrief render so the Fallen card can list this run's
   // casualties even before they exist in Campaign.fallen.
   let newlyFallen = [];
+  // What the mission GRANTED this run (survivor snapshots + resource deltas),
+  // captured from applyMissionResult so the debrief can SHOW the rewards. Empty
+  // on a loss (nothing is granted — the party is restored).
+  let rewardSummary = { survivors: [], resources: {} };
   if (won) {
     // Gather surviving survivors for roster (permadeath: dead ones are lost).
     // Roster members who were deployed and died are dropped; undeployed
@@ -4844,7 +5001,7 @@ function _handleCampaignMissionEnd() {
     // discovery pool. Only on a WIN; a loss restores the party (else-branch).
     newlyFallen = collectFallenAfterMission(state.entities, missionDef.id);
 
-    _activeCampaign.applyMissionResult(missionDef.id, {
+    const _missionResult = _activeCampaign.applyMissionResult(missionDef.id, {
       won,
       survivors,
       fallen: newlyFallen,
@@ -4863,39 +5020,66 @@ function _handleCampaignMissionEnd() {
       } : _activeCampaign.heroStats,
       flags: {},
     });
+    rewardSummary = _missionResult?.rewards ?? rewardSummary;
   } else {
     // Defeat: restore party to pre-mission state (no permadeath, no stat changes)
     survivors = _activeCampaign.roster;
+    // Forget the failed run's last-round board snapshot. The thumbnail is keyed
+    // by the mission's row id (the SAME key `_captureRoundThumbnail` writes); a
+    // lost mission isn't "in progress", so dropping the saved thumb lets the card
+    // fall back to the mission's fixed pre-generated image (missionThumb →
+    // fixedMissionImage) instead of showing the stale failed-attempt snapshot.
+    deleteThumb(campaignMissionRowId(
+      _activeCampaign.campaignDef.id, _activeCampaign.slotIndex, missionDef.id));
   }
 
-  // Show debrief screen
-  document.getElementById('game-screen').style.display = 'none';
-  document.getElementById('setup-screen').style.display = '';
+  // ── Render the debrief overlay ──────────────────────────────────────────
+  // A dedicated overlay (#debrief-overlay), NOT the dead legacy #setup-screen
+  // debrief step. The Ledger's setup-screen MutationObserver only watches
+  // #setup-screen, so revealing this overlay never bounces the player back to
+  // Continue. The data computed above (roster reconcile, applyMissionResult,
+  // fallen) is unchanged — only the display was rebuilt for the Ledger era.
+  const overlay = document.getElementById('debrief-overlay');
+  const panel = document.getElementById('debrief-panel');
+  const { title, text } = buildDebriefHeader(missionDef, won);
 
-  const title = won ? 'VICTORY' : 'DEFEAT';
-  const text = won ? (missionDef.victoryText || 'Mission complete.') : (missionDef.defeatText || 'Mission failed.');
-  (document.getElementById('debrief-title') || _legacyEl).textContent = title;
-  (document.getElementById('debrief-text') || _legacyEl).textContent = text;
+  const titleEl = document.getElementById('debrief-title');
+  if (titleEl) titleEl.textContent = title;
+  const textEl = document.getElementById('debrief-text');
+  if (textEl) textEl.textContent = text;
+  if (panel) panel.classList.toggle('is-defeat', !won);
 
-  // Stats
+  // Stats — rounds played, kills, surviving party size; plus the heal/rest bonus
+  // notice on a win when the mission grants one.
   const statsEl = document.getElementById('debrief-stats');
-  (statsEl || _legacyEl).innerHTML = `
-    <div>Rounds: ${state.round}</div>
-    <div>Kills: ${state.heroKills}</div>
-    <div>Survivors remaining: ${survivors.length}</div>
-  `;
-
-  // Heal bonus notice
-  if (won && missionDef.healBonus) {
-    (statsEl || _legacyEl).insertAdjacentHTML('afterend',
-      `<div class="debrief-heal">✦ Rest bonus: all survivors healed +${missionDef.healBonus} HP</div>`);
+  if (statsEl) {
+    statsEl.className = 'debrief-stats debrief-overlay-stats';
+    statsEl.innerHTML = `
+      <div>Rounds: ${state.round}</div>
+      <div>Kills: ${state.heroKills}</div>
+      <div>Survivors remaining: ${survivors.length}</div>
+    `;
+    // Heal bonus notice (sits below the stat row). Drop any stale notice from a
+    // prior debrief first so a re-show never stacks duplicates.
+    document.getElementById('debrief-overlay')?.querySelectorAll('.debrief-heal').forEach(el => el.remove());
+    if (won && missionDef.healBonus) {
+      statsEl.insertAdjacentHTML('afterend',
+        `<div class="debrief-heal">✦ Rest bonus: all survivors healed +${missionDef.healBonus} HP</div>`);
+    }
   }
 
-  // Roster status — rich party cards
+  // Roster status — rich party cards + this-run fallen memorial.
   const rosterEl = document.getElementById('debrief-roster');
+  // Rich party-management card needs level/XP/abilities/agility too — carry them
+  // straight off the live hero on a win (matching the snapshot stored into
+  // Campaign.heroStats above) so the debrief card reads identically to the Party
+  // Management screen. A loss falls back to the persisted heroStats.
   const heroSnap = won && state.hero ? {
     hp: state.hero.hp, maxHp: state.hero.maxHp,
     attack: state.hero.attack, defense: state.hero.defense,
+    agility: state.hero.agility,
+    abilities: state.hero.abilities || [],
+    level: state.hero.level, xp: state.hero.xp,
     items: normalizeItems(state.hero.items),
   } : _activeCampaign.heroStats;
   const rosterHeading = won ? 'Surviving Roster' : 'Party Restored';
@@ -4903,9 +5087,33 @@ function _handleCampaignMissionEnd() {
   // fallen are shown on the Progress screen; the debrief focuses on who was lost
   // THIS mission so the loss lands. Empty → no section.
   const missionTitleResolver = (id) => _activeCampaign.getMissionDef(id)?.title ?? id;
-  (rosterEl || _legacyEl).innerHTML = `<h3>${rosterHeading}</h3>` +
-    _campaignPartyHTML(heroSnap, survivors) +
-    _fallenSectionHTML(newlyFallen, missionTitleResolver);
+  if (rosterEl) {
+    // ✦ Rewards — what this WON mission GRANTED (new ally cards + resource gains).
+    // Rendered BEFORE the surviving-roster list so the new ally reads as a fresh
+    // reward, not a returning party member; '' (no section) on a loss or when the
+    // mission granted nothing. The granted ally is NOT in `survivors` (granting
+    // runs after the roster reconcile), so it shows here and nowhere else.
+    // Surviving roster + reward survivors both render with the SAME
+    // party-management unit card (progressUnitCardHTML) so the debrief matches
+    // the Ledger "Manage the Party" screen exactly.
+    rosterEl.innerHTML =
+      _debriefRewardsSectionHTML(rewardSummary) +
+      `<h3>${rosterHeading}</h3>` +
+      _debriefPartyHTML(heroSnap, survivors) +
+      _fallenSectionHTML(newlyFallen, missionTitleResolver);
+  }
+
+  // Wire Continue → back to the Ledger's Campaign panel. A fresh AbortController
+  // per debrief so the previous mission's handler can never linger and double-fire.
+  _debriefAbort?.abort();
+  _debriefAbort = new AbortController();
+  const continueBtn = document.getElementById('debrief-continue');
+  if (continueBtn) {
+    continueBtn.addEventListener('click', _leaveDebriefToLedger, { signal: _debriefAbort.signal });
+  }
+
+  // Reveal the overlay over the game.
+  if (overlay) overlay.style.display = '';
 
   // Clean up game state — destroy the UIController and conductor first so their
   // event listeners don't leak onto the shared DOM and double-fire in the next game.
@@ -4914,8 +5122,6 @@ function _handleCampaignMissionEnd() {
   renderer = null; ui = null; witchAI = null; heroAI = null;
   _missionConductor = null;
   _activeMissionDef = null;
-
-  showStep('debrief');
 }
 
 // Campaign event listeners
@@ -5064,7 +5270,7 @@ function _deleteSpSave(id) {
 function _captureRoundThumbnail(idOverride = null) {
   if (!renderer?.captureMapThumbnail || !state || state.gameOver || _autoplay) return;
   const id = idOverride || ((_activeCampaign && _activeMissionDef)
-    ? `${_activeCampaign.campaignDef.id}/slot${_activeCampaign.slotIndex}/${_activeMissionDef.id}`
+    ? campaignMissionRowId(_activeCampaign.campaignDef.id, _activeCampaign.slotIndex, _activeMissionDef.id)
     : _spSaveId);
   if (!id) return;
   try { saveStats(id, _extractStats(state)); } catch { /* detail snapshot is best-effort */ }
@@ -5792,63 +5998,92 @@ function _localCampaignRows() {
     for (const camp of CAMPAIGNS) {
       if (camp.disabled) continue;
       const missions = camp.missions || [];
+      // Denominator excludes the tutorial (Mission 0), so the last real mission
+      // reads "Mission 12 / 12" rather than "/13".
+      const missionTotal = _campaignMissionTotal(camp);
 
-      for (let slot = 1; slot <= CAMPAIGN_SLOT_COUNT; slot++) {
-        const hasMidMissionSave = new Set();
+      // Continue tracks ONE playthrough per campaign — the persisted active slot
+      // (the one the player last selected/started), defaulting to slot 1. We
+      // scan only that slot so Continue resumes the playthrough the player cares
+      // about, not whichever slot an autosave touched most recently.
+      const slot = getActiveSlot(camp.id);
+      const hasMidMissionSave = new Set();
 
-        // 1. Scan missions for any that have a mid-mission save file in this slot
-        for (const m of missions) {
-          const save = loadCampaignMissionSave(camp.id, m.id, slot);
-          if (!save) continue;
-          hasMidMissionSave.add(m.id);
-          rows.push({
-            kind: 'local-campaign',
-            room_id: `${camp.id}/slot${slot}/${m.id}`,
-            title: `📖 ${m.title || m.id}`,
-            round: null,
-            phase: null,
-            action_needed: false,
-            turn_deadline: null,
-            updated_at: save.updatedAt ? Math.floor(save.updatedAt / 1000) : 0,
-            is_local: true,
-            _campaignId: camp.id,
-            _slotIndex: slot,
-            _missionTitle: m.title || m.id,
-            _campaignDef: camp,
-            _missionDef: m,
-          });
-        }
-
-        // 2. If this slot has progress and a next mission is available (no mid-
-        //    mission save for it), show a "campaign-next" entry so the player
-        //    can jump straight to the party select / briefing screen.
-        const c = new Campaign(camp, slot);
-        if (!c.load()) continue;        // no save → no progress in this slot
-        if (c.isComplete()) continue;    // all missions done
-        const nextId = c.getNextMission();
-        if (!nextId) continue;
-        if (hasMidMissionSave.has(nextId)) continue; // already shown above
-        const mDef = c.getMissionDef(nextId);
-        if (!mDef) continue;
+      // 1. Scan missions for any that have a mid-mission save file in this slot
+      for (const m of missions) {
+        const save = loadCampaignMissionSave(camp.id, m.id, slot);
+        if (!save) continue;
+        hasMidMissionSave.add(m.id);
+        const num = _campaignMissionNumber(camp, m.id);
         rows.push({
-          kind: 'campaign-next',
-          room_id: `${camp.id}/slot${slot}/${nextId}`,
-          title: `📖 ${camp.title}`,
+          kind: 'local-campaign',
+          room_id: campaignMissionRowId(camp.id, slot, m.id),
+          title: `📖 ${m.title || m.id}`,
+          round: null,
+          phase: null,
           action_needed: false,
           turn_deadline: null,
-          updated_at: c.updatedAt ? Math.floor(c.updatedAt / 1000) : 0,
+          updated_at: save.updatedAt ? Math.floor(save.updatedAt / 1000) : 0,
           is_local: true,
           _campaignId: camp.id,
           _slotIndex: slot,
+          _missionTitle: m.title || m.id,
+          _missionNumber: num,
+          _missionTotal: missionTotal,
           _campaignDef: camp,
-          _missionDef: mDef,
-          _nextMissionId: nextId,
-          _nextMissionTitle: mDef.title || nextId,
+          _missionDef: m,
         });
       }
+
+      // 2. If this slot has progress and a next mission is available (no mid-
+      //    mission save for it), show a "campaign-next" entry so the player
+      //    can jump straight to the party select / briefing screen.
+      const c = new Campaign(camp, slot);
+      if (!c.load()) continue;        // no save → no progress in this slot
+      if (c.isComplete()) continue;    // all missions done
+      const nextId = c.getNextMission();
+      if (!nextId) continue;
+      if (hasMidMissionSave.has(nextId)) continue; // already shown above
+      const mDef = c.getMissionDef(nextId);
+      if (!mDef) continue;
+      rows.push({
+        kind: 'campaign-next',
+        room_id: campaignMissionRowId(camp.id, slot, nextId),
+        title: `📖 ${camp.title}`,
+        action_needed: false,
+        turn_deadline: null,
+        updated_at: c.updatedAt ? Math.floor(c.updatedAt / 1000) : 0,
+        is_local: true,
+        _campaignId: camp.id,
+        _slotIndex: slot,
+        _campaignDef: camp,
+        _missionDef: mDef,
+        _nextMissionId: nextId,
+        _nextMissionTitle: mDef.title || nextId,
+        _missionNumber: _campaignMissionNumber(camp, nextId),
+        _missionTotal: missionTotal,
+      });
     }
   } catch {}
   return mmDedupeCampaignRows(rows);
+}
+
+/**
+ * Whether the menu has anything to "Continue" into without hitting the network:
+ * a local single-player save, or a campaign row from the persisted active slot.
+ * A signed-in player may also have online games waiting, so a live session
+ * counts as continuable too. Used to decide the menu's initial destination —
+ * Continue when there's something to resume, Campaign for a brand-new player.
+ */
+export function hasContinuableGames() {
+  try {
+    if (_localSpRows().length > 0) return true;
+    // Active-slot-aware campaign check (Task 5/6) — same resolution the Continue
+    // card uses, so "default to Campaign" matches what Continue would show.
+    if (hasCampaignToContinue(CAMPAIGNS)) return true;
+    if (loadSession()) return true;   // online games may be waiting after a fetch
+  } catch { /* localStorage unavailable — treat as nothing to continue */ }
+  return false;
 }
 
 /**
@@ -5922,7 +6157,9 @@ async function _fetchAllGames() {
       turn_deadline: b.turnDeadline ?? null,
       players_count: playersCount,
       players_per_side: pps,
-      updated_at: Math.floor(Date.now() / 1000),
+      // Real last-resolution time from the server (null before the first turn),
+      // so the menu shows the actual "last turn N ago" instead of the poll time.
+      updated_at: b.lastTurnAt ?? null,
       status: 'playing',
     });
   } else if (battleStatus?.battles?.length) {
@@ -6279,16 +6516,13 @@ function _handleAsyncStateUpdate(msg) {
   _updateAsyncReplayBtn();
 
   // ── Finished / abandoned games ──
+  // Resume parity: don't FORCE the last-turn replay — show the result directly.
+  // The header "Last Turn" button (kept visible by _updateAsyncReplayBtn) lets
+  // the player optionally re-watch.
   if (msg.gameStatus === 'finished' || msg.gameStatus === 'abandoned') {
-    if (_asyncLastRound && _asyncSeenRound < _asyncLastRound.roundNum) {
-      _showAsyncTurnChoice(_asyncLastRound.roundNum, _asyncLastRound, () => {
-        const label = msg.winner === msg.faction ? 'Victory' : (msg.winner ? 'Defeat' : 'Game Over');
-        ui?._showResultDialog([label, msg.winReason || '']);
-      });
-    } else {
-      const label = msg.winner === msg.faction ? 'Victory' : (msg.winner ? 'Defeat' : 'Game Over');
-      ui?._showResultDialog([label, msg.winReason || '']);
-    }
+    if (_asyncLastRound) _asyncSeenRound = _asyncLastRound.roundNum;
+    const label = msg.winner === msg.faction ? 'Victory' : (msg.winner ? 'Defeat' : 'Game Over');
+    ui?._showResultDialog([label, msg.winReason || '']);
     return;
   }
 
@@ -6298,12 +6532,12 @@ function _handleAsyncStateUpdate(msg) {
     notifyRoundReady(mirror.round ?? 1, idleOpts);
   }
 
-  // ── Active game: unseen last round → offer replay before planning ──
-  if (_asyncLastRound && _asyncSeenRound < _asyncLastRound.roundNum) {
-    _showAsyncTurnChoice(_asyncLastRound.roundNum, _asyncLastRound, () => _enterAsyncPlanning(msg));
-  } else {
-    _enterAsyncPlanning(msg);
-  }
+  // ── Active game: land straight in planning ──
+  // Resume parity with skirmish/SP: don't FORCE the last-turn replay on resume.
+  // The "Last Turn" affordance is the header/menu button (_updateAsyncReplayBtn
+  // above + ui.onReplayLastTurn → _asyncWatchLastTurn); the player opts in.
+  if (_asyncLastRound) _asyncSeenRound = _asyncLastRound.roundNum;
+  _enterAsyncPlanning(msg);
 }
 
 // ── Async: planning & waiting ──────────────────────────────────────────────
@@ -6523,6 +6757,20 @@ async function _asyncWatchLastTurn(lastRound) {
 
   console.log('[async-replay] pre-state entities:', state.entities?.slice(0, 4).map(e => `${e.type}@${e.col},${e.row}`));
 
+  // Snapshot pre-resolution node/score state for the wrap-up reckoning + score
+  // bar animation (read from the pre-resolution entities now in `state`).
+  const prevNodes = (state.witchObjectives ?? []).map(obj => ({
+    col: obj.col, row: obj.row, label: obj.label,
+    owner: nodeController(obj, state.entities),
+  }));
+  const prevScore = { hero: state.nodeScore?.hero ?? 0, witch: state.nodeScore?.witch ?? 0 };
+
+  // Keep the replay timeline up after the animation so the end-of-round wrap-up
+  // CARD can attach to the per-turn cards — parity with the live online path.
+  // Without this the cards are torn down at the end of _animateResolutionSteps
+  // and the resumed turn falls back to the legacy round-summary modal.
+  _keepTimelineForReview = !!(ui && _asyncFaction);
+
   // Animate — entities slide from pre-state positions to post-state positions
   await _animateResolutionSteps(stepsArr, finalEntities, redrawOnline, _asyncFaction, mp?.myPlayerId ?? null);
   console.log('[async-replay] animation complete');
@@ -6538,43 +6786,55 @@ async function _asyncWatchLastTurn(lastRound) {
 
   // If skip was pressed mid-animation, bail out entirely (skip summary)
   if (playback.jumpToEnd) {
+    _keepTimelineForReview = false;
+    ui?.hideReplayTimeline?.();
     resetPlayback();
     return;
   }
 
-  // Show resolution summary with replay support
+  // Show the end-of-round review with replay support
   if (ui && _asyncFaction) {
     setMode(AppMode.RESOLVING);
-    let action;
-    do {
-      action = await ui._showResolutionSummary(stepsArr, lastRound.roundNum ?? (state.round - 1), {
-        humanFaction: _asyncFaction,
-        fogOfWar: state.fogOfWar,
-        gameOver: state.gameOver,
-        winner: state.winner,
-        winReason: state.winReason,
-      });
-      if (action === 'replay') {
-        // Restore pre-resolution state and re-animate
-        const replayPre = MirrorState.fromSnapshot(
-          typeof preState === 'string' ? JSON.parse(preState) : preState
-        );
-        Object.assign(state, replayPre);
-        state.hero      = replayPre.hero;
-        state.witch     = replayPre.witch;
-        state.myFaction = _asyncFaction;
-        redrawOnline();
-        await _animateResolutionSteps(stepsArr, finalEntities, redrawOnline, _asyncFaction, mp?.myPlayerId ?? null);
-        // Restore post-resolution state after replay
-        Object.assign(state, postResState);
-        state.hero      = postResState.hero;
-        state.witch     = postResState.witch;
-        state.myFaction = _asyncFaction;
-        await ui._triggerPostRoundEffects();
-        redrawOnline();
-        setMode(AppMode.RESOLVING);
-      }
-    } while (action === 'replay');
+
+    // Re-watch this round: restore the pre-resolution state and re-animate, then
+    // re-apply the post-resolution state. Shared by the wrap-up card's Replay
+    // button and the game-over modal's Replay (via _runEndOfRoundReview).
+    const _reReplay = async () => {
+      const replayPre = MirrorState.fromSnapshot(
+        typeof preState === 'string' ? JSON.parse(preState) : preState
+      );
+      Object.assign(state, replayPre);
+      state.hero      = replayPre.hero;
+      state.witch     = replayPre.witch;
+      state.myFaction = _asyncFaction;
+      redrawOnline();
+      await _animateResolutionSteps(stepsArr, finalEntities, redrawOnline, _asyncFaction, mp?.myPlayerId ?? null);
+      Object.assign(state, postResState);
+      state.hero      = postResState.hero;
+      state.witch     = postResState.witch;
+      state.myFaction = _asyncFaction;
+      await ui._triggerPostRoundEffects();
+      redrawOnline();
+      setMode(AppMode.RESOLVING);
+    };
+
+    // Route through the shared review helper so the resumed turn shows the new
+    // turn-card wrap-up (with icons) for a normal round, and the dedicated
+    // Victory/Defeat modal on game over — exactly like the live online path.
+    await _runEndOfRoundReview({
+      steps: stepsArr, roundNum: lastRound.roundNum ?? (state.round - 1),
+      humanFaction: _asyncFaction, fogOfWar: state.fogOfWar,
+      prevScore, prevNodes,
+      roundHistory: _onlineRoundHistory,
+      reReplay: _reReplay,
+      replayFull: async (winner, winReason) => {
+        await _replayFullGame(_onlineRoundHistory, winner, winReason,
+          state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch',
+          redrawOnline);
+        _doRestart();
+      },
+    });
+
     setMode(AppMode.PLANNING);
   }
 
@@ -7631,8 +7891,10 @@ function _buildLobbyFactionPicker(lobby, slot) {
   select.className = 'setup-select lobby-faction-select';
   select.innerHTML = factions.map(f => {
     const selected = f.id === (slot.factionId ?? slot.faction) ? ' selected' : '';
-    const stub     = f.isStub() ? ' (stub)' : '';
-    return `<option value="${f.id}"${selected}>${_esc(f.name)}${stub}</option>`;
+    // Demo builds block some champions — show them disabled ("Coming Soon").
+    const blocked  = !isFactionAvailable(f.id);
+    const tag      = blocked ? ' (coming soon)' : (f.isStub() ? ' (stub)' : '');
+    return `<option value="${f.id}"${selected}${blocked ? ' disabled' : ''}>${_esc(f.name)}${tag}</option>`;
   }).join('');
   select.addEventListener('change', () => {
     if (!select.value) return;
@@ -7990,10 +8252,16 @@ async function _applyOnlinePlanningPhase(payload) {
     notifyRoundReady(state.round, wasIdleLastRound ? { wasIdle: true, faction: mp.myFaction } : undefined);
   }
 
-  // If we have a replay from the last round, play it before entering planning
-  const hadReplay = !!lastReplay;
-  if (lastReplay) {
-    await _playReconnectReplay(lastReplay);
+  // Resume parity with skirmish/SP: don't FORCE the last-turn replay on reconnect.
+  // Cache it so the on-demand "Last Turn" button (_replayLastTurnInline, keyed by
+  // state.round - 1) can find it, and land the player straight in planning. They
+  // can optionally re-watch via the header button — same affordance as offline.
+  if (lastReplay && typeof lastReplay.roundNum === 'number') {
+    _cacheReplay({
+      roundNum:     lastReplay.roundNum,
+      preStateJson: lastReplay.preStateJson,
+      stepsJson:    lastReplay.stepsJson,
+    });
   }
 
   // Prefer per-player budget; fall back to legacy faction budget for old servers.
@@ -8128,6 +8396,13 @@ async function _playReconnectReplay(replay) {
   }));
   const prevScore = { hero: state.nodeScore?.hero ?? 0, witch: state.nodeScore?.witch ?? 0 };
 
+  // Keep the replay timeline up after the animation so the end-of-round wrap-up
+  // CARD can attach to the per-turn cards — parity with the live online path
+  // (onResolutionComplete). Without this the cards are torn down at the end of
+  // _animateResolutionSteps and the resumed turn falls back to the legacy
+  // round-summary modal with no turn-card icons.
+  _keepTimelineForReview = !!(ui && mp?.myFaction && !state.gameOver);
+
   // Replay under the round's OWN phase (carried by the saved pre-state): the
   // live state's day cycle has already advanced past this round, which would
   // change the lighting and the sight ranges the fog veil / card gates use.
@@ -8153,6 +8428,8 @@ async function _playReconnectReplay(replay) {
   // If the user hit "skip" mid-animation, bail out: snap to final state and
   // skip the post-round summary entirely.
   if (playback.jumpToEnd) {
+    _keepTimelineForReview = false;
+    ui?.hideReplayTimeline?.();
     return;
   }
 
@@ -8162,23 +8439,38 @@ async function _playReconnectReplay(replay) {
 
   if (mp?.myFaction) {
     setMode(AppMode.SUMMARY);
-    let action;
-    do {
-      action = await ui._showResolutionSummary(steps, replay.roundNum, {
-        prevScore, prevNodes, humanFaction: mp.myFaction, fogOfWar: state.fogOfWar,
-        gameOver: false,
-      });
-      if (action === 'replay') {
-        await withPinnedPhase(state, preState?.phase, async () => {
-          state.entities = preEntities;
-          redraw();
-          await _animateResolutionSteps(steps, currentEntities, redraw, mp.myFaction, mp.myPlayerId ?? null);
-          state.entities = currentEntities;
-        });
+
+    // Re-watch this round's animation from the pre-resolution snapshot, under
+    // the round's own phase. Shared by the wrap-up card's Replay button and the
+    // game-over modal's Replay (via _runEndOfRoundReview).
+    const _reReplay = async () => {
+      await withPinnedPhase(state, preState?.phase, async () => {
+        state.entities = preEntities;
         redraw();
-        setMode(AppMode.SUMMARY);
-      }
-    } while (action === 'replay');
+        await _animateResolutionSteps(steps, currentEntities, redraw, mp.myFaction, mp.myPlayerId ?? null);
+        state.entities = currentEntities;
+      });
+      redraw();
+      setMode(AppMode.SUMMARY);
+    };
+
+    // Route through the shared review helper so the resumed turn shows the new
+    // turn-card wrap-up (with icons) for a normal round, and the dedicated
+    // Victory/Defeat modal on game over — exactly like the live online path.
+    await _runEndOfRoundReview({
+      steps, roundNum: replay.roundNum,
+      humanFaction: mp.myFaction, fogOfWar: state.fogOfWar,
+      prevScore, prevNodes,
+      roundHistory: _onlineRoundHistory,
+      reReplay: _reReplay,
+      replayFull: async (winner, winReason) => {
+        await _replayFullGame(_onlineRoundHistory, winner, winReason,
+          state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch',
+          redraw);
+        _doRestart();
+      },
+    });
+
     setMode(AppMode.PLANNING);
     ui._animateScoreBar(prevScore, prevNodes);
   }
@@ -8253,16 +8545,23 @@ function _createMpClient() {
       ui._triggerPostRoundEffects();
       redrawOnline();
 
-      // If the game just ended (e.g. resignation), show summary immediately
+      // If the game just ended (e.g. resignation), show summary immediately.
+      // Clean victory/defeat dialog (message + Return to Menu + Replay Full Game).
       if (state.gameOver && !isAnimating()) {
+        const goWinner = state.winner, goWinReason = state.winReason;
         ui._showResolutionSummary([], state.round, {
           gameOver: true,
-          winner: state.winner,
-          winReason: state.winReason,
+          winner: goWinner,
+          winReason: goWinReason,
           humanFaction: mp?.myFaction ?? null,
           hasFullReplay: _onlineRoundHistory.length > 0,
-        }).then(choice => {
-          if (choice === 'restart') location.reload();
+        }).then(async choice => {
+          if (choice === 'replay-full' && _onlineRoundHistory.length > 0) {
+            await _replayFullGame(_onlineRoundHistory, goWinner, goWinReason,
+              state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch',
+              redrawOnline);
+          }
+          location.reload();
         });
       }
     },
@@ -8676,23 +8975,25 @@ function _createMpClient() {
       // Set up planning mode with the correct budget and deadline
       if (!gameOver) {
         if (players) ui._players = players;
+
+        // Resume parity with skirmish/SP: don't FORCE the last-turn replay on
+        // join/reconnect. Cache it (keyed by roundNum == state.round - 1) so the
+        // on-demand "Last Turn" button can find it, and land straight in planning.
+        if (lastRound && !round.submittedPlan && !isResync &&
+            typeof lastRound.roundNum === 'number') {
+          _cacheReplay({
+            roundNum:          lastRound.roundNum,
+            preStateJson:      lastRound.preStateJson,
+            stepsJson:         lastRound.stepsJson,
+            finalEntitiesJson: lastRound.finalEntitiesJson ?? undefined,
+          });
+        }
         ui._hasReplayHistory = _onlineRoundHistory.length > 0;
 
-        // Play last round replay if available and this isn't a same-round resync
-        if (lastRound && !round.submittedPlan && !isResync) {
-          _playReconnectReplay(lastRound).then(() => {
-            ui._hasReplayHistory = _onlineRoundHistory.length > 0;
-            ui.enterPlanningMode(faction, round.budget, round.deadline ?? 0);
-            ui.onPlanSubmit = (plan) => mp.submitPlan(plan, state.round);
-            ui.onReturnToMenu = () => { location.reload(); };
-            ui.onReplayLastTurn = () => _replayLastTurnInline();
-          });
-        } else {
-          ui.enterPlanningMode(faction, round.budget, round.deadline ?? 0);
-          ui.onPlanSubmit = (plan) => mp.submitPlan(plan, state.round);
-          ui.onReturnToMenu = () => { location.reload(); };
-          ui.onReplayLastTurn = () => _replayLastTurnInline();
-        }
+        ui.enterPlanningMode(faction, round.budget, round.deadline ?? 0);
+        ui.onPlanSubmit = (plan) => mp.submitPlan(plan, state.round);
+        ui.onReturnToMenu = () => { location.reload(); };
+        ui.onReplayLastTurn = () => _replayLastTurnInline();
 
         // Restore submitted plan if reconnecting with an already-submitted plan
         if (round.submittedPlan) {
@@ -9025,6 +9326,28 @@ if (_scenarioParam) {
   catch (e) { console.error('Bad ?scenario= JSON:', e); }
 }
 
+// Dev thumbnail-generation hook: ?genMissionThumb=<missionId> boots that
+// mission's starting board directly (no menu/briefing/roster picking) and
+// exposes the live renderer (window.__renderer3d) so
+// scripts/gen-mission-thumbnails.mjs can capture each mission's fixed map image
+// via the SAME captureMapThumbnail() path the in-game saved thumbnails use.
+// Inert in normal play (param never present).
+const _genThumbParam = new URLSearchParams(location.search).get('genMissionThumb');
+if (_genThumbParam) {
+  (async () => {
+    try {
+      const camp = CAMPAIGNS.find(c => !c.disabled && (c.missions || []).some(m => m.id === _genThumbParam));
+      if (!camp) { console.error('genMissionThumb: no campaign has mission', _genThumbParam); return; }
+      _activeCampaign = new Campaign(camp, 1);
+      _activeCampaign.load();
+      const missionDef = _activeCampaign.getMissionDef?.(_genThumbParam);
+      if (!missionDef) { console.error('genMissionThumb: no mission def for', _genThumbParam); return; }
+      await _loadCampaignPortraits?.();
+      _initCampaignMission(missionDef);
+    } catch (e) { console.error('genMissionThumb failed:', e); }
+  })();
+}
+
 // ── Ledger menu data layer (Direction B redesign) ───────────────────────────
 // The Ledger is DOM/render-only; main.js owns the data + actions and injects
 // them. Everything here REUSES the existing menu plumbing (the unified games
@@ -9091,11 +9414,19 @@ function _ledgerCampaignData() {
       resumeMissionId,
       missions: (c.getMissionList?.() ?? []).map(m => ({
         id: m.id, title: m.title, completed: !!m.completed, available: !!m.available,
+        chapter: c.getMissionDef?.(m.id)?.chapter ?? 1,
         briefing: c.getMissionDef?.(m.id)?.briefing ?? '',
       })),
     });
   }
-  const active = slots.filter(s => s.started).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0] || slots[0];
+  // Prefer the persisted active slot (the one the player last selected/started).
+  // Fall back to the most-recently-touched started slot, then slot 1, so a
+  // never-chosen campaign still lands somewhere sensible.
+  const persisted = getActiveSlot(camp.id);
+  const active = slots.find(s => s.slot === persisted && s.started)
+    || slots.filter(s => s.started).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0]
+    || slots.find(s => s.slot === persisted)
+    || slots[0];
   return { campaignId: camp.id, title: camp.title, slots, activeSlotIndex: active?.slot ?? 1 };
 }
 
@@ -9106,6 +9437,9 @@ function _ledgerCampaignData() {
 async function _ledgerStartCampaignMission(slotIndex, missionId, resume = false) {
   const camp = CAMPAIGNS.find(c => !c.disabled) || CAMPAIGNS[0];
   if (!camp) return;
+  // This slot is now the playthrough the player is on — persist it so Continue
+  // and the Campaign destination resume here next time.
+  setActiveSlot(camp.id, slotIndex);
   _activeCampaign = new Campaign(camp, slotIndex);
   _activeCampaign.load();
   const id = missionId || _activeCampaign.getNextMission?.();
@@ -9162,8 +9496,12 @@ function _ledgerStartSkirmish(factionId, opts = {}) {
   if (!def) return;
   const isDay = def.side === 'day';
   // Opponent: a random champion drawn from the OTHER side's roster — pick a Day
-  // troop and you face a random Night leader, and vice-versa.
-  const enemies = getFactionsForSide(isDay ? 'night' : 'day').map(f => f.id);
+  // troop and you face a random Night leader, and vice-versa. Demo-gated
+  // champions (see demo-config) are excluded so a "Coming Soon" leader can never
+  // spawn as the AI enemy either.
+  const enemies = getFactionsForSide(isDay ? 'night' : 'day')
+    .map(f => f.id)
+    .filter(id => isFactionAvailable(id));
   const enemyFactionId = enemies.length ? enemies[Math.floor(Math.random() * enemies.length)] : null;
   document.getElementById('ledger-screen')?.classList.remove('is-active');
   init(/*witchIsAI*/ isDay, /*heroIsAI*/ !isDay, /*autoplay*/ false, factionId, { ...opts, enemyFactionId });
@@ -9214,9 +9552,12 @@ function _ledgerPartyAction(kind, target, weapon) {
   const idx = target === 'leader' ? 'leader' : parseInt(target, 10);
   switch (kind) {
     case 'promote':
-      if (_activeRosterIndices.length < maxActive && !_activeRosterIndices.includes(idx)) _activeRosterIndices.push(idx);
+      if (_activeRosterIndices.length < maxActive && !_activeRosterIndices.includes(idx)) {
+        _activeRosterIndices.push(idx);
+        _persistActiveRoster();
+      }
       break;
-    case 'demote':     _activeRosterIndices = _activeRosterIndices.filter(i => i !== idx); break;
+    case 'demote':     _activeRosterIndices = _activeRosterIndices.filter(i => i !== idx); _persistActiveRoster(); break;
     case 'heal':       _activeCampaign.healUnitWithHerb(idx); break;
     case 'equip':      _activeCampaign.equipWeaponForUnit(idx, weapon); break;
     case 'return':     _activeCampaign.returnWeaponToInventory(idx, weapon); break;
@@ -9350,6 +9691,11 @@ function _buildLedgerData() {
     },
     replays:          () => _collectReplayRows(),
     campaign:         () => _ledgerCampaignData(),
+    // Remember which playthrough slot the player selected so Continue tracks it.
+    setActiveCampaignSlot: (slot) => {
+      const camp = CAMPAIGNS.find(c => !c.disabled) || CAMPAIGNS[0];
+      if (camp) setActiveSlot(camp.id, slot);
+    },
     startMission:     (slot, missionId, resume) => _ledgerStartCampaignMission(slot, missionId, resume),
     campaignParty:    (slot) => _ledgerCampaignParty(slot),
     deleteCampaignSlot: (slot) => {
@@ -9395,7 +9741,20 @@ function _buildLedgerData() {
     ss?.style.setProperty('display', 'none');
     import('./menu/ledger.js').then(({ initLedger }) => {
       const session = loadSession();
-      const api = initLedger({ playerName: session?.username || 'Wanderer', data: _buildLedgerData() });
+      // Land a brand-new player (nothing to resume) on Campaign so they head
+      // straight for the tutorial; anyone with a game in progress opens on
+      // Continue. Uses the same active-slot-aware continuable check.
+      const start = hasContinuableGames() ? 'continue' : 'campaign';
+      const api = initLedger({ playerName: session?.username || 'Wanderer', data: _buildLedgerData(), start });
+      // Stash the api module-side so the campaign debrief's Continue can route
+      // back into the Campaign panel (api.show() + api.select('campaign')) without
+      // tripping the setup-screen observer below.
+      _ledgerApi = api;
+      // Verification hook: launch a campaign mission directly (skipping the
+      // Ledger's campaign → briefing → Begin click path) so the browser harness
+      // can reach a specific mission's debrief. Inert in normal play.
+      window.__startCampaignMission = (missionId, slot = 1, resume = false) =>
+        _ledgerStartCampaignMission(slot, missionId, resume);
       api?.show();
       // Re-show the ledger if anything reveals the legacy #setup-screen (e.g.
       // game-over → back to menu) while we're not in a game.

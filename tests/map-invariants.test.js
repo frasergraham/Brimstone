@@ -15,9 +15,25 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { generateMap, generateMultipleStarts, MAP_SIZES } from '../src/map.js';
+import { generateMap, generateMultipleStarts, MAP_SIZES, buildRiverMap, riverSide, START_SIGHT_CLEARANCE } from '../src/map.js';
 import { TileType, BuildingType, PathType, StructureType, baseOf, pathOf, legacyTileType } from '../src/tiles.js';
 import { hexKey, hexDistance } from '../src/hex.js';
+
+// Reconstruct the river-side oracle from generated tiles (RIVER + BRIDGE tiles
+// trace the river line; N-S vs E-W inferred from col/row spread). Mirrors the
+// helper in map-generation.test.js / start-positions.test.js.
+function riverOracle(tiles) {
+  const rp = [];
+  for (const t of tiles.values()) {
+    if (legacyTileType(t) === TileType.RIVER || legacyTileType(t) === TileType.BRIDGE) {
+      rp.push({ col: t.col, row: t.row });
+    }
+  }
+  const cols = new Set(rp.map(r => r.col));
+  const rows = new Set(rp.map(r => r.row));
+  const ew = cols.size > rows.size;
+  return { rm: buildRiverMap(rp, ew), ew };
+}
 
 const SIZES = ['skirmish', 'standard', 'regional'];
 
@@ -93,17 +109,28 @@ describe('Spawn buildings (INN & GRAVEYARD)', () => {
     }
   });
 
-  test('INN and GRAVEYARD are placed in opposite corners (far apart)', () => {
+  test('INN and GRAVEYARD start on opposite river banks, out of sight of each other', () => {
+    // The placement rule changed: instead of fixed opposite corners, the two
+    // starts are seeded-random on OPPOSITE sides of the river and far enough
+    // apart that neither leader sees the other at game start (hex distance
+    // > START_SIGHT_CLEARANCE). See tests/start-positions.test.js for the full
+    // sweep (banks, reachability, determinism). standard+ always has room for a
+    // strict pair; skirmish (10×10) can rarely fall back to the most-distant
+    // opposite-bank pair, so we only assert opposite-bank there.
     for (const size of SIZES) {
-      const cfg = MAP_SIZES[size];
-      // A diagonal across the map is roughly sqrt((cols-1)^2 + (rows-1)^2); we
-      // pick a conservative threshold: at least half the longest grid axis.
-      const minDist = Math.floor(Math.max(cfg.cols, cfg.rows) / 2);
       for (let seed = 0; seed < 6; seed++) {
-        const { heroStart, witchStart } = generateMap(seed, size);
-        const d = hexDistance(heroStart.col, heroStart.row, witchStart.col, witchStart.row);
-        assert.ok(d >= minDist,
-          `${size} seed=${seed}: heroStart→witchStart only ${d} hexes (min ${minDist})`);
+        const { heroStart, witchStart, tiles } = generateMap(seed, size);
+        const { rm, ew } = riverOracle(tiles);
+        const hSide = riverSide(heroStart.col, heroStart.row, rm, ew);
+        const wSide = riverSide(witchStart.col, witchStart.row, rm, ew);
+        assert.notEqual(hSide, wSide,
+          `${size} seed=${seed}: both starts on the ${hSide} bank — must be opposite banks`);
+        if (size !== 'skirmish') {
+          const d = hexDistance(heroStart.col, heroStart.row, witchStart.col, witchStart.row);
+          assert.ok(d > START_SIGHT_CLEARANCE,
+            `${size} seed=${seed}: starts only ${d} hexes apart ` +
+            `(must exceed sight clearance ${START_SIGHT_CLEARANCE})`);
+        }
       }
     }
   });

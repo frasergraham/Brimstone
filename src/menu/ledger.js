@@ -8,9 +8,10 @@
 // behind the `?ledger` dev preview until the single cutover.
 // ============================================================================
 
-import { mmSortRows, mmFormatRow } from '../main-menu-games.js';
+import { mmSortRows, mmFormatRow, mmIsCampaignRow } from '../main-menu-games.js';
 import { mountServerSelector } from '../server-selector.js';
-import { loadThumb } from './thumbnails.js';
+import { loadThumb, missionThumb, campaignMissionRowId } from './thumbnails.js';
+import { isModeAvailable, isFactionAvailable, COMING_SOON_LABEL } from '../demo-config.js';
 
 /** The six rail destinations, top to bottom (mirrors the mock). */
 const DESTINATIONS = [
@@ -91,7 +92,19 @@ export function initLedger({ playerName, start = 'continue', data = null } = {})
   });
   _renderRail();
   select(start);
-  return { show, hide, select };
+  return {
+    show, hide, select,
+    // Land on the campaign mission LIST, clearing any primed briefing / party
+    // sub-view — used after a mission ends so we don't re-open the briefing for
+    // the mission just played.
+    showCampaignList: () => {
+      _campBriefing = null;
+      _campConfirmDelete = null;
+      _campView = 'missions';
+      show();
+      select('campaign');
+    },
+  };
 }
 
 function _renderRail() {
@@ -100,18 +113,33 @@ function _renderRail() {
   host.replaceChildren();
   for (const d of DESTINATIONS) {
     const item = document.createElement('div');
-    item.className = 'ledger-rail-item';
+    const available = isModeAvailable(d.id);   // demo builds can flip a mode OFF
+    item.className = 'ledger-rail-item' + (available ? '' : ' is-soon');
     item.dataset.dest = d.id;
-    item.innerHTML = `<span class="ic">${d.icon}</span><span class="lb">${d.label}</span>`;
-    item.addEventListener('click', () => { _campBriefing = null; _campConfirmDelete = null; select(d.id); });
+    item.innerHTML = `<span class="ic">${d.icon}</span><span class="lb">${d.label}</span>` +
+      (available ? '' : `<span class="lg-soon-badge">${COMING_SOON_LABEL}</span>`);
+    if (available) {
+      item.addEventListener('click', () => { _campBriefing = null; _campConfirmDelete = null; select(d.id); });
+    } else {
+      item.setAttribute('aria-disabled', 'true');
+      item.title = `${d.label} — ${COMING_SOON_LABEL}`;
+    }
     host.appendChild(item);
   }
 }
 
 /** Light up a rail item and re-bind the ledger pane to that destination. */
 export function select(id) {
-  const dest = DESTINATIONS.find(d => d.id === id);
+  let dest = DESTINATIONS.find(d => d.id === id);
   if (!dest) return;
+  // A demo build can disable a mode — never bind the pane to a coming-soon
+  // destination (e.g. via the `start` default); fall back to Continue.
+  if (!isModeAvailable(dest.id)) {
+    dest = DESTINATIONS.find(d => d.id === 'continue' && isModeAvailable('continue')) ||
+           DESTINATIONS.find(d => isModeAvailable(d.id)) || dest;
+    if (!isModeAvailable(dest.id)) return;
+  }
+  id = dest.id;
   _activeId = id;
   document.querySelectorAll('#ledger-rail-items .ledger-rail-item').forEach((el) =>
     el.classList.toggle('is-active', el.dataset.dest === id));
@@ -218,7 +246,11 @@ function _panelCampaign(body) {
       : `<div class="lg-slot-tag">Slot ${roman(s.slot)}</div>` +
         `<div class="lg-slot-title gthc">New</div>` +
         `<div class="lg-slot-sub">begin a playthrough</div>`;
-    card.addEventListener('click', () => { _campSlot = s.slot; _campBriefing = null; select('campaign'); });
+    card.addEventListener('click', () => {
+      _campSlot = s.slot; _campBriefing = null;
+      _data?.setActiveCampaignSlot?.(s.slot);   // persist so Continue tracks this slot
+      select('campaign');
+    });
 
     // Started slots get a ✕ to wipe them (asks for confirmation first).
     if (s.started) {
@@ -245,40 +277,121 @@ function _panelCampaign(body) {
 
   if (_campView === 'party') { _renderPartyView(body, sel); return; }
 
-  body.appendChild(_cap(`The Chronicle of Missions · Slot ${roman(sel.slot)}`));
-  const chron = document.createElement('div');
-  chron.className = 'lg-chronicle';
   const missions = sel.missions || [];
   if (!missions.length) {
+    const chron = document.createElement('div');
+    chron.className = 'lg-chronicle';
     chron.appendChild(_empty('No missions found for this campaign.'));
-  } else {
-    missions.forEach((m, i) => {
-      const status = m.completed ? 'done' : (m.id === sel.nextMissionId ? 'current' : (m.available ? 'available' : 'locked'));
-      chron.appendChild(_missionRow(sel, m, status, i));
-    });
+    body.appendChild(chron);
+    return;
   }
-  body.appendChild(chron);
+  // Group missions into chapters (delineated headings), so additional chapters
+  // can slot in later just by tagging missions with a higher `chapter` number.
+  // Within each chapter the mission's display index stays its overall campaign
+  // position (so the Roman numeral matches the briefing's "Mission N").
+  for (const chap of _groupByChapter(missions)) {
+    body.appendChild(_chapterHeading(chap.chapter));
+    const chron = document.createElement('div');
+    chron.className = 'lg-chronicle';
+    for (const { m, index } of chap.missions) {
+      const status = m.completed ? 'done' : (m.id === sel.nextMissionId ? 'current' : (m.available ? 'available' : 'locked'));
+      chron.appendChild(_missionRow(sel, m, status, index, data.campaignId));
+    }
+    body.appendChild(chron);
+  }
+}
+
+// Display titles for each campaign chapter. Defaults to "Chapter N" for any
+// chapter not named here, so adding a chapter is data-only.
+const CHAPTER_TITLES = {
+  1: 'Welcome to Caleb\'s Hollow',
+};
+
+/** Bucket a flat mission list into ordered chapters, preserving each mission's
+ *  overall campaign index (used for its Roman-numeral label). Missions with no
+ *  `chapter` tag fall into Chapter 1. */
+function _groupByChapter(missions) {
+  const order = [];
+  const byChapter = new Map();
+  missions.forEach((m, index) => {
+    const chapter = Number.isFinite(m.chapter) ? m.chapter : 1;
+    if (!byChapter.has(chapter)) { byChapter.set(chapter, []); order.push(chapter); }
+    byChapter.get(chapter).push({ m, index });
+  });
+  return order.map(chapter => ({ chapter, missions: byChapter.get(chapter) }));
+}
+
+/** A delineating chapter heading above its missions, e.g.
+ *  "Chapter 1 — Welcome to Caleb's Hollow". */
+function _chapterHeading(chapter) {
+  const name = CHAPTER_TITLES[chapter];
+  const text = name ? `Chapter ${chapter} — ${name}` : `Chapter ${chapter}`;
+  const el = document.createElement('div');
+  el.className = 'lg-chapter-head';
+  el.textContent = text;
+  return el;
 }
 
 /** Mission briefing — shown before a mission launches (title, briefing, Begin). */
 function _campaignBriefing(body) {
   const b = _campBriefing;
   body.appendChild(_backRow('‹ Back to the chronicle', () => { _campBriefing = null; select('campaign'); }));
+
+  // Two-column briefing: the map image on the LEFT, the mission text (kicker +
+  // title + briefing copy) on the RIGHT. The columns stack on narrow widths
+  // (see .lg-brief-cols in styles-ledger.css). The back row and the Begin/Resume
+  // button stay full-width, above and below the columns.
+  const cols = document.createElement('div');
+  cols.className = 'lg-brief-cols';
+
+  cols.appendChild(_briefMapImage(b));
+
+  const textCol = document.createElement('div');
+  textCol.className = 'lg-brief-col-text';
   const head = document.createElement('div');
   head.className = 'lg-brief-head';
+  // Mission number is 0-based from the tutorial — Mission 0 is the tutorial.
+  const kicker = `Mission ${b.index ?? 0}`;
   head.innerHTML =
-    `<div class="lg-brief-kicker">Mission ${roman((b.index ?? 0) + 1)}</div>` +
+    `<div class="lg-brief-kicker">${esc(kicker)}</div>` +
     `<div class="lg-brief-title gthc">${esc(b.title)}</div>`;
-  body.appendChild(head);
-  const rule = document.createElement('div'); rule.className = 'ledger-rule'; body.appendChild(rule);
+  textCol.appendChild(head);
+  const rule = document.createElement('div'); rule.className = 'ledger-rule'; textCol.appendChild(rule);
   const text = document.createElement('p');
   text.className = 'lg-brief-text';
   text.textContent = b.briefing || 'The night waits. Steel yourself and step into the dark.';
-  body.appendChild(text);
+  textCol.appendChild(text);
+  cols.appendChild(textCol);
+
+  body.appendChild(cols);
+
   const begin = _button(b.resume ? '▶ Resume Mission' : '▶ Begin Mission', 'gold',
     () => _data?.startMission?.(b.slot, b.missionId, b.resume));
   begin.style.marginTop = '20px';
   body.appendChild(begin);
+}
+
+/** Displayed mission number label for a catalog index. The list is 0-based from
+ *  the tutorial (index 0 = the tutorial = "Mission 0", index 1 = the first real
+ *  mission), so the number shown matches the briefing's "Mission N". */
+function _missionNumLabel(index) {
+  return index === 0 ? '0' : roman(index);
+}
+
+/** Big map preview for the mission briefing — the live saved thumbnail when the
+ *  mission is mid-play (keyed by its row id `<campaignId>/slot<N>/<missionId>`,
+ *  captured at round-end), else the mission's fixed pre-generated map image. A
+ *  larger view than the list-card thumbs, so the briefing shows the board the
+ *  player is stepping into. */
+function _briefMapImage(b) {
+  const rowId = campaignMissionRowId(b.campaignId, b.slot, b.missionId);
+  const img = missionThumb(b.missionId, rowId);
+  const el = document.createElement('div');
+  el.className = 'lg-brief-map' + (img ? ' has-img' : '');
+  if (img) el.style.backgroundImage = `url(${img})`;
+  else el.textContent = '🜂';
+  el.setAttribute('aria-hidden', 'true');
+  return el;
 }
 
 /** Warband (Party) view — reuses the existing party-pane renderer + mutations.
@@ -412,11 +525,26 @@ function _pdragTarget(under, d) {
 function _panelSkirmish(body) {
   const factions = _data?.skirmishFactions?.() ?? [];
   if (!factions.length) return _placeholderPanel(body, { label: 'Skirmish' });
-  if (!factions.some(f => f.id === _skFaction)) _skFaction = factions[0].id;
+  // Default the selection to a champion that's actually available in this build
+  // (blocked champions can't be picked); only fall back to a blocked one if every
+  // champion is blocked (shouldn't happen).
+  if (!factions.some(f => f.id === _skFaction && isFactionAvailable(f.id))) {
+    _skFaction = (factions.find(f => isFactionAvailable(f.id)) || factions[0]).id;
+  }
+
+  // Tag the body so the Skirmish setup gets its own no-scroll layout: the
+  // champion picker flexes/scrolls internally while the options + Start row stay
+  // pinned and fully visible.
+  body.classList.add('lg-skirmish');
 
   body.appendChild(_cap('Your champion'));
+  const champs = document.createElement('div');
+  champs.className = 'lg-champ-scroll';
   for (const [side, label, icon] of [['day', 'Day — the Hero', '☀'], ['night', 'Night — the Witch', '🌙']]) {
-    const fs = factions.filter((f) => f.side === side);
+    // Available champions first; demo-blocked ("coming soon") ones sort to the
+    // end of their side (stable sort preserves the authored order otherwise).
+    const fs = factions.filter((f) => f.side === side)
+      .sort((a, b) => (isFactionAvailable(a.id) ? 0 : 1) - (isFactionAvailable(b.id) ? 0 : 1));
     if (!fs.length) continue;
     const row = document.createElement('div');
     row.className = 'lg-champ-side is-' + side;
@@ -425,8 +553,9 @@ function _panelSkirmish(body) {
     grid.className = 'lg-champions';
     for (const f of fs) grid.appendChild(_champCard(f));
     row.appendChild(grid);
-    body.appendChild(row);
+    champs.appendChild(row);
   }
+  body.appendChild(champs);
 
   body.appendChild(_cap('The night ahead'));
   const opts = document.createElement('div');
@@ -442,7 +571,10 @@ function _panelSkirmish(body) {
 
   const startRow = document.createElement('div');
   startRow.className = 'lg-skirmish-start';
-  startRow.appendChild(_button('▶ Start', 'gold', () => _data?.startSkirmish?.(_skFaction, { ..._skOpts })));
+  startRow.appendChild(_button('▶ Start', 'gold', () => {
+    if (!isFactionAvailable(_skFaction)) return;   // never launch a demo-blocked champion
+    _data?.startSkirmish?.(_skFaction, { ..._skOpts });
+  }));
   const summ = document.createElement('span');
   summ.className = 'lg-skirmish-summary';
   summ.id = 'lg-sk-summary';
@@ -453,7 +585,9 @@ function _panelSkirmish(body) {
 
 function _champCard(f) {
   const card = document.createElement('div');
-  card.className = 'lg-champion is-' + (f.side === 'night' ? 'night' : 'day') + (f.id === _skFaction ? ' is-selected' : '');
+  const available = isFactionAvailable(f.id);   // demo builds can block a champion
+  card.className = 'lg-champion is-' + (f.side === 'night' ? 'night' : 'day') +
+    (available && f.id === _skFaction ? ' is-selected' : '') + (available ? '' : ' is-soon');
   const stat = (lbl, val, tip) => `<span class="cprog-ustat"${tip ? ` title="${esc(tip)}"` : ''}>${lbl} <b>${val}</b></span>`;
   const statsHtml = f.atk != null
     ? `<div class="cprog-ustats">${stat('HP', f.hp)}${stat('ATK', f.atk)}${stat('DEF', f.def)}${stat('RNG', f.rng)}` +
@@ -469,11 +603,18 @@ function _champCard(f) {
   card.innerHTML =
     `<img src="${esc(f.img)}" alt="">` +
     `<div class="lg-champ-info">` +
-      `<div class="lg-champ-top"><span class="nm">${esc(f.name)}</span></div>` +
+      `<div class="lg-champ-top"><span class="nm">${esc(f.name)}</span>` +
+        (available ? '' : `<span class="lg-soon-badge">${COMING_SOON_LABEL}</span>`) +
+      `</div>` +
       statsHtml + weaponHtml + abilitiesHtml +
       (f.blurb ? `<div class="lg-champ-blurb">${esc(f.blurb)}</div>` : '') +
     `</div>`;
-  card.addEventListener('click', () => { _skFaction = f.id; select('skirmish'); });
+  if (available) {
+    card.addEventListener('click', () => { _skFaction = f.id; select('skirmish'); });
+  } else {
+    card.setAttribute('aria-disabled', 'true');
+    card.title = `${f.name} — ${COMING_SOON_LABEL}`;
+  }
   return card;
 }
 
@@ -518,18 +659,36 @@ function _othersLanding(body) {
     body.appendChild(rh);
 
     // The persistent war's home on Play Online — "● live" once you've joined,
-    // "View ▸" when it's available to join.
+    // "View ▸" when it's available to join. Like any online game, a joined Battle
+    // gets a live map thumbnail (the round-end snapshot keyed by its room id) and
+    // a clickable game-detail modal — see _battleThumb / _feedRow / _openGameDetail.
     const inBattle = battle?.kind === 'battle';
     const battleTime = inBattle ? _gameTimeMeta(battle) : '';
+    const battleThumb = inBattle ? _battleThumb(battle) : null;
     const bf = document.createElement('div');
-    bf.className = 'lg-battle' + (inBattle ? ' is-live' : '');
+    bf.className = 'lg-battle' + (inBattle ? ' is-live' : '') + (battleThumb ? ' has-thumb' : '');
     bf.innerHTML =
-      `<div class="lg-battle-head"><span class="gthc">⚔ The Battle for Caleb's Hollow</span>` +
-      `${inBattle ? '<span class="lg-battle-live">● live</span>' : '<span class="lg-battle-cta">View ▸</span>'}</div>` +
-      `<div class="lg-battle-sub">Persistent 10v10 war — turns resolve at noon &amp; midnight.` +
-      `${inBattle && battle.round != null ? ' · Round ' + battle.round : ''}</div>` +
-      (battleTime ? `<div class="lg-battle-sub lg-battle-time">${esc(battleTime)}</div>` : '');
+      (inBattle
+        // The live snapshot opens game-details; with no snapshot yet a placeholder
+        // glyph still shows so the card has a board, matching feed/resume rows.
+        ? `<div class="lg-battle-thumb${battleThumb ? ' has-img clickable' : ''}" aria-hidden="true"` +
+            `${battleThumb ? ` style="background-image:url(${battleThumb})" title="View battle details"` : ''}>` +
+            `${battleThumb ? '' : '🜂'}</div>`
+        : '') +
+      `<div class="lg-battle-body">` +
+        `<div class="lg-battle-head"><span class="gthc">⚔ The Battle for Caleb's Hollow</span>` +
+        `${inBattle ? '<span class="lg-battle-live">● live</span>' : '<span class="lg-battle-cta">View ▸</span>'}</div>` +
+        `<div class="lg-battle-sub">Persistent 10v10 war — turns resolve at noon &amp; midnight.` +
+        `${inBattle && battle.round != null ? ' · Round ' + battle.round : ''}</div>` +
+        (battleTime ? `<div class="lg-battle-sub lg-battle-time">${esc(battleTime)}</div>` : '') +
+      `</div>`;
     bf.addEventListener('click', () => { _othersView = 'battle'; select('others'); });
+    // The thumbnail click opens the detail modal instead of the Battle view (same
+    // as feed/resume rows). Stop propagation so the card's own click doesn't fire.
+    if (battleThumb) {
+      const bte = bf.querySelector('.lg-battle-thumb');
+      bte?.addEventListener('click', (e) => { e.stopPropagation(); _openGameDetail(battle); });
+    }
     body.appendChild(bf);
 
     body.appendChild(_cap('Your games'));
@@ -702,8 +861,12 @@ function _lobbySeat(lobby, slot, { myId, isHost, canClaim }) {
     nm.textContent = (slot.name || 'Player') + (isMe ? ' · you' : '');
     el.appendChild(nm);
     if (isMe) {
-      // Switch your champion within your side.
-      const facs = (_data.factionsForSide?.(slot.side) || []).map((f) => ({ value: f.id, label: f.name }));
+      // Switch your champion within your side. Demo builds block some champions —
+      // they stay visible in the menu as a disabled "Coming Soon" entry.
+      const facs = (_data.factionsForSide?.(slot.side) || []).map((f) => {
+        const ok = isFactionAvailable(f.id);
+        return { value: f.id, label: f.name, sub: ok ? undefined : COMING_SOON_LABEL, disabled: !ok };
+      });
       const dd = _dropdown(facs, slot.factionId || slot.faction, (v) => _data.lobby?.setFaction?.(v));
       dd.classList.add('lg-fac-dd');
       el.appendChild(dd);
@@ -758,11 +921,15 @@ function _othersBattle(body) {
     const mySide = st?.mySide;
     if (mySide) {
       body.appendChild(_note(`You fight for ${mySide === 'day' ? '☀ Day' : '🌙 Night'}.`));
-    } else {
-      const j = _button('⚔ Join the Battle', 'purple', () => _data.joinBattle?.());
-      j.style.marginTop = '14px';
-      body.appendChild(j);
     }
+    // Always offer a way into the live game. A player already in the battle needs
+    // to RETURN to it (joinBattle with no roomId ⇒ the server routes them back to
+    // their own room); an unjoined player JOINS. Previously the in-battle branch
+    // rendered only the status note with no button, so a joined player had no way
+    // to launch back in — a dead "launch screen that does nothing".
+    const j = _button(mySide ? '⚔ Return to Battle' : '⚔ Join the Battle', 'purple', () => _data.joinBattle?.());
+    j.style.marginTop = '14px';
+    body.appendChild(j);
   }).catch(() => { if (token === _renderToken) { loading.remove(); body.appendChild(_empty('Could not reach the Battle.')); } });
 }
 
@@ -814,23 +981,38 @@ function _dropdown(options, value, onChange) {
   for (const o of options) {
     const item = document.createElement('button');
     item.type = 'button';
-    item.className = 'lg-dd-item' + (o.value === cur ? ' is-sel' : '');
+    item.className = 'lg-dd-item' + (o.value === cur ? ' is-sel' : '') + (o.disabled ? ' is-soon' : '');
     item.innerHTML = `<span class="lg-dd-item-label">${esc(o.label)}</span>` +
       (o.sub ? `<span class="lg-dd-item-sub">${esc(o.sub)}</span>` : '');
-    item.addEventListener('click', (e) => {
-      e.stopPropagation();
-      cur = o.value;
-      renderCap();
-      menu.querySelectorAll('.lg-dd-item').forEach((el) => el.classList.toggle('is-sel', el === item));
-      root.classList.remove('is-open');
-      onChange?.(cur);
-    });
+    if (o.disabled) {
+      // Visible but unpickable (e.g. a demo-blocked champion).
+      item.disabled = true;
+      item.setAttribute('aria-disabled', 'true');
+    } else {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        cur = o.value;
+        renderCap();
+        menu.querySelectorAll('.lg-dd-item').forEach((el) => el.classList.toggle('is-sel', el === item));
+        root.classList.remove('is-open');
+        onChange?.(cur);
+      });
+    }
     menu.appendChild(item);
   }
   capBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     const willOpen = !root.classList.contains('is-open');
     document.querySelectorAll('.lg-dd.is-open').forEach((el) => el.classList.remove('is-open'));
+    if (willOpen) {
+      // Open UPWARD when there isn't room below for the menu — keeps it fully
+      // on-screen (the skirmish dropdowns sit low in the panel), so opening one
+      // never gets clipped or forces a scroll.
+      const r = capBtn.getBoundingClientRect();
+      const want = Math.min(menu.scrollHeight || 240, 280) + 8;
+      const below = window.innerHeight - r.bottom;
+      root.classList.toggle('is-up', below < want && r.top > below);
+    }
     root.classList.toggle('is-open', willOpen);
   });
   root.appendChild(capBtn);
@@ -961,9 +1143,57 @@ function _placeholderPanel(body, dest) {
 
 // ── Small render helpers ─────────────────────────────────────────────────────
 
+// Resolve a game-row's map image. Online/skirmish rows show the live saved
+// thumbnail (or nothing). Campaign rows — a mid-mission save ('local-campaign')
+// or the next mission ready to start ('campaign-next') — fall back to the
+// mission's fixed pre-generated map image when no live thumbnail exists yet, so
+// a not-yet-played mission card still shows its board (matching skirmish).
+function _rowThumb(row) {
+  if (row?.kind === 'local-campaign' || row?.kind === 'campaign-next') {
+    const missionId = row._missionDef?.id ?? row._nextMissionId;
+    if (missionId) return missionThumb(missionId, row.room_id);
+  }
+  return loadThumb(row.room_id);
+}
+
+// The Battle for Caleb's Hollow is an online game, so its map thumbnail comes
+// from the same place every online game's does: the round-end snapshot saved
+// under the room id (here the battle's room_id == b.roomId), captured locally
+// when this player resolves a round. No snapshot yet ⇒ null (the card shows a
+// placeholder glyph). A battle-invite (never joined) has no room_id ⇒ no thumb.
+function _battleThumb(battle) {
+  return battle?.room_id ? loadThumb(battle.room_id) : null;
+}
+
+// A campaign-mission row routes its thumbnail click to the mission BRIEFING —
+// the game-detail stats modal is only meaningful for skirmish/online rows.
+const _isCampaignRow = mmIsCampaignRow;
+
+/** Open the mission briefing for a campaign feed row (Tweak 6): clicking a
+ *  campaign mission's thumbnail in Continue should show the briefing — which
+ *  carries the map + objectives — not the skirmish/online stats modal. Hops to
+ *  the Campaign destination with the briefing primed. */
+function _openCampaignBriefingFromRow(row) {
+  const missionDef = row._missionDef;
+  const missionId = missionDef?.id ?? row._nextMissionId;
+  if (!missionId) return;
+  _campBriefing = {
+    slot: row._slotIndex ?? 1,
+    missionId,
+    resume: row.kind === 'local-campaign',
+    title: missionDef?.title || row._missionTitle || row._nextMissionTitle || missionId,
+    briefing: missionDef?.briefing || '',
+    // Catalog index = the 0-based mission number we display.
+    index: row._missionNumber ?? 0,
+    campaignId: row._campaignId,
+  };
+  _campSlot = row._slotIndex ?? null;
+  select('campaign');
+}
+
 function _resumeHero(row) {
   const f = mmFormatRow(row);
-  const thumb = loadThumb(row.room_id);
+  const thumb = _rowThumb(row);
   const wrap = document.createElement('div');
   wrap.className = 'lg-resume';
   wrap.innerHTML =
@@ -975,7 +1205,17 @@ function _resumeHero(row) {
       `<div class="lg-resume-meta">${esc(f.meta || '')}</div>` +
       (_gameTimeMeta(row) ? `<div class="lg-resume-meta m2">${esc(_gameTimeMeta(row))}</div>` : '') +
     `</div>`;
-  if (thumb) {
+  // Campaign mission rows route their thumbnail to the BRIEFING (map +
+  // objectives) — the game-detail stats modal is meaningless for a campaign
+  // mission (Tweak 6). Every campaign row is clickable (it always has a board
+  // image). For skirmish/online rows, only the live saved snapshot opens
+  // game-details — a fixed mission map image has no captured stats to show.
+  if (thumb && _isCampaignRow(row)) {
+    const te = wrap.querySelector('.lg-resume-thumb');
+    te.classList.add('clickable');
+    te.setAttribute('title', 'View mission briefing');
+    te.addEventListener('click', () => _openCampaignBriefingFromRow(row));
+  } else if (thumb && loadThumb(row.room_id)) {
     const te = wrap.querySelector('.lg-resume-thumb');
     te.classList.add('clickable');
     te.setAttribute('title', 'View game details');
@@ -992,13 +1232,25 @@ function _feedRow(row, cta = null) {
   const f = mmFormatRow(row);
   const el = document.createElement('div');
   el.className = 'lg-feed-row' + (row.action_needed ? ' is-action' : '');
-  const thumb = loadThumb(row.room_id);
+  const thumb = _rowThumb(row);
   if (thumb) {
+    // Campaign mission rows route to the BRIEFING (Tweak 6); skirmish/online
+    // rows open the game-detail stats modal, but only when a live snapshot was
+    // captured (a fixed mission map image has no stats to show).
+    const isCampaign = _isCampaignRow(row);
+    const savedThumb = loadThumb(row.room_id);
+    const clickable = isCampaign || !!savedThumb;
     const th = document.createElement('div');
-    th.className = 'lg-feed-thumb clickable';
+    th.className = 'lg-feed-thumb' + (clickable ? ' clickable' : '');
     th.style.backgroundImage = `url(${thumb})`;
-    th.setAttribute('title', 'View game details');
-    th.addEventListener('click', (e) => { e.stopPropagation(); _openGameDetail(row); });
+    if (clickable) {
+      th.setAttribute('title', isCampaign ? 'View mission briefing' : 'View game details');
+      th.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (isCampaign) _openCampaignBriefingFromRow(row);
+        else _openGameDetail(row);
+      });
+    }
     el.appendChild(th);
   }
   const text = document.createElement('div');
@@ -1110,14 +1362,20 @@ function _activateRow(row) {
   _data?.activate?.(row);
 }
 
-function _missionRow(slot, m, status, index) {
+function _missionRow(slot, m, status, index, campaignId) {
   const playable = status === 'current' || status === 'available';
   const resume = status === 'current' && slot.resumeMissionId === m.id;
   const mark = status === 'done' ? '✓' : status === 'locked' ? '🔒' : '◆';
+  // Map image: the live saved thumbnail when this mission is in progress (keyed
+  // by its row id `<campaignId>/slot<N>/<missionId>`, captured at round-end like
+  // a skirmish), else the mission's fixed pre-generated map image.
+  const rowId = campaignMissionRowId(campaignId, slot.slot, m.id);
+  const img = missionThumb(m.id, rowId);
   const el = document.createElement('div');
   el.className = 'lg-mission is-' + status + (playable ? ' is-playable' : '');
   el.innerHTML =
-    `<span class="lg-mission-n gthc">${roman(index + 1)}</span>` +
+    `<span class="lg-mission-thumb" aria-hidden="true"${img ? ` style="background-image:url(${img})"` : ''}></span>` +
+    `<span class="lg-mission-n gthc">${esc(_missionNumLabel(index))}</span>` +
     `<span class="lg-mission-name">${esc(m.title || m.id)}</span>` +
     (playable
       ? `<button class="lg-btn lg-btn-gold lg-btn-sm">${resume ? '▶ Resume' : '▶ Play'}</button>`
@@ -1125,7 +1383,7 @@ function _missionRow(slot, m, status, index) {
   if (playable) {
     const go = (e) => {
       e?.stopPropagation?.();
-      _campBriefing = { slot: slot.slot, missionId: m.id, resume, title: m.title || m.id, briefing: m.briefing || '', index };
+      _campBriefing = { slot: slot.slot, missionId: m.id, resume, title: m.title || m.id, briefing: m.briefing || '', index, campaignId };
       select('campaign');
     };
     el.querySelector('button')?.addEventListener('click', go);
@@ -1177,16 +1435,13 @@ function _countdown(unixSec) {
 // carry a real updated_at; the Battle's last turn is derived from its deadline
 // (turns resolve on a 12h cadence — noon & midnight). '' when there's no data.
 function _gameTimeMeta(row) {
-  let last = null, dl = null;
-  if (row.kind === 'game') {
-    last = _relTime(row.updated_at);
-    dl = _countdown(row.turn_deadline);
-  } else if (row.kind === 'battle' && row.turn_deadline) {
-    last = _relTime(row.turn_deadline - 12 * 3600);
-    dl = _countdown(row.turn_deadline);
-  } else {
-    return '';
-  }
+  if (row.kind !== 'game' && row.kind !== 'battle') return '';
+  // Both games and the Battle carry a real last-resolution time in updated_at
+  // (server room.lastTurnAt); the deadline drives the countdown. The Battle no
+  // longer guesses "last turn" from turn_deadline − 12h, which was wrong whenever
+  // a round resolved off the noon/midnight schedule (e.g. early submit).
+  const last = _relTime(row.updated_at);
+  const dl = _countdown(row.turn_deadline);
   const bits = [];
   if (last) bits.push(`last turn ${last}`);
   if (dl) bits.push(`⏱ ${dl}`);

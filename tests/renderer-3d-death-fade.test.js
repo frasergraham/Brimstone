@@ -10,7 +10,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Renderer3D } from '../src/renderer-3d.js';
+import { Renderer3D, stagedDeathOpacity } from '../src/renderer-3d.js';
 
 // A mesh stub that records visibility writes. getChildMeshes returns the
 // descendants we want the fade to touch (rig clone body + icon badge).
@@ -121,5 +121,117 @@ describe('3D _pumpFadeOuts', () => {
   test('is a no-op when there are no fades', () => {
     const inst = makeInst();
     assert.doesNotThrow(() => inst._pumpFadeOuts());
+  });
+});
+
+// ── stagedDeathOpacity (pure) ───────────────────────────────────────────────
+// The death fade is two linear phases keyed off the clip's measured length:
+//   • Phase A — while the Death (fall) clip plays (0 → clipMs): opacity 1.0 →
+//     0.5, so it is EXACTLY 0.5 the instant the fall ends.
+//   • Phase B — corpse lying still on the ground (clipMs → clipMs+groundMs):
+//     opacity 0.5 → 0.
+const CLIP = 1100;   // clip plays across 1100ms of real time
+const GROUND = 700;  // then fades 0.5 → 0 over 700ms on the ground
+const TOTAL = CLIP + GROUND;
+
+describe('stagedDeathOpacity', () => {
+  test('starts fully opaque at t=0 (fade begins as the clip begins)', () => {
+    assert.equal(stagedDeathOpacity(0, CLIP, GROUND), 1.0);
+  });
+
+  test('is EXACTLY 0.5 when the clip ends', () => {
+    assert.equal(stagedDeathOpacity(CLIP, CLIP, GROUND), 0.5);
+  });
+
+  test('is EXACTLY 0 at the end of the ground fade', () => {
+    assert.equal(stagedDeathOpacity(TOTAL, CLIP, GROUND), 0);
+  });
+
+  test('phase A is linear 1.0 → 0.5 across the clip', () => {
+    assert.equal(stagedDeathOpacity(CLIP / 2, CLIP, GROUND), 0.75);     // midpoint
+    assert.equal(stagedDeathOpacity(CLIP / 4, CLIP, GROUND), 0.875);    // quarter
+    assert.equal(stagedDeathOpacity((3 * CLIP) / 4, CLIP, GROUND), 0.625); // 3/4
+  });
+
+  test('phase B is linear 0.5 → 0 across the ground window', () => {
+    // Midpoint of the ground window → halfway between 0.5 and 0 = 0.25.
+    assert.equal(stagedDeathOpacity(CLIP + GROUND / 2, CLIP, GROUND), 0.25);
+  });
+
+  test('is monotonically non-increasing across the whole sequence', () => {
+    let prev = Infinity;
+    for (let t = 0; t <= TOTAL + 200; t += 25) {
+      const o = stagedDeathOpacity(t, CLIP, GROUND);
+      assert.ok(o <= prev + 1e-9, `opacity rose at t=${t}: ${o} > ${prev}`);
+      prev = o;
+    }
+  });
+
+  test('clamps to [0,1] before t=0 and well past the end', () => {
+    assert.equal(stagedDeathOpacity(-500, CLIP, GROUND), 1.0); // negative → t=0
+    assert.equal(stagedDeathOpacity(TOTAL + 10_000, CLIP, GROUND), 0);
+  });
+
+  test('boundary stays at 0.5 for any clip length (NOT a hardcoded duration)', () => {
+    // The phase split MUST follow the actual clip length, so opacity is 0.5 at
+    // clip-end regardless of how long the clip is.
+    for (const clip of [200, 750, 1100, 3000, 5000]) {
+      assert.equal(
+        stagedDeathOpacity(clip, clip, GROUND), 0.5,
+        `clip=${clip}ms should be 0.5 at its own end`,
+      );
+    }
+  });
+
+  test('degrades to a single 1 → 0 ramp when the clip length is unknown', () => {
+    // clipMs <= 0 (clip not measured yet) — the whole fade collapses to a plain
+    // 1 → 0 over the ground window so the unit still dissolves.
+    assert.equal(stagedDeathOpacity(0, 0, GROUND), 1.0);
+    assert.equal(stagedDeathOpacity(GROUND / 2, 0, GROUND), 0.5);
+    assert.equal(stagedDeathOpacity(GROUND, 0, GROUND), 0);
+    assert.equal(stagedDeathOpacity(GROUND, undefined, GROUND), 0);
+  });
+
+  test('guards a zero/garbage ground window without dividing by zero', () => {
+    const o = stagedDeathOpacity(CLIP + 5, CLIP, 0); // groundMs floored to >=1
+    assert.ok(Number.isFinite(o));
+    assert.ok(o >= 0 && o <= 0.5);
+  });
+});
+
+// ── getFadeOutOpacity death path (real prototype method) ────────────────────
+describe('3D getFadeOutOpacity — staged death fade', () => {
+  test('an isDeath entry is exactly 0.5 at clip-end and 0 at total-end', () => {
+    const inst = makeInst();
+    // At clip-end: startTime backdated by exactly clipMs.
+    inst._fadeOutAnims.set('d1', {
+      startTime: Date.now() - CLIP, duration: TOTAL,
+      isDeath: true, clipMs: CLIP, groundMs: GROUND,
+    });
+    const atClipEnd = inst.getFadeOutOpacity('d1');
+    assert.ok(Math.abs(atClipEnd - 0.5) < 0.02, `~0.5 at clip-end, got ${atClipEnd}`);
+
+    // Well past total-end → 0.
+    inst._fadeOutAnims.set('d2', {
+      startTime: Date.now() - (TOTAL + 5000), duration: TOTAL,
+      isDeath: true, clipMs: CLIP, groundMs: GROUND,
+    });
+    assert.equal(inst.getFadeOutOpacity('d2'), 0, 'fully faded past total-end');
+  });
+
+  test('addFadeOutAnim with isDeath opts carries clip + ground onto the entry', () => {
+    const inst = makeInst();
+    inst.addFadeOutAnim('d3', TOTAL, { isDeath: true, clipMs: CLIP, groundMs: GROUND });
+    const entry = inst._fadeOutAnims.get('d3');
+    assert.equal(entry.isDeath, true);
+    assert.equal(entry.clipMs, CLIP);
+    assert.equal(entry.groundMs, GROUND);
+  });
+
+  test('a plain (non-death) fade still uses the legacy linear 1 → 0 ramp', () => {
+    const inst = makeInst();
+    inst._fadeOutAnims.set('p1', { startTime: Date.now() - 500, duration: 1000 });
+    const o = inst.getFadeOutOpacity('p1');
+    assert.ok(o > 0.4 && o < 0.6, `legacy mid-fade ~0.5, got ${o}`);
   });
 });

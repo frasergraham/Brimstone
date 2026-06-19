@@ -13,7 +13,9 @@ import {
 } from '../src/entities.js';
 import { executeBattle } from '../src/actions.js';
 import { GameState } from '../src/game.js';
-import { hexKey } from '../src/hex.js';
+import { hexKey, getNeighbors } from '../src/hex.js';
+import { getFortifyCombatBonus } from '../src/tiles.js';
+import { buildRollRows } from '../src/replay-timeline.js';
 
 function withRNG(sequence, fn) {
   let idx = 0;
@@ -181,6 +183,47 @@ describe('gang-up flat bonus (+1 per ally, cap ADVANTAGE_CAP)', () => {
     const r = executeBattle(state, state.hero, minion);
     assert.equal(r.breakdown.atkGangupFlat, 0);
     assert.equal(r.breakdown.atkAdvantageDice, 0);
+  });
+});
+
+// Fortification feeds a flat defense bonus into the combat roll (hero-side
+// only). The bonus must surface in result.breakdown.fortBonus AND drive a
+// distinct "fort (def)" row in the replay roll-breakdown the player reads —
+// the same path used by the turn-card tooltip and the roll-breakdown popup.
+describe('fortification surfaces in the combat breakdown', () => {
+  test('a fortified hero defender carries fortBonus into the breakdown + a fort (def) roll row', () => {
+    const state = new GameState(true, true);
+    const hero = state.hero;          // hero-side → benefits from fortification
+
+    // Fortify the hero's own tile (level 2) so the defender gains DEF.
+    const heroTile = state.tiles.get(hexKey(hero.col, hero.row));
+    heroTile.fortifyLevel = 2;
+    heroTile.fortifyHP = 40;          // L2 HP pool — keeps the wall standing
+    const expectedFortDef = getFortifyCombatBonus(2).defense;
+    assert.ok(expectedFortDef > 0, 'L2 fort grants a positive defense bonus');
+
+    // Place a witch attacker on a neighbouring hex so it can strike the hero.
+    const nb = getNeighbors(hero.col, hero.row)[0];
+    const attacker = createMinion(nb.col, nb.row); // witch-owned by default
+    state.entities.push(attacker);
+
+    // Force a miss so the hero (and the wall) survive — we only assert the
+    // breakdown's fort line, not the damage outcome.
+    state.setForcedDice(1, 6);
+
+    const r = executeBattle(state, attacker, hero);
+    assert.equal(r.breakdown.fortBonus, expectedFortDef,
+      'defender fortification reaches result.breakdown.fortBonus');
+    // The witch attacker gains NO attacker-side fort (witch units never do).
+    assert.equal(r.breakdown.atkFortAtkBonus, 0,
+      'witch attacker never gains attacker-side fortification');
+
+    // The roll-breakdown the player reads renders the fort contribution.
+    const rows = buildRollRows(r, false);
+    const fortRow = rows.def.terms.find(t => t.label === 'fort (def)');
+    assert.ok(fortRow, 'the roll-row builder includes a fort (def) row');
+    assert.equal(fortRow.val, expectedFortDef,
+      'the fort row carries the fortification defense value');
   });
 });
 

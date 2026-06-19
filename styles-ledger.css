@@ -199,6 +199,11 @@
 .lg-slot-confirm .lg-btn { flex:1; padding:5px 8px; font-size:12px; }
 .lg-btn-danger { border-color:rgba(200,80,80,.5); background:rgba(150,40,40,.25); color:#f0b0b0; }
 .lg-btn-danger:hover { background:rgba(180,50,50,.4); }
+/* Chapter heading above a group of missions in the chronicle. */
+.lg-chapter-head { font-family:var(--lg-display); font-size:18px; color:var(--lg-gold);
+  letter-spacing:.02em; margin:20px 0 10px; padding-bottom:7px;
+  border-bottom:1px solid rgba(212,167,44,.28); }
+.lg-chapter-head:first-child { margin-top:6px; }
 .lg-chronicle { display:flex; flex-direction:column; overflow:auto; }
 .lg-mission { display:flex; align-items:center; gap:15px; padding:10px 14px 10px 8px; border-bottom:1px solid rgba(255,255,255,.05); border-radius:4px; }
 .lg-mission.is-current { background:rgba(212,167,44,.08); }
@@ -206,6 +211,13 @@
 .lg-mission-n { font-size:17px; width:30px; flex:none; color:var(--lg-faint); }
 .lg-mission.is-done .lg-mission-n { color:var(--lg-green); }
 .lg-mission.is-current .lg-mission-n { color:var(--lg-gold); }
+/* Per-mission map image (fixed pre-generated board, or the live saved thumbnail
+   when in progress). Mirrors the feed-thumb look so campaign + skirmish cards
+   read alike. Locked missions dim theirs so the row still reads "locked". */
+.lg-mission-thumb { width:64px; height:48px; flex:none; border-radius:4px; background-size:cover; background-position:center;
+  background-color:rgba(0,0,0,.32); border:1px solid rgba(255,255,255,.08); }
+.lg-mission.is-current .lg-mission-thumb { border-color:rgba(212,167,44,.34); }
+.lg-mission.is-locked .lg-mission-thumb { filter:grayscale(.7) brightness(.55); }
 .lg-mission-name { flex:1; font-size:16px; color:#e8dfc8; }
 .lg-mission.is-locked .lg-mission-name { color:#6a6356; }
 .lg-mission-mark { font-size:14px; color:var(--lg-faint); }
@@ -261,6 +273,10 @@
 .lg-dd-menu { position:absolute; top:calc(100% + 4px); left:0; right:0; z-index:40; display:none;
   background:#14121c; border:1px solid #3a3052; border-radius:5px; overflow-y:auto; max-height:280px;
   box-shadow:0 12px 30px rgba(0,0,0,.55); }
+/* Flip the menu ABOVE the cap when there's no room below (set by _dropdown), so a
+   dropdown low in the panel opens fully on-screen instead of clipping / scrolling. */
+.lg-dd.is-up .lg-dd-menu { top:auto; bottom:calc(100% + 4px); box-shadow:0 -12px 30px rgba(0,0,0,.55); }
+.lg-dd.is-up.is-open .lg-dd-arrow { transform:rotate(0deg); }
 .lg-dd.is-open .lg-dd-menu { display:block; }
 .lg-dd-item { width:100%; display:flex; flex-direction:column; gap:1px; align-items:flex-start;
   background:none; border:0; border-bottom:1px solid rgba(255,255,255,.05); color:var(--lg-ink-2);
@@ -275,6 +291,41 @@
 .lg-fac-dd .lg-dd-cap { font-size:13px; padding:4px 8px; }
 .lg-skirmish-start { display:flex; align-items:center; gap:14px; margin-top:18px; }
 .lg-skirmish-summary { font-size:13px; color:var(--lg-faint); font-style:italic; }
+
+/* ── Demo "Coming Soon" gating (modes + champions) ────────────────────────────
+   Disabled-but-visible content: dimmed, not interactive, badged. */
+.lg-soon-badge {
+  font-size:9px; letter-spacing:.1em; text-transform:uppercase; white-space:nowrap;
+  color:#c9b277; background:rgba(212,167,44,.12); border:1px solid rgba(212,167,44,.3);
+  border-radius:9px; padding:1px 8px; line-height:1.5;
+}
+/* Rail entry flipped off for the demo. */
+.ledger-rail-item.is-soon { cursor:default; opacity:.55; }
+.ledger-rail-item.is-soon:hover .lb { color:#b3a98f; }   /* no hover brighten */
+.ledger-rail-item.is-soon .lg-soon-badge { margin-left:auto; }
+/* Champion card blocked for the demo — non-selectable, no hover lift. */
+.lg-champion.is-soon { cursor:default; opacity:.5; filter:grayscale(.5); }
+.lg-champion.is-soon:hover { border-color:#232036; }
+.lg-champion.is-soon .lg-soon-badge { margin-left:6px; }
+/* Blocked champion inside a faction dropdown (online lobby seat). */
+.lg-dd-item.is-soon { cursor:default; opacity:.5; }
+.lg-dd-item.is-soon:hover { background:none; }
+.lg-dd-item.is-soon .lg-dd-item-sub { color:var(--lg-gold-dim); }
+
+/* ── Skirmish setup: no scrolling ─────────────────────────────────────────────
+   The body fills the pane; only the champion picker scrolls internally so the
+   options + Start row stay pinned and fully visible (and a low dropdown opens
+   upward — see .lg-dd.is-up). No outer page scroll on this screen. */
+.ledger-pane-body.lg-skirmish { flex:1 1 auto; min-height:0; overflow:hidden; }
+.lg-skirmish .lg-champ-scroll { flex:1 1 auto; min-height:0; overflow-y:auto; padding-right:6px; }
+/* The "night ahead" caption, options, and Start row never shrink — always shown.
+   (Pin every direct-child caption: `:nth-of-type(2)` counted by tag and matched
+   nothing, since the 2nd div child is .lg-champ-scroll, not a .lg-cap.) */
+.lg-skirmish > .lg-cap,
+.lg-skirmish .lg-opts,
+.lg-skirmish .lg-skirmish-start { flex:0 0 auto; }
+.lg-skirmish .lg-skirmish-start { margin-top:12px; }
+.lg-skirmish .lg-champ-side:last-child { margin-bottom:4px; }
 
 /* Campaign Missions/Party tabs + party container */
 .lg-camp-tabs { display:flex; gap:10px; margin:10px 0 16px; }
@@ -383,11 +434,25 @@
 .lg-party .cprog-section-label .cprog-count { font-size:.72em; }
 .lg-party .cprog-inv-hint { display:block; margin:3px auto 0; }
 
-/* Mission briefing */
+/* Mission briefing — two columns: map image on the LEFT, mission text on the
+   RIGHT. Stacks to a single column on narrow widths (map on top). */
+.lg-brief-cols { display:flex; gap:24px; align-items:flex-start; margin-top:14px; }
+.lg-brief-col-text { flex:1 1 auto; min-width:0; }
 .lg-brief-head { margin-bottom:4px; }
 .lg-brief-kicker { font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--lg-label); }
 .lg-brief-title { font-family:var(--lg-display); font-size:30px; color:var(--lg-ink); margin-top:2px; }
 .lg-brief-text { font-size:15px; line-height:1.6; color:var(--lg-ink-2); margin-top:14px; max-width:62ch; }
+/* Big map preview — a larger view of the mission's board than the list cards.
+   In the two-column briefing it's the fixed-width LEFT column; the text flexes. */
+.lg-brief-map { flex:0 0 auto; width:380px; max-width:46%; aspect-ratio:4/3; border-radius:6px;
+  border:1px solid rgba(255,255,255,.12); background:#0a0b10 center/cover no-repeat;
+  display:flex; align-items:center; justify-content:center; font-size:42px; color:rgba(212,167,44,.4); }
+.lg-brief-map.has-img { border-color:rgba(212,167,44,.34); color:transparent; }
+/* Stack on narrow widths — map on top, full-width, then the text below. */
+@media (max-width:680px) {
+  .lg-brief-cols { flex-direction:column; gap:16px; }
+  .lg-brief-map { width:100%; max-width:100%; }
+}
 
 /* Play Online — rhythms + battle */
 .lg-rhythms { display:grid; grid-template-columns:1fr; gap:12px; margin-bottom:16px; }
@@ -399,6 +464,14 @@
 .lg-rhythm .d { font-size:12px; color:#8a8270; margin-top:3px; }
 .lg-battle { background:rgba(22,14,26,.6); border:1px solid rgba(155,89,182,.4); border-radius:6px; padding:14px 18px; margin-bottom:16px; cursor:pointer; }
 .lg-battle:hover { border-color:var(--lg-purple); }
+.lg-battle.has-thumb { display:flex; align-items:center; gap:16px; }
+.lg-battle-thumb { width:88px; height:64px; flex:none; border-radius:4px; background-size:cover; background-position:center;
+  display:flex; align-items:center; justify-content:center; font-size:22px; color:rgba(230,205,242,.5);
+  background:#160e1a; border:1px solid rgba(155,89,182,.3); }
+.lg-battle-thumb.has-img { border-color:rgba(155,89,182,.5); }
+.lg-battle-thumb.clickable { cursor:zoom-in; }
+.lg-battle-thumb.clickable:hover { border-color:var(--lg-purple); }
+.lg-battle-body { flex:1; min-width:0; }
 .lg-battle-head { display:flex; justify-content:space-between; align-items:center; }
 .lg-battle-head .gthc { font-family:var(--lg-display); font-size:22px; color:#e6cdf2; }
 .lg-battle-live { font-size:12px; color:var(--lg-green); }

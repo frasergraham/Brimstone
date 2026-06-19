@@ -89,7 +89,9 @@ export function buildRollRows(result, ranged = false) {
         ['silver', bd.atkAttackBonus],
         ['gang-up', bd.atkGangupFlat],
         ['night', bd.phaseBonus],
-        ['fort', bd.atkFortAtkBonus],
+        // Attacker fortification — distinguished from the defender's fort row
+        // ('fort (def)') so the two read clearly when both sides are fortified.
+        ['fort (att)', bd.atkFortAtkBonus],
         ['weapon trigger', bd.atkStaffBonus],
         ['range falloff', -(bd.rangeDistancePenalty ?? 0)],
       ]),
@@ -106,7 +108,8 @@ export function buildRollRows(result, ranged = false) {
         [weaponLabel(bd.defWeaponId), bd.defWeaponMod],
         ['bonus', bd.defDefenseBonus],
         ['allies', bd.defGangupFlat],
-        ['fort', bd.fortBonus],
+        // Defender fortification — the wall on the defender's tile adds DEF.
+        ['fort (def)', bd.fortBonus],
         ['forest cover', bd.forestCoverBonus],
         ['fatigue', -(bd.fatiguePenalty ?? 0)],
       ]),

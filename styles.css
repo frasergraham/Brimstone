@@ -1866,8 +1866,9 @@ body.renderer-3d.debug-counters #cam-counter { display: block; }
   overflow: visible;
 }
 .chronicle-panel.collapsed .chronicle-panel-header,
+.chronicle-panel.collapsed #mission-log-section,
 .chronicle-panel.collapsed #chronicle-sidebar-log {
-  display: none;
+  display: none !important;
 }
 
 /* Tab — the protruding button that's always clickable */
@@ -1942,6 +1943,130 @@ body.renderer-3d.debug-counters #cam-counter { display: block; }
 #chronicle-sidebar-log .log-entry {
   padding: 3px 0;
   border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+
+/* ── Mission Log (top half of the Chronicle sidebar) ───────────────────── */
+
+.mission-log-section {
+  flex: 0 0 auto;
+  /* Cap the to-do list so a long list scrolls rather than crowding out the
+     Chronicle below it. */
+  max-height: 45%;
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid rgba(212,167,44,0.25);
+}
+
+/* Mission briefing/description — header block above the objectives. */
+.mission-log-desc {
+  margin: 0;
+  padding: 0.4rem 0.6rem 0.5rem;
+  font-size: 0.76rem;
+  line-height: 1.4;
+  color: var(--text-dim, #b8b2a4);
+  font-style: italic;
+  border-bottom: 1px solid rgba(212,167,44,0.18);
+}
+.mission-log-desc-text { display: block; }
+
+.mission-log-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.35rem 0.6rem 0.5rem;
+  overflow-y: auto;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.mission-log-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  padding: 0.18rem 0;
+  color: var(--text, #e8e2d6);
+}
+
+.mission-log-marker {
+  flex: 0 0 auto;
+  min-width: 2.1rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 0.72rem;
+  padding: 0.05rem 0.25rem;
+  border-radius: 4px;
+  background: rgba(212,167,44,0.14);
+  border: 1px solid rgba(212,167,44,0.4);
+  color: var(--day, #d4a72c);
+}
+
+.mission-log-label {
+  flex: 1 1 auto;
+}
+
+.mission-log-item.done .mission-log-label {
+  text-decoration: line-through;
+  color: var(--text-dim, #8a8578);
+  opacity: 0.75;
+}
+.mission-log-item.done .mission-log-marker {
+  background: rgba(120,200,120,0.15);
+  border-color: rgba(120,200,120,0.5);
+  color: #79d279;
+}
+
+/* ── Mission Log toast (objective added / progressed / completed) ───────── */
+
+.mission-log-toast {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  max-width: min(360px, 84vw);
+  padding: 0.5rem 0.85rem;
+  background: rgba(20, 24, 31, 0.97);
+  border: 1px solid rgba(212,167,44,0.55);
+  border-radius: 8px;
+  box-shadow: 0 6px 22px rgba(0,0,0,0.55);
+  color: var(--text, #e8e2d6);
+  font-size: 0.85rem;
+  pointer-events: none;
+  animation: mission-log-toast-in 0.25s ease;
+}
+.mission-log-toast.completed {
+  border-color: rgba(120,200,120,0.65);
+}
+.mission-log-toast .mlt-icon {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+.mission-log-toast .mlt-body {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+.mission-log-toast .mlt-verb {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--day, #d4a72c);
+}
+.mission-log-toast.completed .mlt-verb { color: #79d279; }
+.mission-log-toast .mlt-label { font-weight: 600; }
+.mission-log-toast.mission-log-toast-out {
+  animation: mission-log-toast-out 0.35s ease forwards;
+}
+@keyframes mission-log-toast-in {
+  from { opacity: 0; transform: translate(-50%, -8px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+@keyframes mission-log-toast-out {
+  from { opacity: 1; transform: translate(-50%, 0); }
+  to   { opacity: 0; transform: translate(-50%, -8px); }
 }
 
 /* ── Chronicle overlay ─────────────────────────────────────────────────── */
@@ -6778,6 +6903,88 @@ body.spectator-mode #game-screen   { display: flex !important; }
 
 /* (campaign-deploy-roster removed — replaced by Active/Reserve roster) */
 
+/* ── Campaign debrief overlay (post-mission Victory/Defeat) ──────────────────
+   A dedicated full-screen overlay shown over the game when a campaign mission
+   ends. Independent of the legacy #setup-screen so the Ledger observer never
+   touches it. The inner .debrief-* helpers below predate the overlay and are
+   reused for the stats/roster blocks. */
+#debrief-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1rem;
+  background: radial-gradient(ellipse at center, rgba(12, 8, 6, 0.92), rgba(4, 3, 2, 0.98));
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  overflow-y: auto;
+  animation: debrief-fade-in 0.5s ease;
+}
+
+@keyframes debrief-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.debrief-panel {
+  width: min(640px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  background: linear-gradient(180deg, rgba(28, 22, 18, 0.96), rgba(18, 14, 11, 0.98));
+  border: 1px solid var(--clr-gold, #d4a72c);
+  box-shadow: 0 0 40px rgba(0, 0, 0, 0.7), inset 0 0 60px rgba(0, 0, 0, 0.4);
+  border-radius: 10px;
+  padding: 1.75rem 1.5rem;
+  text-align: center;
+}
+
+.debrief-title {
+  font-size: 2.1rem;
+  letter-spacing: 0.12em;
+  margin: 0 0 0.5rem;
+  text-transform: uppercase;
+  color: var(--clr-gold, #d4a72c);
+  text-shadow: 0 0 18px rgba(212, 167, 44, 0.45);
+}
+
+/* Defeat tints the title blood-red instead of gold. */
+.debrief-panel.is-defeat .debrief-title {
+  color: #c0392b;
+  text-shadow: 0 0 18px rgba(192, 57, 43, 0.45);
+}
+
+.debrief-text {
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: var(--clr-text, #e8ddc8);
+  margin: 0 auto 0.5rem;
+  max-width: 46ch;
+  font-style: italic;
+}
+
+.debrief-overlay-stats {
+  justify-content: center;
+}
+
+.debrief-continue {
+  margin-top: 1.25rem;
+  padding: 0.6rem 2.2rem;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #1a120b;
+  background: var(--clr-gold, #d4a72c);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: filter 0.15s ease, transform 0.1s ease;
+}
+
+.debrief-continue:hover { filter: brightness(1.1); }
+.debrief-continue:active { transform: translateY(1px); }
+
 /* Debrief screen */
 .debrief-stats {
   margin: 0.75rem 0;
@@ -6828,6 +7035,116 @@ body.spectator-mode #game-screen   { display: flex !important; }
 .campaign-party-card.hero {
   border-color: rgba(212,167,44,0.3);
   background: rgba(212,167,44,0.06);
+}
+
+/* ── ✦ Rewards (debrief, win only) ─────────────────────────────────────── */
+/* What a won mission GRANTED this run: new-ally cards (the SAME .campaign-party-
+   card the roster uses, so the style is consistent) + a resource-gains line.
+   Gold-tinted to read as a reward, distinct from the neutral roster section. */
+
+.reward-section {
+  margin-top: 0.85rem;
+  padding-top: 0.6rem;
+  border-top: 1px dashed rgba(212,167,44,0.28);
+}
+
+.reward-heading {
+  font-size: 0.9rem;
+  color: var(--clr-gold, #d4a72c);
+  letter-spacing: 0.04em;
+  margin-bottom: 0.4rem;
+}
+
+.reward-survivors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: center;
+}
+
+/* Wrapper that hangs the NEW badge over the reused survivor card's corner. */
+.reward-survivor {
+  position: relative;
+  display: flex;
+  flex: 1 1 calc(50% - 0.35rem);
+  max-width: calc(50% - 0.18rem);
+}
+
+/* The reused card fills the wrapper (its own flex sizing is overridden here so
+   the badge anchors to the card edge, not a half-width column). */
+.reward-survivor .campaign-party-card {
+  flex: 1 1 auto;
+  max-width: none;
+  border-color: rgba(212,167,44,0.35);
+  background: rgba(212,167,44,0.07);
+}
+
+/* The debrief surviving-roster + reward survivors now use the rich Party
+   Management unit card (.cprog-card) instead of the simple .campaign-party-card.
+   Lay them out as a 2-up grid inside the debrief panel so the taller cards stay
+   compact; the panel itself already scrolls (max-height + overflow-y:auto). */
+.debrief-roster .debrief-party-grid {
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+  text-align: left;
+}
+/* The reward grid is itself the .reward-survivors flex container in the simple
+   layout; as a cprog grid it must be a real grid (drop the flex so the NEW-badge
+   wrappers tile cleanly). */
+.reward-survivors.debrief-party-grid {
+  display: grid;
+}
+/* Each reward wrapper is a grid cell holding a single rich card; let the card
+   fill it and gold-tint it to read as a fresh reward, like the simple card did. */
+.reward-survivor .cprog-card {
+  flex: 1 1 auto;
+  width: 100%;
+  border-color: rgba(212,167,44,0.4);
+  background: rgba(212,167,44,0.08);
+}
+@media (max-width: 480px) {
+  .debrief-roster .debrief-party-grid { grid-template-columns: 1fr; }
+}
+
+.reward-new-badge {
+  position: absolute;
+  top: -6px;
+  right: -4px;
+  z-index: 2;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  color: #1a1208;
+  background: var(--clr-gold, #d4a72c);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+}
+
+.reward-resources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--clr-gold, #d4a72c);
+  justify-content: center;
+}
+
+.reward-resource {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.1rem 0.4rem;
+  background: rgba(212,167,44,0.1);
+  border: 1px solid rgba(212,167,44,0.25);
+  border-radius: 4px;
+}
+
+.reward-res-icon {
+  font-size: 0.95rem;
 }
 
 /* ── ⚰ Fallen memorial ─────────────────────────────────────────────────── */

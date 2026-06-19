@@ -6,8 +6,10 @@ import { getFaction } from '../factions.js';
 import { hexDistance } from '../hex.js';
 import { EntityType, applyLevel, normalizeItems, getEquippedWeaponIdOf,
          equipWeaponInItems, addItemInItems, removeItemInItems, getItemCountOf } from '../entities.js';
+import { SURVIVOR_ROSTER, SURVIVOR_COLORS } from '../content/survivors.js';
 import { ITEMS } from '../items.js';
 import { isRiver, hasBuilding } from '../tiles.js';
+import { hasLineOfSight } from '../actions.js';
 import { evaluateUnlock } from './unlock.js';
 
 // v1: initial campaign save format.
@@ -49,7 +51,16 @@ import { evaluateUnlock } from './unlock.js';
 // the UI resolves the mission title). Deaths on a LOST/retried mission do NOT
 // permakill — the party is restored (existing behaviour). `_migrate` backfills
 // `fallen: []` onto pre-v7 saves so no progress is lost.
-const SAVE_VERSION = 7;
+//
+// v8: Persisted active-party (deployed roster) selection. The set of roster
+// indices the player marks "active" on the Party Management / Progress screen
+// was previously held in memory only (`_activeRosterIndices` in main.js) and
+// reset on every reload. A new `activeParty[]` of roster indices rides the
+// slot-aware save so each campaign+slot remembers its own deployed squad. The
+// stored indices are sanitized on read (`getActiveParty`) — out-of-range entries
+// are dropped so a shrunken roster (permadeath) falls back gracefully. `_migrate`
+// backfills `activeParty: []` onto pre-v8 saves.
+const SAVE_VERSION = 8;
 
 // Fresh-campaign hero loadout. A factory (not a shared literal) so each new
 // campaign gets its own object graph — the equipped sword lives in `items`.
@@ -86,6 +97,41 @@ export function campaignSlotSaveSlot(campaignId, slotIndex = 1) {
 /** Legacy (pre multi-save) unsuffixed save-slot suffix. */
 export function legacyCampaignSaveSlot(campaignId) {
   return `campaign-${campaignId}`;
+}
+
+// ── Active slot ─────────────────────────────────────────────────────────────
+// Which playthrough slot the player last selected/started for a campaign. The
+// menu persists this so the Continue card and the Campaign destination resume
+// the slot the player actually cares about — not just whichever slot was
+// touched most recently by an autosave. Stored as a single small int per
+// campaign under its own key; defaults to slot 1 when never set.
+
+/** localStorage key holding the active (last-selected) slot for a campaign. */
+export function campaignActiveSlotKey(campaignId) {
+  return `brimstone-campaign-${campaignId}-activeSlot`;
+}
+
+/**
+ * Read the persisted active slot for a campaign, clamped to a valid index.
+ * Defaults to slot 1 when never set or unreadable.
+ */
+export function getActiveSlot(campaignId) {
+  try {
+    const raw = localStorage.getItem(campaignActiveSlotKey(campaignId));
+    return raw == null ? 1 : clampSlotIndex(raw);
+  } catch {
+    return 1;
+  }
+}
+
+/**
+ * Persist the active slot for a campaign (clamped). Call when the player
+ * selects or starts a slot so Continue/Campaign resume the right playthrough.
+ */
+export function setActiveSlot(campaignId, slotIndex) {
+  try {
+    localStorage.setItem(campaignActiveSlotKey(campaignId), String(clampSlotIndex(slotIndex)));
+  } catch { /* storage unavailable — non-fatal */ }
 }
 
 /**
@@ -126,6 +172,38 @@ export function snapshotSurvivor(entity) {
     // canonical shape so the roster snapshot never aliases the live entity.
     items:        normalizeItems(entity.items),
     effects:      permanentEffects,
+  };
+}
+
+/**
+ * Build a roster snapshot (same shape as {@link snapshotSurvivor}) for a named
+ * SURVIVOR_ROSTER character — the data-driven path for granting a survivor as a
+ * mission reward without spinning up a live Entity. Stats are the roster base
+ * (level 1, full HP, no carried items). Returns `null` for an unknown name.
+ *
+ * @param {string} name   exact SURVIVOR_ROSTER `name`.
+ * @returns {object|null} snapshot-shaped roster entry, or null if not found.
+ */
+export function rosterSnapshotFromName(name) {
+  const i = SURVIVOR_ROSTER.findIndex(c => c.name === name);
+  if (i < 0) return null;
+  const char = SURVIVOR_ROSTER[i];
+  return {
+    name:         char.name,
+    title:        char.title,
+    bio:          char.bio,
+    abilities:    char.ability ? [char.ability] : [],
+    abilityLabel: char.abilityLabel,
+    color:        SURVIVOR_COLORS[i % SURVIVOR_COLORS.length],
+    hp:           char.maxHp,
+    maxHp:        char.maxHp,
+    attack:       char.attack,
+    defense:      char.defense,
+    ...(typeof char.agility === 'number' ? { agility: char.agility } : {}),
+    level:        1,
+    xp:           0,
+    items:        {},
+    effects:      [],
   };
 }
 
@@ -550,25 +628,38 @@ export function resolveSpawnPosition(state, spawnAt) {
   if (spawnAt === 'near_hero') {
     // Spawn on a passable tile close enough for the hero to see on spawn, but
     // not adjacent. Hero day-phase sight is 3; target an annulus of 2–3 hexes.
+    // Crucially, require an unobstructed LINE OF SIGHT from the tile to the
+    // hero — distance alone isn't enough on a forested map, where a 2–3 hex
+    // tile can sit behind a tree/wall and the unit would "rise" off-screen.
+    // The golem must appear where the player can watch it emerge.
     const hero = state.hero;
     if (!hero) return null;
     const isPassable = (tile) =>
       !isRiver(tile) && !hasBuilding(tile);
     const isOccupied = (col, row) =>
       state.entities.some(e => e.alive && e.col === col && e.row === row);
-    const pickFrom = (minDist, maxDist) => {
+    const inSight = (tile) =>
+      hasLineOfSight(state, tile.col, tile.row, hero.col, hero.row);
+    // requireLos: when true, drop tiles the hero can't actually see. Used for
+    // the preferred passes; the final fallback drops it so we never fail to
+    // spawn on a pathological map.
+    const pickFrom = (minDist, maxDist, requireLos) => {
       const candidates = [];
       for (const [, tile] of state.tiles) {
         if (!isPassable(tile)) continue;
         if (isOccupied(tile.col, tile.row)) continue;
         const d = hexDistance(tile.col, tile.row, hero.col, hero.row);
-        if (d >= minDist && d <= maxDist) candidates.push(tile);
+        if (d < minDist || d > maxDist) continue;
+        if (requireLos && !inSight(tile)) continue;
+        candidates.push(tile);
       }
       return candidates;
     };
-    // Prefer 2–3 hexes (visible but not adjacent). Widen if we must.
-    let candidates = pickFrom(2, 3);
-    if (candidates.length === 0) candidates = pickFrom(1, 4);
+    // Prefer 2–3 hexes IN SIGHT (visible but not adjacent). Widen the ring,
+    // then — only if the whole map is somehow blocked — drop the LOS gate.
+    let candidates = pickFrom(2, 3, true);
+    if (candidates.length === 0) candidates = pickFrom(1, 4, true);
+    if (candidates.length === 0) candidates = pickFrom(1, 4, false);
     if (candidates.length === 0) return null;
     const t = candidates[Math.floor(Math.random() * candidates.length)];
     return { col: t.col, row: t.row };
@@ -661,6 +752,11 @@ export class Campaign {
     // dict-of-objects shape as unit backpacks and the live faction inventory.
     this.weapons           = {};
     this.storyFlags        = {};
+    // Persisted active-party selection: roster indices the player has marked
+    // "active" (deployed) on the Party Management / Progress screen. Held here so
+    // it round-trips through save()/load() per campaign+slot instead of evaporating
+    // on reload. Sanitized against the live roster on read via getActiveParty().
+    this.activeParty       = [];
     this.updatedAt         = Date.now();
   }
 
@@ -678,6 +774,7 @@ export class Campaign {
       weapons:           { ...this.weapons },
       heroStats:         JSON.parse(JSON.stringify(this.heroStats)),
       storyFlags:        { ...this.storyFlags },
+      activeParty:       Array.isArray(this.activeParty) ? [...this.activeParty] : [],
       updatedAt:         this.updatedAt,
     };
     localStorage.setItem(`brimstone-${this.saveSlot}`, JSON.stringify(data));
@@ -719,6 +816,11 @@ export class Campaign {
     if (this.heroStats.level == null) this.heroStats.level = 1;
     if (this.heroStats.xp == null) this.heroStats.xp = 0;
     this.storyFlags        = migrated.storyFlags ?? {};
+    // Persisted active-party selection. Stored as a plain index array; sanitized
+    // against the live roster lazily on read (getActiveParty), so a roster that
+    // shrank since the save was written degrades gracefully rather than indexing
+    // out of bounds.
+    this.activeParty       = Array.isArray(migrated.activeParty) ? [...migrated.activeParty] : [];
     this.updatedAt         = migrated.updatedAt ?? Date.now();
     // Persist the migrated form so we don't re-migrate every load.
     if (migrated.version !== savedVersion) this.save();
@@ -988,14 +1090,30 @@ export class Campaign {
    * Apply the result of a completed mission.
    * @param {string} missionId
    * @param {object} result - { won, survivors[], resources, heroStats, flags }
+   * @returns {{won:boolean, rewards:{survivors:object[], resources:Object<string,number>}}}
+   *   On a WIN, `rewards` summarises what the mission GRANTED this run — the
+   *   granted survivor snapshots (full icon/stats/abilities, for the debrief's
+   *   Rewards section) and the positive resource deltas applied. Empty arrays/
+   *   object when the mission has no `rewards` block. On a LOSS, `won:false` and
+   *   an empty reward summary (the party is restored — nothing is granted).
    */
   applyMissionResult(missionId, result) {
     // On defeat: no state changes — party is restored to pre-mission state
-    if (!result.won) return;
+    if (!result.won) return { won: false, rewards: { survivors: [], resources: {} } };
 
     const missionDef = this.getMissionDef(missionId);
 
     this.completedMissions.add(missionId);
+    // Data-driven completion fan-out: a mission may also mark other mission ids
+    // complete on win (`alsoCompletes: [...]`). Used so beating "The Awakening"
+    // after skipping the tutorial still flags the tutorial as done, keeping
+    // progression/unlock gates consistent. Idempotent — a Set add is a no-op for
+    // an already-completed id.
+    if (Array.isArray(missionDef?.alsoCompletes)) {
+      for (const id of missionDef.alsoCompletes) {
+        if (id) this.completedMissions.add(id);
+      }
+    }
     this.currentMission = this.getNextMission() ?? missionId;
 
     // Permadeath: replace roster with only surviving survivors
@@ -1045,10 +1163,25 @@ export class Campaign {
       }
     }
 
-    // Apply mission rewards
+    // Apply mission rewards. Numeric keys top up `resources`; the reserved
+    // `survivors` key (an array of { name? } specs) grants roster survivors —
+    // the reusable post-mission survivor-reward hook (see grantRewardSurvivors).
+    // Granting runs AFTER the roster is rebuilt above so the new ally survives
+    // the permadeath reconcile, and after the heal bonus so a freshly-granted
+    // survivor starts at full HP rather than over-healed.
+    //
+    // `rewardSummary` captures what was granted so the caller (the debrief)
+    // can SHOW it — the granted survivor snapshots (rendered as full cards) and
+    // the positive resource deltas applied this run.
+    const rewardSummary = { survivors: [], resources: {} };
     if (missionDef?.rewards) {
       for (const [key, val] of Object.entries(missionDef.rewards)) {
+        if (key === 'survivors') continue; // handled below — not a resource
         this.resources[key] = (this.resources[key] ?? 0) + val;
+        if (val) rewardSummary.resources[key] = val;
+      }
+      if (Array.isArray(missionDef.rewards.survivors)) {
+        rewardSummary.survivors = this.grantRewardSurvivors(missionDef.rewards.survivors);
       }
     }
 
@@ -1058,6 +1191,57 @@ export class Campaign {
     }
 
     this.save();
+
+    return { won: true, rewards: rewardSummary };
+  }
+
+  /**
+   * Grant survivors as a post-mission reward — the reusable data-driven hook
+   * behind a mission's `rewards.survivors` block. Each spec is `{ name? }`:
+   *   • a named spec adds THAT SURVIVOR_ROSTER character (so a mission can
+   *     promise a specific ally);
+   *   • a nameless / unknown-name spec adds a RANDOM roster character not
+   *     already in the party or fallen (so "a new survivor joins you" works
+   *     regardless of who was discovered mid-mission).
+   * Already-rostered and permadead (fallen) survivors are never granted, so the
+   * reward never duplicates a party member or resurrects a mourned one. Does NOT
+   * save on its own — the caller (applyMissionResult) persists afterward.
+   *
+   * @param {{name?:string}[]} specs
+   * @returns {object[]} the roster snapshots actually granted (in order) — the
+   *   same objects pushed onto `roster`, so the debrief can render each as a full
+   *   survivor card (icon/stats/abilities) without re-deriving from the name.
+   */
+  grantRewardSurvivors(specs) {
+    if (!Array.isArray(specs)) return [];
+    const granted = [];
+    // Names already spoken for: current party + the mourned dead + any granted
+    // earlier in this same call — so repeated nameless specs draw distinct allies.
+    const taken = new Set([
+      ...this.roster.map(s => s.name),
+      ...this.fallen.map(f => f.name),
+    ]);
+    for (const spec of specs) {
+      let snapshot = null;
+      const wanted = spec?.name;
+      if (wanted && !taken.has(wanted)) {
+        snapshot = rosterSnapshotFromName(wanted);
+      }
+      if (!snapshot) {
+        // Random pick from roster characters not already taken.
+        const candidates = SURVIVOR_ROSTER
+          .map(c => c.name)
+          .filter(n => !taken.has(n));
+        if (candidates.length === 0) continue; // roster exhausted — nothing to grant
+        const name = candidates[Math.floor(Math.random() * candidates.length)];
+        snapshot = rosterSnapshotFromName(name);
+      }
+      if (!snapshot) continue;
+      taken.add(snapshot.name);
+      this.roster.push(snapshot);
+      granted.push(snapshot);
+    }
+    return granted;
   }
 
   /**
@@ -1092,6 +1276,56 @@ export class Campaign {
    */
   fallenSurvivorNameSet() {
     return new Set(this.fallen.map(f => f.name));
+  }
+
+  /**
+   * Sanitize an arbitrary list of roster indices against the current roster:
+   * coerce to integers, drop anything out of range, and de-duplicate while
+   * preserving order. The single chokepoint for "which indices are valid right
+   * now" — shared by setActiveParty (write) and getActiveParty (read) so a
+   * roster that shrank (permadeath) can never surface a stale index.
+   * @param {number[]} indices
+   * @returns {number[]} valid, unique roster indices in original order.
+   */
+  _sanitizeRosterIndices(indices) {
+    if (!Array.isArray(indices)) return [];
+    const size = Array.isArray(this.roster) ? this.roster.length : 0;
+    const seen = new Set();
+    const out = [];
+    for (const raw of indices) {
+      const i = Math.floor(Number(raw));
+      if (!Number.isFinite(i) || i < 0 || i >= size) continue;
+      if (seen.has(i)) continue;
+      seen.add(i);
+      out.push(i);
+    }
+    return out;
+  }
+
+  /**
+   * Record the player's active-party (deployed roster) selection and persist it.
+   * Indices are sanitized against the current roster before storing, so the saved
+   * blob never carries an out-of-range or duplicate index. Persists immediately
+   * (the screen mutates one unit at a time, like the heal/equip helpers).
+   * @param {number[]} indices  roster indices to mark active/deployed.
+   */
+  setActiveParty(indices) {
+    this.activeParty = this._sanitizeRosterIndices(indices);
+    this.save();
+  }
+
+  /**
+   * The persisted active-party selection, sanitized against the current roster
+   * and clamped to `maxActive`. Sanitizing on read (not just on write) means a
+   * save written before the roster shrank — or one loaded from another build —
+   * degrades gracefully to whatever indices still exist.
+   * @param {number} [maxActive]  optional cap (e.g. the mission/screen squad cap).
+   * @returns {number[]} valid active roster indices, length ≤ maxActive.
+   */
+  getActiveParty(maxActive = Infinity) {
+    const valid = this._sanitizeRosterIndices(this.activeParty);
+    const cap = Number.isFinite(maxActive) ? Math.max(0, Math.floor(maxActive)) : valid.length;
+    return valid.slice(0, cap);
   }
 
   /**
@@ -1297,6 +1531,7 @@ export class Campaign {
       weapons:           this.weapons,
       heroStats:         this.heroStats,
       storyFlags:        this.storyFlags,
+      activeParty:       Array.isArray(this.activeParty) ? [...this.activeParty] : [],
       updatedAt:         this.updatedAt,
     };
     try {
@@ -1344,6 +1579,7 @@ export class Campaign {
     if (this.heroStats.level == null) this.heroStats.level = 1;
     if (this.heroStats.xp == null) this.heroStats.xp = 0;
     this.storyFlags        = migrated.storyFlags ?? {};
+    this.activeParty       = Array.isArray(migrated.activeParty) ? [...migrated.activeParty] : [];
     this.updatedAt         = migrated.updatedAt ?? Date.now();
     this.save(); // persist to localStorage
     return true;
@@ -1431,6 +1667,18 @@ export function _migrate(data, fromVersion) {
       version: 7,
     };
     v = 7;
+  }
+
+  // v7 → v8: persisted active-party selection. Backfill an empty `activeParty[]`
+  // — pre-v8 saves never recorded the deployed squad (it lived in memory only),
+  // so on first load the squad re-seeds from the front of the roster as before.
+  if (v === 7) {
+    out = {
+      ...out,
+      activeParty: Array.isArray(out.activeParty) ? out.activeParty : [],
+      version: 8,
+    };
+    v = 8;
   }
 
   return out;

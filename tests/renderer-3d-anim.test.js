@@ -61,6 +61,7 @@ import {
   applyFlatUnitIconMaterial,
   floatingTextTransform,
   projectileColor01,
+  projectileStyle,
 } from '../src/renderer-3d.js';
 
 // ─── Stubbed-Babylon harness (lunge easing + despawn-protection tests) ──────
@@ -628,18 +629,19 @@ describe('Renderer3D Phase 5 — floatingTextTransform (rise + fade)', () => {
 // ─── projectileColor01 ──────────────────────────────────────────────────────
 
 describe('Renderer3D Phase 5 — projectile colour table', () => {
-  test('witch sparkle projectile is greenish', () => {
+  test('witch sparkle (Magic Bolt) projectile is PURPLE', () => {
+    // Purple = blue-dominant with strong red, low-ish green. The historical
+    // green colour was a bug; the witch's magic must read as purple energy.
     const [r, g, b] = projectileColor01('sparkle');
-    assert.ok(g > r && g > b,
-      `expected green-dominant, got rgb(${r}, ${g}, ${b})`);
+    assert.ok(b > g && r > g,
+      `expected purple (blue & red over green), got rgb(${r}, ${g}, ${b})`);
   });
 
-  test('hero arrow/crossbow projectile is brownish (red dominant)', () => {
-    for (const t of ['arrow', 'crossbow']) {
-      const [r, g, b] = projectileColor01(t);
-      assert.ok(r > g && r > b,
-        `expected red-dominant for ${t}, got rgb(${r}, ${g}, ${b})`);
-    }
+  test('bow/crossbow bolt projectile is a warm/bright tan (not green)', () => {
+    const [r, g, b] = projectileColor01('bolt');
+    assert.ok(r >= g && g >= b,
+      `expected warm tan (r ≥ g ≥ b), got rgb(${r}, ${g}, ${b})`);
+    assert.ok(!(g > r && g > b), 'bolt must not be green-dominant');
   });
 
   test('unknown projectile type falls back to a neutral colour (no throw)', () => {
@@ -650,6 +652,34 @@ describe('Renderer3D Phase 5 — projectile colour table', () => {
   test('null/undefined safe', () => {
     assert.doesNotThrow(() => projectileColor01(null));
     assert.doesNotThrow(() => projectileColor01(undefined));
+  });
+});
+
+// ─── projectileStyle ────────────────────────────────────────────────────────
+
+describe('Renderer3D — projectile style (type → effect family)', () => {
+  test('witch Magic Bolt maps to the purple "magic" particle effect', () => {
+    const s = projectileStyle('sparkle');
+    assert.equal(s.effect, 'magic');
+    const [r, g, b] = s.color01;
+    assert.ok(b > g && r > g, `magic colour should be purple, got rgb(${r}, ${g}, ${b})`);
+  });
+
+  test('bows/crossbows/firearms ("bolt") map to the "streak" effect', () => {
+    const s = projectileStyle('bolt');
+    assert.equal(s.effect, 'streak');
+  });
+
+  test('unknown types fall back to a plain "orb"', () => {
+    assert.equal(projectileStyle('mystery').effect, 'orb');
+    assert.equal(projectileStyle(null).effect, 'orb');
+    assert.equal(projectileStyle(undefined).effect, 'orb');
+  });
+
+  test('projectileColor01 stays consistent with projectileStyle().color01', () => {
+    for (const t of ['sparkle', 'bolt', 'orb', null, undefined, 'nope']) {
+      assert.deepEqual(projectileColor01(t), projectileStyle(t).color01);
+    }
   });
 });
 

@@ -450,6 +450,8 @@ export class HeroFaction extends Faction {
   _applyNodeSurvivorSpawning(state) {
     state.nodeSpawnedSurvivors = [];
     if (state.phase !== Phase.NIGHT) return;
+    // Campaign opt-out: a mission can disable the node's "call to the living".
+    if (state.disableNodeSurvivorSpawn) return;
 
     const heroLeaders = state.entities.filter(
       e => e.alive && e.owner === 'hero' && isLeaderType(e.type)
@@ -599,6 +601,9 @@ export class WitchFaction extends Faction {
   }
 
   _applyGraveyardSpawns(state) {
+    // Campaign opt-out: a mission can disable the witch's periodic zombie
+    // support troop (the graveyard reinforcement that serves the night side).
+    if (state.disableWitchSupport) return;
     // endRound() fires effects BEFORE the round counter advances, so
     // state.round is the round that just completed.
     if (state.round <= 0 || state.round % GRAVEYARD_SPAWN_INTERVAL !== 0) return;

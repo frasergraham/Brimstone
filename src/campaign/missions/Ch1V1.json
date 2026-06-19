@@ -15,7 +15,7 @@
   "healBonus": 25,
   "requires": ["dark_ritual"],
   "rewards": { "food": 2, "herbs": 1 },
-  "map": { "mode": "procedural", "seed": 31001, "mapSize": "skirmish", "nodeCount": 2 },
+  "map": { "mode": "procedural", "seed": 31002, "mapSize": "skirmish", "nodeCount": 2 },
   "objectives": {
     "win": [
       { "type": "slay_witch" },

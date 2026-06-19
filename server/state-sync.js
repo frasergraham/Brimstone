@@ -150,6 +150,10 @@ export function serializeState(state) {
     disableScoring:       !!state.disableScoring,
     disableCycleBar:      !!state.disableCycleBar,
     disableScoreWin:      !!state.disableScoreWin,
+    // Campaign opt-outs for the two ambient per-side spawn mechanics — must
+    // survive the wire / mid-mission resume so the mission stays consistent.
+    disableNodeSurvivorSpawn: !!state.disableNodeSurvivorSpawn,
+    disableWitchSupport:      !!state.disableWitchSupport,
     nodeScoreThreshold:   state.nodeScoreThreshold ?? 4,
     noWitchMission:       !!state.noWitchMission,
     gameMode:             state.gameMode ?? 'standard',
@@ -173,6 +177,9 @@ export function serializeState(state) {
     fallenSurvivorNames:      [...(state.fallenSurvivorNames ?? [])],
     // Campaign-only flag — gates XP/veterancy. Must survive mid-mission resume.
     isCampaign:               !!state.isCampaign,
+    // Mission Log header text (Show-only). Round-tripped so a resumed campaign
+    // mission keeps its briefing above the objectives.
+    missionBriefing:          state.missionBriefing ?? '',
     log:                  [...state.log],
     witchObjectives:      state.witchObjectives.map(o => ({
       col:        o.col,
@@ -410,12 +417,15 @@ export function deserializeState(snap) {
   state.disableScoring       = !!snap.disableScoring;
   state.disableCycleBar      = !!snap.disableCycleBar;
   state.disableScoreWin      = !!snap.disableScoreWin;
+  state.disableNodeSurvivorSpawn = !!snap.disableNodeSurvivorSpawn;
+  state.disableWitchSupport      = !!snap.disableWitchSupport;
   state.nodeScoreThreshold   = snap.nodeScoreThreshold ?? 4;
   state.noWitchMission       = !!snap.noWitchMission;
   state.maxDiscoverableSurvivors = snap.maxDiscoverableSurvivors ?? null;
   state.discoveredSurvivorCount  = snap.discoveredSurvivorCount  ?? 0;
   state.fallenSurvivorNames      = new Set(snap.fallenSurvivorNames ?? []);
   state.isCampaign               = !!snap.isCampaign;
+  state.missionBriefing          = snap.missionBriefing ?? '';
   state.log                  = [...snap.log];
   state.witchObjectives      = snap.witchObjectives.map(o => ({
     col:        o.col,
