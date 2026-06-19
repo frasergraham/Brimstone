@@ -82,6 +82,12 @@ import {
 import { requestNotificationPermission, notifyRoundReady, notifyWaitingOnYou, notifyDeadlineApproaching, notifyGameOver } from './notifications.js';
 import { mmSortRows, mmFormatRow, mmDedupeCampaignRows } from './main-menu-games.js';
 
+// Detached sink that absorbs writes to legacy menu elements removed at the ledger
+// cutover. A handful of still-wired online/battle/waiting handlers target those
+// (now-absent) elements at message-time; `getElementById('x') || _legacyEl` keeps
+// them from throwing. The ledger owns the real UI; these writes are inert.
+const _legacyEl = document.createElement('div');
+
 // Stamp version into the legacy badge if present (the live menu is the ledger).
 { const _vb = document.getElementById('version-badge'); if (_vb) _vb.textContent = `v${BUILD_VERSION}`; }
 
@@ -3527,6 +3533,8 @@ function showStep(step) {
 // changelog, etc.) we leave the user where they are so a silent reconnect
 // doesn't kick them out of the menu they were browsing.
 function _isOnOnlineFlow() {
+  // Legacy menu steps removed at cutover — the ledger is never "on" them.
+  if (!stepOnline) return false;
   return stepOnline.style.display !== 'none' ||
          stepLobby.style.display !== 'none' ||
          stepCreateGame.style.display !== 'none' ||
@@ -3534,6 +3542,7 @@ function _isOnOnlineFlow() {
          stepWaiting.style.display !== 'none';
 }
 function _isOnAsyncFlow() {
+  if (!stepAsync) return false;
   return stepAsync.style.display !== 'none' ||
          stepAsyncCreate.style.display !== 'none' ||
          stepAsyncCreated.style.display !== 'none' ||
@@ -3917,7 +3926,7 @@ function _renderCampaignProgressScreen() {
   if (!_activeCampaign) return;
   const campaignDef = _activeCampaign.campaignDef;
   const titleEl = document.getElementById('campaign-progress-title');
-  if (titleEl) titleEl.textContent = campaignDef.title;
+  if (titleEl) (titleEl || _legacyEl).textContent = campaignDef.title;
 
   const maxActive = _progressMaxActive();
   // Drop any stale/out-of-range indices, then clamp to the current cap.
@@ -3929,7 +3938,7 @@ function _renderCampaignProgressScreen() {
   const partyEl = document.getElementById('campaign-progress-party');
   if (partyEl) {
     const missionTitleResolver = (id) => _activeCampaign.getMissionDef(id)?.title ?? id;
-    partyEl.innerHTML = _partyPaneHTML(
+    (partyEl || _legacyEl).innerHTML = _partyPaneHTML(
       _activeCampaign.heroStats, _activeCampaign.roster,
       _activeRosterIndices, maxActive,
       { resources: _activeCampaign.resources, weapons: _activeCampaign.weapons },
@@ -3940,14 +3949,14 @@ function _renderCampaignProgressScreen() {
   const missionsEl = document.getElementById('campaign-progress-missions');
   if (missionsEl) {
     const rows = _missionRows(_activeCampaign, _campaignUnlocked);
-    missionsEl.innerHTML = _missionListPaneHTML(campaignDef.title, rows);
+    (missionsEl || _legacyEl).innerHTML = _missionListPaneHTML(campaignDef.title, rows);
   }
 
   // Mobile pane visibility.
   const bodyEl = document.getElementById('campaign-progress-body');
   if (bodyEl) {
-    bodyEl.classList.toggle('show-party', _progressPane === 'party');
-    bodyEl.classList.toggle('show-missions', _progressPane === 'missions');
+    (bodyEl || _legacyEl).classList.toggle('show-party', _progressPane === 'party');
+    (bodyEl || _legacyEl).classList.toggle('show-missions', _progressPane === 'missions');
   }
   document.querySelectorAll('.cprog-toggle-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.pane === _progressPane);
@@ -4073,7 +4082,7 @@ function _renderDeployRoster(heroStats, roster, maxActive) {
   html += '</div>';
 
   if (roster.length === 0) {
-    rosterEl.innerHTML = html;
+    (rosterEl || _legacyEl).innerHTML = html;
     return;
   }
 
@@ -4107,10 +4116,10 @@ function _renderDeployRoster(heroStats, roster, maxActive) {
   // Admin: add random survivor
   html += `<button id="btn-admin-add-survivor" class="admin-btn admin-add-btn" title="Add random survivor (testing)" style="margin-top:0.3rem">+</button>`;
 
-  rosterEl.innerHTML = html;
+  (rosterEl || _legacyEl).innerHTML = html;
 
   // Wire +/- buttons
-  rosterEl.querySelectorAll('.roster-promote').forEach(btn => {
+  (rosterEl || _legacyEl).querySelectorAll('.roster-promote').forEach(btn => {
     btn.addEventListener('click', () => {
       const idx = parseInt(btn.dataset.idx);
       if (_activeRosterIndices.length < maxActive && !_activeRosterIndices.includes(idx)) {
@@ -4119,7 +4128,7 @@ function _renderDeployRoster(heroStats, roster, maxActive) {
       }
     });
   });
-  rosterEl.querySelectorAll('.roster-demote').forEach(btn => {
+  (rosterEl || _legacyEl).querySelectorAll('.roster-demote').forEach(btn => {
     btn.addEventListener('click', () => {
       const idx = parseInt(btn.dataset.idx);
       _activeRosterIndices = _activeRosterIndices.filter(i => i !== idx);
@@ -4146,21 +4155,21 @@ function _showMissionBriefing(missionId) {
   const navEl = document.getElementById('campaign-nav');
   const rosterEl = document.getElementById('campaign-roster-summary');
 
-  listEl.style.display = 'none';
-  navEl.style.display = 'none';
-  briefEl.style.display = '';
+  (listEl || _legacyEl).style.display = 'none';
+  (navEl || _legacyEl).style.display = 'none';
+  (briefEl || _legacyEl).style.display = '';
   // The briefing's deploy roster is rendered below; ensure its host is visible.
   // (Reaching the briefing from the Progress screen bypasses _renderCampaignScreen,
   // which previously un-hid this element.)
-  if (rosterEl) rosterEl.style.display = '';
+  if (rosterEl) (rosterEl || _legacyEl).style.display = '';
 
   // The shared header reads "CAMPAIGN" by default; show the chapter title so the
   // briefing isn't unlabeled when entered straight from the Progress screen.
   const titleEl = document.getElementById('campaign-title');
-  if (titleEl && _activeCampaign?.campaignDef) titleEl.textContent = _activeCampaign.campaignDef.title;
+  if (titleEl && _activeCampaign?.campaignDef) (titleEl || _legacyEl).textContent = _activeCampaign.campaignDef.title;
 
-  document.getElementById('campaign-mission-title').textContent = missionDef.title;
-  document.getElementById('campaign-mission-text').textContent = missionDef.briefing;
+  (document.getElementById('campaign-mission-title') || _legacyEl).textContent = missionDef.title;
+  (document.getElementById('campaign-mission-text') || _legacyEl).textContent = missionDef.briefing;
 
   // Show Resume/Restart buttons if a mid-mission save exists
   const hasMissionSave = loadCampaignMissionSave(_activeCampaign.campaignDef.id, missionId, _activeCampaign.slotIndex) !== null;
@@ -4168,13 +4177,13 @@ function _showMissionBriefing(missionId) {
   const resumeBtn = document.getElementById('btn-resume-mission');
   const restartBtn = document.getElementById('btn-restart-mission');
   if (hasMissionSave) {
-    startBtn.style.display = 'none';
-    resumeBtn.style.display = '';
-    restartBtn.style.display = '';
+    (startBtn || _legacyEl).style.display = 'none';
+    (resumeBtn || _legacyEl).style.display = '';
+    (restartBtn || _legacyEl).style.display = '';
   } else {
-    startBtn.style.display = '';
-    resumeBtn.style.display = 'none';
-    restartBtn.style.display = 'none';
+    (startBtn || _legacyEl).style.display = '';
+    (resumeBtn || _legacyEl).style.display = 'none';
+    (restartBtn || _legacyEl).style.display = 'none';
   }
 
   // Objectives — a fully logic-graph-driven mission (docs/09) has no declarative
@@ -4182,7 +4191,7 @@ function _showMissionBriefing(missionId) {
   const objEl = document.getElementById('campaign-objectives');
   const winDesc = _objectiveDescription(missionDef.objectives?.win) || 'Complete the mission';
   const loseDesc = _objectiveDescription(missionDef.objectives?.lose) || 'The hero falls';
-  objEl.innerHTML = `
+  (objEl || _legacyEl).innerHTML = `
     <div class="campaign-obj"><span class="campaign-obj-icon">☀</span> <strong>Victory:</strong> ${winDesc}</div>
     <div class="campaign-obj"><span class="campaign-obj-icon">💀</span> <strong>Defeat:</strong> ${loseDesc}</div>
   `;
@@ -4865,12 +4874,12 @@ function _handleCampaignMissionEnd() {
 
   const title = won ? 'VICTORY' : 'DEFEAT';
   const text = won ? (missionDef.victoryText || 'Mission complete.') : (missionDef.defeatText || 'Mission failed.');
-  document.getElementById('debrief-title').textContent = title;
-  document.getElementById('debrief-text').textContent = text;
+  (document.getElementById('debrief-title') || _legacyEl).textContent = title;
+  (document.getElementById('debrief-text') || _legacyEl).textContent = text;
 
   // Stats
   const statsEl = document.getElementById('debrief-stats');
-  statsEl.innerHTML = `
+  (statsEl || _legacyEl).innerHTML = `
     <div>Rounds: ${state.round}</div>
     <div>Kills: ${state.heroKills}</div>
     <div>Survivors remaining: ${survivors.length}</div>
@@ -4878,7 +4887,7 @@ function _handleCampaignMissionEnd() {
 
   // Heal bonus notice
   if (won && missionDef.healBonus) {
-    statsEl.insertAdjacentHTML('afterend',
+    (statsEl || _legacyEl).insertAdjacentHTML('afterend',
       `<div class="debrief-heal">✦ Rest bonus: all survivors healed +${missionDef.healBonus} HP</div>`);
   }
 
@@ -4894,7 +4903,7 @@ function _handleCampaignMissionEnd() {
   // fallen are shown on the Progress screen; the debrief focuses on who was lost
   // THIS mission so the loss lands. Empty → no section.
   const missionTitleResolver = (id) => _activeCampaign.getMissionDef(id)?.title ?? id;
-  rosterEl.innerHTML = `<h3>${rosterHeading}</h3>` +
+  (rosterEl || _legacyEl).innerHTML = `<h3>${rosterHeading}</h3>` +
     _campaignPartyHTML(heroSnap, survivors) +
     _fallenSectionHTML(newlyFallen, missionTitleResolver);
 
@@ -5150,7 +5159,7 @@ function _renderSpSaves() {
   const section = document.getElementById('mm-sp-section');
   if (!list) return;
   const rows = _localSpRows();
-  if (section) section.style.display = rows.length ? '' : 'none';
+  if (section) (section || _legacyEl).style.display = rows.length ? '' : 'none';
   _renderMmList(list, rows, {
     emptyHtml: '',
     actionsFor: (row) => [
@@ -5217,7 +5226,7 @@ async function _fetchActiveSaves() {
 
   const session = loadSession();
   if (!session) {
-    if (section) section.style.display = 'none';
+    if (section) (section || _legacyEl).style.display = 'none';
     return;
   }
 
@@ -5226,7 +5235,7 @@ async function _fetchActiveSaves() {
     const filtered = rows.filter(
       (row) => row.kind === 'game' || row.kind === 'battle' || row.kind === 'battle-invite',
     );
-    if (section) section.style.display = filtered.length ? '' : 'none';
+    if (section) (section || _legacyEl).style.display = filtered.length ? '' : 'none';
     _renderMmList(list, rows, {
       filter: (row) => row.kind === 'game' || row.kind === 'battle' || row.kind === 'battle-invite',
       emptyHtml: '',
@@ -5255,7 +5264,7 @@ async function _fetchActiveSaves() {
       },
     });
   } catch {
-    if (section) section.style.display = 'none';
+    if (section) (section || _legacyEl).style.display = 'none';
   }
 }
 
@@ -5376,8 +5385,8 @@ function _resignLocalGame(humanFaction) {
 function _resumeSave(roomId) {
   _ensureAuthed(() => {
     showStep('waiting');
-    document.getElementById('waiting-subtitle').textContent = 'Rejoining game…';
-    document.getElementById('waiting-message').textContent  = 'Reconnecting to your game…';
+    (document.getElementById('waiting-subtitle') || _legacyEl).textContent = 'Rejoining game…';
+    (document.getElementById('waiting-message') || _legacyEl).textContent  = 'Reconnecting to your game…';
     mp.resumeSave(roomId);
   });
 }
@@ -5395,11 +5404,11 @@ function _timeAgo(unixSecs) {
 function _fetchAsyncGames() {
   const list = document.getElementById('async-games-list');
   if (!list) return;
-  list.innerHTML = '<p class="saves-empty">Loading…</p>';
+  (list || _legacyEl).innerHTML = '<p class="saves-empty">Loading…</p>';
 
   const session = loadSession();
   if (!session) {
-    list.innerHTML = '<p class="saves-empty">Sign in to see async games.</p>';
+    (list || _legacyEl).innerHTML = '<p class="saves-empty">Sign in to see async games.</p>';
     return;
   }
 
@@ -5408,7 +5417,7 @@ function _fetchAsyncGames() {
     .then(r => r.json())
     .then(games => _renderAsyncGames(games))
     .catch(() => {
-      list.innerHTML = '<p class="saves-empty">Could not load async games.</p>';
+      (list || _legacyEl).innerHTML = '<p class="saves-empty">Could not load async games.</p>';
     });
 }
 
@@ -5451,11 +5460,11 @@ function _renderAsyncGames(games) {
   const list = document.getElementById('async-games-list');
 
   if (!games.length) {
-    list.innerHTML = '<p class="saves-empty">No async games.</p>';
+    (list || _legacyEl).innerHTML = '<p class="saves-empty">No async games.</p>';
     return;
   }
 
-  list.innerHTML = '';
+  (list || _legacyEl).innerHTML = '';
   for (const g of games) {
     const factionSymbol = g.my_faction === 'hero' ? '⚔' : '✦';
     const phaseLabel = { dawn: 'Dawn', day: 'Day', dusk: 'Dusk', night: 'Night' }[g.phase] ?? g.phase;
@@ -5520,7 +5529,7 @@ function _renderAsyncGames(games) {
     delBtn.addEventListener('click', (e) => { e.stopPropagation(); _deleteAsyncGame(g.room_id); });
     entry.appendChild(delBtn);
 
-    list.appendChild(entry);
+    (list || _legacyEl).appendChild(entry);
   }
 }
 
@@ -5970,7 +5979,7 @@ async function _fetchMainMenuGames() {
   // collapses to nothing on mobile — show a placeholder instead. (Signed-out
   // users simply see no online games — the persistent footer "Sign In" button
   // is the single sign-in entry point.)
-  if (section) section.style.display = '';
+  if (section) (section || _legacyEl).style.display = '';
 
   _renderMmList(list, rows, {
     maxRows: 5,
@@ -5980,7 +5989,7 @@ async function _fetchMainMenuGames() {
 
   // Restart the countdown timer if any visible rows have deadlines
   _stopMmCountdown();
-  if (list.querySelector('.mm-countdown[data-deadline]')) {
+  if ((list || _legacyEl).querySelector('.mm-countdown[data-deadline]')) {
     _mmCountdownTimer = setInterval(_tickMmCountdowns, 1000);
   }
 }
@@ -5995,7 +6004,7 @@ async function _fetchMainMenuGames() {
 async function _renderReplaysList() {
   const list = document.getElementById('mm-replays-list');
   if (!list) return;
-  list.innerHTML = '<p class="mm-games-empty">Loading…</p>';
+  (list || _legacyEl).innerHTML = '<p class="mm-games-empty">Loading…</p>';
 
   const rows = [];
 
@@ -6146,7 +6155,7 @@ function _fetchMainMenuAsyncGames() {
   if (!box || !list) return;
 
   const session = loadSession();
-  if (!session) { box.style.display = 'none'; return; }
+  if (!session) { (box || _legacyEl).style.display = 'none'; return; }
 
   const base = window.BRIMSTONE_SERVER || '';
   fetch(`${base}/api/async-games?token=${encodeURIComponent(session.token)}`)
@@ -6157,10 +6166,10 @@ function _fetchMainMenuAsyncGames() {
         (g.status === 'playing' && !g.my_plan_submitted) ||
         (g.status === 'waiting' && !g.my_plan_submitted)
       );
-      if (!actionable.length) { box.style.display = 'none'; return; }
+      if (!actionable.length) { (box || _legacyEl).style.display = 'none'; return; }
 
-      box.style.display = '';
-      list.innerHTML = '';
+      (box || _legacyEl).style.display = '';
+      (list || _legacyEl).innerHTML = '';
       for (const g of actionable) {
         const factionSymbol = g.my_faction === 'hero' ? '⚔' : '✦';
         const item = document.createElement('div');
@@ -6178,10 +6187,10 @@ function _fetchMainMenuAsyncGames() {
         item.addEventListener('click', () => {
           _ensureAuthed(() => _openAsyncGame(g.room_id));
         });
-        list.appendChild(item);
+        (list || _legacyEl).appendChild(item);
       }
     })
-    .catch(() => { box.style.display = 'none'; });
+    .catch(() => { (box || _legacyEl).style.display = 'none'; });
 }
 
 /** State for the currently open async game. */
@@ -6666,11 +6675,11 @@ function _renderCompletedSpGames() {
   _pruneCompletedSpGames();
   const index = _loadCompletedSpIndex();
   if (!index.length) {
-    list.innerHTML = '<p class="saves-empty">No completed games yet.</p>';
+    (list || _legacyEl).innerHTML = '<p class="saves-empty">No completed games yet.</p>';
     return;
   }
   const modeLabels = { hero: '⚔ vs AI', witch: '✦ vs AI', 'two-players': '👥 Two Players' };
-  list.innerHTML = '';
+  (list || _legacyEl).innerHTML = '';
   for (const g of index) {
     const winnerLabel = g.winner === 'hero' ? '⚔ Hero wins' : '✦ Witch wins';
     const ago = _timeAgo(g.createdAt);
@@ -6701,7 +6710,7 @@ function _renderCompletedSpGames() {
       _deleteCompletedSpGame(g.id);
       _renderCompletedSpGames();
     });
-    list.appendChild(entry);
+    (list || _legacyEl).appendChild(entry);
   }
 }
 
@@ -6772,11 +6781,11 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
 function _fetchCompletedGames() {
   const list = document.getElementById('mp-completed-list');
   if (!list) return;
-  list.innerHTML = '<p class="saves-empty">Loading…</p>';
+  (list || _legacyEl).innerHTML = '<p class="saves-empty">Loading…</p>';
 
   const session = loadSession();
   if (!session) {
-    list.innerHTML = '<p class="saves-empty">Sign in to see completed games.</p>';
+    (list || _legacyEl).innerHTML = '<p class="saves-empty">Sign in to see completed games.</p>';
     return;
   }
 
@@ -6785,7 +6794,7 @@ function _fetchCompletedGames() {
     .then(r => r.json())
     .then(games => _renderCompletedGames(games, session))
     .catch(() => {
-      list.innerHTML = '<p class="saves-empty">Could not load completed games.</p>';
+      (list || _legacyEl).innerHTML = '<p class="saves-empty">Could not load completed games.</p>';
     });
 }
 
@@ -6793,10 +6802,10 @@ function _renderCompletedGames(games, session) {
   const list = document.getElementById('mp-completed-list');
   if (!list) return;
   if (!games.length) {
-    list.innerHTML = '<p class="saves-empty">No completed games.</p>';
+    (list || _legacyEl).innerHTML = '<p class="saves-empty">No completed games.</p>';
     return;
   }
-  list.innerHTML = '';
+  (list || _legacyEl).innerHTML = '';
   const base = window.BRIMSTONE_SERVER || '';
   for (const g of games) {
     // Determine player count and title
@@ -6861,7 +6870,7 @@ function _renderCompletedGames(games, session) {
       });
       _fetchCompletedGames();
     });
-    list.appendChild(entry);
+    (list || _legacyEl).appendChild(entry);
   }
 }
 
@@ -6961,20 +6970,20 @@ async function _showBattleScreen() {
   const spectateBtn = document.getElementById('btn-battle-spectate');
 
   // Reset dynamic elements
-  joinBtn.style.display = 'none';
-  spectateBtn.style.display = 'none';
-  document.getElementById('battle-my-status').style.display = 'none';
-  document.getElementById('battle-game-info').style.display = 'none';
-  document.getElementById('battle-players-section').style.display = 'none';
+  (joinBtn || _legacyEl).style.display = 'none';
+  (spectateBtn || _legacyEl).style.display = 'none';
+  (document.getElementById('battle-my-status') || _legacyEl).style.display = 'none';
+  (document.getElementById('battle-game-info') || _legacyEl).style.display = 'none';
+  (document.getElementById('battle-players-section') || _legacyEl).style.display = 'none';
 
   if (!session) {
-    signedOut.style.display = '';
-    battleInfo.style.display = 'none';
+    (signedOut || _legacyEl).style.display = '';
+    (battleInfo || _legacyEl).style.display = 'none';
     return;
   }
-  signedOut.style.display = 'none';
-  battleInfo.style.display = '';
-  statusLine.textContent = 'Loading...';
+  (signedOut || _legacyEl).style.display = 'none';
+  (battleInfo || _legacyEl).style.display = '';
+  (statusLine || _legacyEl).textContent = 'Loading...';
 
   let _battleStatus = null;
   try {
@@ -6986,7 +6995,7 @@ async function _showBattleScreen() {
     _battleStatus = await res.json();
     const status = _battleStatus;
     if (!status) {
-      statusLine.textContent = 'No active battle right now. A new one will begin soon.';
+      (statusLine || _legacyEl).textContent = 'No active battle right now. A new one will begin soon.';
       return;
     }
 
@@ -6994,50 +7003,50 @@ async function _showBattleScreen() {
 
     if (my) {
       // ── Player is in a battle ─────────────────────────────────────────
-      statusLine.textContent = '';
+      (statusLine || _legacyEl).textContent = '';
 
       // Game info box — show the player's battle
       const gameInfo = document.getElementById('battle-game-info');
-      gameInfo.style.display = '';
-      document.getElementById('battle-hero-score').textContent = my.heroScore;
-      document.getElementById('battle-witch-score').textContent = my.witchScore;
+      (gameInfo || _legacyEl).style.display = '';
+      (document.getElementById('battle-hero-score') || _legacyEl).textContent = my.heroScore;
+      (document.getElementById('battle-witch-score') || _legacyEl).textContent = my.witchScore;
       const hLabel = my.heroCount === 1 ? 'hero' : 'heroes';
       const wLabel = my.witchCount === 1 ? 'witch' : 'witches';
       const battlesNote = status.totalBattles > 1 ? ` · ${status.totalBattles} battles active` : '';
-      document.getElementById('battle-meta-line').textContent =
+      (document.getElementById('battle-meta-line') || _legacyEl).textContent =
         `Round ${my.round} · ${my.heroCount} ${hLabel} vs ${my.witchCount} ${wLabel} · Ends in ${_formatTimeRemaining(status.endsAt)}${battlesNote}`;
 
       // Your status box
       const myBox = document.getElementById('battle-my-status');
-      myBox.style.display = '';
+      (myBox || _legacyEl).style.display = '';
       const fIcon = my.myFaction === 'hero' ? '⚔' : '✦';
       const fName = my.myFaction === 'hero' ? 'Hero' : 'Witch';
-      document.getElementById('battle-my-faction').innerHTML =
+      (document.getElementById('battle-my-faction') || _legacyEl).innerHTML =
         `<span style="color:var(--${my.myFaction})">${fIcon} Fighting as ${fName}</span>`;
       if (my.mySubmitted) {
-        document.getElementById('battle-my-plan-status').innerHTML =
+        (document.getElementById('battle-my-plan-status') || _legacyEl).innerHTML =
           '<span style="color:var(--green)">✓ Plan submitted</span>';
       } else {
-        document.getElementById('battle-my-plan-status').innerHTML =
+        (document.getElementById('battle-my-plan-status') || _legacyEl).innerHTML =
           '<span style="color:var(--day)">⚠ Plan not yet submitted</span>';
       }
       if (my.turnDeadline) {
         const deadlineEl = document.getElementById('battle-my-deadline');
         const secsLeft = my.turnDeadline - Math.floor(Date.now() / 1000);
-        deadlineEl.textContent = '⏱ Deadline in ' + _formatTimeRemaining(my.turnDeadline);
-        deadlineEl.style.color = secsLeft <= 1800 ? 'var(--red)' : 'var(--text-dim)';
+        (deadlineEl || _legacyEl).textContent = '⏱ Deadline in ' + _formatTimeRemaining(my.turnDeadline);
+        (deadlineEl || _legacyEl).style.color = secsLeft <= 1800 ? 'var(--red)' : 'var(--text-dim)';
       }
 
       // Action buttons
-      joinBtn.dataset.roomId = my.roomId;
-      spectateBtn.dataset.roomId = my.roomId;
-      joinBtn.style.display = '';
-      joinBtn.textContent = 'Return to Battle';
+      (joinBtn || _legacyEl).dataset.roomId = my.roomId;
+      (spectateBtn || _legacyEl).dataset.roomId = my.roomId;
+      (joinBtn || _legacyEl).style.display = '';
+      (joinBtn || _legacyEl).textContent = 'Return to Battle';
 
       // Player list (collapsible)
       const playersSection = document.getElementById('battle-players-section');
       if (my.players?.length > 0) {
-        playersSection.style.display = '';
+        (playersSection || _legacyEl).style.display = '';
         const playerData = my.players.map(p => ({
           playerId: p.playerId, name: p.name, faction: p.faction,
           color: p.color,
@@ -7046,10 +7055,10 @@ async function _showBattleScreen() {
         }));
         const myPlayerId = mp?.myPlayerId ?? session?.id ?? null;
         const nudgeCtx = myPlayerId ? { myPlayerId, nudgedSet: new Set() } : undefined;
-        document.getElementById('battle-players-list').innerHTML = buildPlayerStatusHtml(playerData, nudgeCtx);
+        (document.getElementById('battle-players-list') || _legacyEl).innerHTML = buildPlayerStatusHtml(playerData, nudgeCtx);
 
         // Wire nudge buttons
-        document.getElementById('battle-players-list').addEventListener('click', (e) => {
+        (document.getElementById('battle-players-list') || _legacyEl).addEventListener('click', (e) => {
           const btn = e.target.closest('.nudge-btn[data-nudge-id]');
           if (!btn || btn.disabled) return;
           const targetId = btn.dataset.nudgeId;
@@ -7063,36 +7072,36 @@ async function _showBattleScreen() {
     } else if (status.allFull) {
       // ── All battles are full ──────────────────────────────────────────
       const n = status.totalBattles;
-      statusLine.textContent = `${n} battle${n !== 1 ? 's' : ''} in progress — all full`;
-      spectateBtn.style.display = '';
+      (statusLine || _legacyEl).textContent = `${n} battle${n !== 1 ? 's' : ''} in progress — all full`;
+      (spectateBtn || _legacyEl).style.display = '';
       // Pick any room for spectating
-      if (status.battles.length > 0) spectateBtn.dataset.roomId = status.battles[0].roomId;
+      if (status.battles.length > 0) (spectateBtn || _legacyEl).dataset.roomId = status.battles[0].roomId;
     } else {
       // ── Player can join ───────────────────────────────────────────────
       const n = status.totalBattles;
       const totalPlayers = status.totalHeroes + status.totalWitches;
       if (n > 0) {
-        statusLine.textContent = `${n} battle${n !== 1 ? 's' : ''} in progress (${totalPlayers} players) — join a faction!`;
+        (statusLine || _legacyEl).textContent = `${n} battle${n !== 1 ? 's' : ''} in progress (${totalPlayers} players) — join a faction!`;
       } else {
-        statusLine.textContent = 'Battle in progress — join a faction!';
+        (statusLine || _legacyEl).textContent = 'Battle in progress — join a faction!';
       }
       // No roomId — server will auto-select the best room
-      joinBtn.dataset.roomId = '';
-      joinBtn.style.display = '';
-      joinBtn.textContent = 'Join the Battle';
+      (joinBtn || _legacyEl).dataset.roomId = '';
+      (joinBtn || _legacyEl).style.display = '';
+      (joinBtn || _legacyEl).textContent = 'Join the Battle';
     }
   } catch (err) {
-    statusLine.textContent = 'Could not load battle status.';
+    (statusLine || _legacyEl).textContent = 'Could not load battle status.';
   }
 
   // Update main menu badge
   const badge = document.getElementById('battle-badge');
   if (badge) {
     if (_battleStatus?.myBattle && !_battleStatus.myBattle.mySubmitted) {
-      badge.style.display = '';
-      badge.textContent = '!';
+      (badge || _legacyEl).style.display = '';
+      (badge || _legacyEl).textContent = '!';
     } else {
-      badge.style.display = 'none';
+      (badge || _legacyEl).style.display = 'none';
     }
   }
 
@@ -7103,8 +7112,8 @@ async function _showBattleScreen() {
     const histRes = await fetch(`${window.BRIMSTONE_SERVER || ''}/api/battle-history${session?.token ? '?token=' + encodeURIComponent(session.token) : ''}`);
     const battles = await histRes.json();
     if (battles && battles.length > 0) {
-      historyEl.style.display = '';
-      bodyEl.innerHTML = battles.map(b => {
+      (historyEl || _legacyEl).style.display = '';
+      (bodyEl || _legacyEl).innerHTML = battles.map(b => {
         const date = new Date(b.created_at * 1000).toLocaleDateString();
         const result = b.winner === 'draw' ? 'Draw'
           : (b.winner === 'hero' ? 'Heroes won' : 'Witches won');
@@ -7126,7 +7135,7 @@ async function _showBattleScreen() {
         </tr>`;
       }).join('');
     } else {
-      historyEl.style.display = 'none';
+      (historyEl || _legacyEl).style.display = 'none';
     }
   } catch { /* ignore */ }
 }
@@ -7297,7 +7306,7 @@ function _updateMultiplayerBadge() {
   if (!badge) return;
 
   const session = loadSession();
-  if (!session) { badge.style.display = 'none'; return; }
+  if (!session) { (badge || _legacyEl).style.display = 'none'; return; }
 
   const base = window.BRIMSTONE_SERVER || '';
   fetch(`${base}/api/games?token=${encodeURIComponent(session.token)}`)
@@ -7305,13 +7314,13 @@ function _updateMultiplayerBadge() {
     .then(saves => {
       const count = saves.filter(s => s.action_needed).length;
       if (count > 0) {
-        badge.textContent = String(count);
-        badge.style.display = '';
+        (badge || _legacyEl).textContent = String(count);
+        (badge || _legacyEl).style.display = '';
       } else {
-        badge.style.display = 'none';
+        (badge || _legacyEl).style.display = 'none';
       }
     })
-    .catch(() => { badge.style.display = 'none'; });
+    .catch(() => { (badge || _legacyEl).style.display = 'none'; });
 }
 
 
@@ -7319,10 +7328,10 @@ function _renderPublicLobbies(rooms) {
   const list = document.getElementById('public-lobbies-list');
   if (!list) return;
   if (!rooms?.length) {
-    list.innerHTML = '<p class="saves-empty">No open games right now.</p>';
+    (list || _legacyEl).innerHTML = '<p class="saves-empty">No open games right now.</p>';
     return;
   }
-  list.innerHTML = '';
+  (list || _legacyEl).innerHTML = '';
   for (const lobby of rooms) {
     const pps    = lobby.config?.playersPerSide ?? 1;
     const size   = lobby.config?.mapSize ?? 'standard';
@@ -7347,7 +7356,7 @@ function _renderPublicLobbies(rooms) {
     entry.addEventListener('click', () => {
       _ensureAuthed(() => mp.joinLobby(lobby.id));
     });
-    list.appendChild(entry);
+    (list || _legacyEl).appendChild(entry);
   }
 }
 
@@ -7369,10 +7378,10 @@ function _renderLobby(lobby) {
   const codeWrap = document.getElementById('lobby-code-wrap');
   const codeDisp = document.getElementById('lobby-code-display');
   if (lobby.isPrivate && lobby.code) {
-    codeWrap.style.display = '';
-    codeDisp.textContent   = lobby.code;
+    (codeWrap || _legacyEl).style.display = '';
+    (codeDisp || _legacyEl).textContent   = lobby.code;
   } else {
-    codeWrap.style.display = 'none';
+    (codeWrap || _legacyEl).style.display = 'none';
   }
 
   // Invite link — use code for private games, room ID for public
@@ -7380,14 +7389,14 @@ function _renderLobby(lobby) {
   const inviteUrl = new URL(`/join?code=${encodeURIComponent(joinKey)}`, _linkOrigin()).href;
   const copyBtn = document.getElementById('btn-lobby-copy-link');
   const copiedEl = document.getElementById('lobby-link-copied');
-  copiedEl.style.display = 'none';
+  (copiedEl || _legacyEl).style.display = 'none';
   // Replace button to clear old listeners
-  const freshCopyBtn = copyBtn.cloneNode(true);
-  copyBtn.parentNode.replaceChild(freshCopyBtn, copyBtn);
+  const freshCopyBtn = (copyBtn || _legacyEl).cloneNode(true);
+  (copyBtn || _legacyEl).parentNode.replaceChild(freshCopyBtn, copyBtn);
   freshCopyBtn.addEventListener('click', () => {
     navigator.clipboard.writeText(inviteUrl).then(() => {
-      copiedEl.style.display = '';
-      setTimeout(() => { copiedEl.style.display = 'none'; }, 2000);
+      (copiedEl || _legacyEl).style.display = '';
+      setTimeout(() => { (copiedEl || _legacyEl).style.display = 'none'; }, 2000);
     }).catch(() => {
       // Fallback: select a temporary input
       const tmp = document.createElement('input');
@@ -7396,8 +7405,8 @@ function _renderLobby(lobby) {
       tmp.select();
       document.execCommand('copy');
       document.body.removeChild(tmp);
-      copiedEl.style.display = '';
-      setTimeout(() => { copiedEl.style.display = 'none'; }, 2000);
+      (copiedEl || _legacyEl).style.display = '';
+      setTimeout(() => { (copiedEl || _legacyEl).style.display = 'none'; }, 2000);
     });
   });
 
@@ -7412,7 +7421,7 @@ function _renderLobby(lobby) {
     shareBtn.addEventListener('click', () => {
       shareInvite("Join my game of Caleb's Hollow!", inviteUrl);
     });
-    linkWrap.insertBefore(shareBtn, copiedEl);
+    (linkWrap || _legacyEl).insertBefore(shareBtn, copiedEl);
   }
 
   // Config summary
@@ -7420,7 +7429,7 @@ function _renderLobby(lobby) {
   const size = lobby.config?.mapSize ?? 'standard';
   const fogMode = lobby.config?.fog ?? 'partial';
   const fog  = fogMode === 'none' ? 'No fog' : `Fog: ${fogMode.charAt(0).toUpperCase() + fogMode.slice(1)}`;
-  document.getElementById('lobby-config-summary').textContent =
+  (document.getElementById('lobby-config-summary') || _legacyEl).textContent =
     `${pps}v${pps} · ${size.charAt(0).toUpperCase() + size.slice(1)} · ${fog}`;
 
   // Derive state
@@ -7433,7 +7442,7 @@ function _renderLobby(lobby) {
 
   // Slots grid
   const grid = document.getElementById('lobby-slots-grid');
-  grid.innerHTML = '';
+  (grid || _legacyEl).innerHTML = '';
 
   // Unassigned players section
   if (unassigned.length > 0) {
@@ -7446,7 +7455,7 @@ function _renderLobby(lobby) {
     unassignedSection.innerHTML =
       `<div class="lobby-unassigned-label">Pick a side</div>` +
       `<div class="lobby-unassigned-players">${names}</div>`;
-    grid.appendChild(unassignedSection);
+    (grid || _legacyEl).appendChild(unassignedSection);
   }
 
   // Side columns. Today each side has one primary faction (Paladin / Witch)
@@ -7538,7 +7547,7 @@ function _renderLobby(lobby) {
     }
     container.appendChild(col);
   }
-  grid.appendChild(container);
+  (grid || _legacyEl).appendChild(container);
 
   // Buttons — host only
   const startBtn    = document.getElementById('btn-lobby-start');
@@ -7546,39 +7555,39 @@ function _renderLobby(lobby) {
   const hasEmpty    = lobby.slots.some(s => s.status === 'empty');
 
   if (isHost) {
-    startBtn.style.display    = '';
-    populateBtn.style.display = '';
+    (startBtn || _legacyEl).style.display    = '';
+    (populateBtn || _legacyEl).style.display = '';
     // Disable start/populate while anyone is unassigned
     const blocked = unassigned.length > 0;
-    startBtn.disabled    = blocked;
-    populateBtn.disabled = blocked;
-    populateBtn.title    = blocked ? 'All players must pick a side first' : '';
+    (startBtn || _legacyEl).disabled    = blocked;
+    (populateBtn || _legacyEl).disabled = blocked;
+    (populateBtn || _legacyEl).title    = blocked ? 'All players must pick a side first' : '';
   } else {
-    startBtn.style.display    = 'none';
-    populateBtn.style.display = 'none';
+    (startBtn || _legacyEl).style.display    = 'none';
+    (populateBtn || _legacyEl).style.display = 'none';
   }
 
   // Hint below the buttons
   let hintEl = document.getElementById('lobby-open-slots-hint');
   if (!hintEl) {
     hintEl = document.createElement('p');
-    hintEl.id = 'lobby-open-slots-hint';
-    hintEl.className = 'setup-lore';
-    hintEl.style.cssText = 'font-size:0.8rem;margin-top:0.5rem;opacity:0.7';
-    grid.parentNode.insertBefore(hintEl, grid.nextSibling?.nextSibling);
+    (hintEl || _legacyEl).id = 'lobby-open-slots-hint';
+    (hintEl || _legacyEl).className = 'setup-lore';
+    (hintEl || _legacyEl).style.cssText = 'font-size:0.8rem;margin-top:0.5rem;opacity:0.7';
+    (grid || _legacyEl).parentNode.insertBefore(hintEl, (grid || _legacyEl).nextSibling?.nextSibling);
   }
 
   if (unassigned.length > 0) {
-    hintEl.textContent = 'All players must pick a side before the game can start.';
-    hintEl.style.display = '';
+    (hintEl || _legacyEl).textContent = 'All players must pick a side before the game can start.';
+    (hintEl || _legacyEl).style.display = '';
   } else if (isHost && hasEmpty) {
-    hintEl.textContent = 'You can start now — empty slots stay open for others to join during the first turn. Unclaimed slots become AI at the deadline.';
-    hintEl.style.display = '';
+    (hintEl || _legacyEl).textContent = 'You can start now — empty slots stay open for others to join during the first turn. Unclaimed slots become AI at the deadline.';
+    (hintEl || _legacyEl).style.display = '';
   } else if (!isHost) {
-    hintEl.textContent = 'Waiting for the host to start the game…';
-    hintEl.style.display = '';
+    (hintEl || _legacyEl).textContent = 'Waiting for the host to start the game…';
+    (hintEl || _legacyEl).style.display = '';
   } else {
-    hintEl.style.display = 'none';
+    (hintEl || _legacyEl).style.display = 'none';
   }
 }
 
@@ -7749,14 +7758,14 @@ function _initMpStep() {
   const gamesSection = document.getElementById('mp-games-section');
 
   if (session) {
-    signedOut.style.display    = 'none';
-    actionBtns.style.display   = '';
+    (signedOut || _legacyEl).style.display    = 'none';
+    (actionBtns || _legacyEl).style.display   = '';
     // mp-games-section visibility is managed by _fetchActiveSaves based on
     // whether the player actually has any active games to show.
   } else {
-    signedOut.style.display    = '';
-    actionBtns.style.display   = 'none';
-    if (gamesSection) gamesSection.style.display = 'none';
+    (signedOut || _legacyEl).style.display    = '';
+    (actionBtns || _legacyEl).style.display   = 'none';
+    if (gamesSection) (gamesSection || _legacyEl).style.display = 'none';
   }
   _updateSessionBar();
 }
@@ -7767,11 +7776,11 @@ function _initAsyncStep() {
   const actionBtns = document.getElementById('async-action-buttons');
 
   if (session) {
-    signedOut.style.display  = 'none';
-    actionBtns.style.display = '';
+    (signedOut || _legacyEl).style.display  = 'none';
+    (actionBtns || _legacyEl).style.display = '';
   } else {
-    signedOut.style.display  = '';
-    actionBtns.style.display = 'none';
+    (signedOut || _legacyEl).style.display  = '';
+    (actionBtns || _legacyEl).style.display = 'none';
   }
   _updateSessionBar();
 }
@@ -7810,19 +7819,19 @@ function _showAuthDialog(onSuccess) {
 function _showAuthDialogUI(onSuccess) {
   _authDialogCallback = onSuccess;
   const dlg = document.getElementById('auth-dialog');
-  document.getElementById('auth-username').value = '';
-  document.getElementById('auth-email-input').value = '';
-  document.getElementById('auth-error').style.display = 'none';
-  document.getElementById('auth-email-status').style.display = 'none';
+  (document.getElementById('auth-username') || _legacyEl).value = '';
+  (document.getElementById('auth-email-input') || _legacyEl).value = '';
+  (document.getElementById('auth-error') || _legacyEl).style.display = 'none';
+  (document.getElementById('auth-email-status') || _legacyEl).style.display = 'none';
 
   // Reset the email login section to hidden — it's only revealed when the
   // server reports the username is already linked to an email.
   const emailSection = document.getElementById('auth-email-section');
-  if (emailSection) emailSection.style.display = 'none';
+  if (emailSection) (emailSection || _legacyEl).style.display = 'none';
   const linkedHint = document.getElementById('auth-linked-hint');
-  if (linkedHint) { linkedHint.style.display = 'none'; linkedHint.textContent = ''; }
+  if (linkedHint) { (linkedHint || _legacyEl).style.display = 'none'; (linkedHint || _legacyEl).textContent = ''; }
 
-  dlg.classList.add('visible');
+  (dlg || _legacyEl).classList.add('visible');
 }
 
 /**
@@ -7832,17 +7841,17 @@ function _showAuthDialogUI(onSuccess) {
  */
 function _revealAuthEmailSection() {
   const emailSection = document.getElementById('auth-email-section');
-  if (emailSection) emailSection.style.display = '';
+  if (emailSection) (emailSection || _legacyEl).style.display = '';
   const linkedHint = document.getElementById('auth-linked-hint');
   if (linkedHint) {
-    linkedHint.textContent = 'This username is linked to an email. Use email login below.';
-    linkedHint.style.display = '';
+    (linkedHint || _legacyEl).textContent = 'This username is linked to an email. Use email login below.';
+    (linkedHint || _legacyEl).style.display = '';
   }
   document.getElementById('auth-email-input')?.focus();
 }
 
 function _hideAuthDialog() {
-  document.getElementById('auth-dialog').classList.remove('visible');
+  (document.getElementById('auth-dialog') || _legacyEl).classList.remove('visible');
   _authDialogCallback = null;
 }
 
@@ -7874,11 +7883,11 @@ function _updateSessionBar() {
   const btn     = document.getElementById('btn-setup-signout');
   if (!nameEl || !btn) return;
   if (session) {
-    nameEl.textContent = session.username;
-    btn.textContent    = 'Sign Out';
+    (nameEl || _legacyEl).textContent = session.username;
+    (btn || _legacyEl).textContent    = 'Sign Out';
   } else {
-    nameEl.textContent = '';
-    btn.textContent    = 'Sign In';
+    (nameEl || _legacyEl).textContent = '';
+    (btn || _legacyEl).textContent    = 'Sign In';
   }
 }
 
@@ -7894,8 +7903,8 @@ function _onlineError(msg, raw) {
   // Show error in the auth dialog if visible, otherwise ignore
   const authErr = document.getElementById('auth-error');
   if (authErr) {
-    authErr.textContent = msg;
-    authErr.style.display = '';
+    (authErr || _legacyEl).textContent = msg;
+    (authErr || _legacyEl).style.display = '';
   }
   // Username is linked to an email on another account — reveal the email
   // login section so the real owner can sign in via magic link.
@@ -7951,7 +7960,7 @@ function _ensureAuthed(cb, usernameOverride = null) {
       : (document.getElementById('auth-username')?.value ?? '')).trim();
     if (username.length < 2) {
       const errorEl = document.getElementById('auth-error');
-      if (errorEl) { errorEl.textContent = 'Enter a username (2+ characters).'; errorEl.style.display = ''; }
+      if (errorEl) { (errorEl || _legacyEl).textContent = 'Enter a username (2+ characters).'; (errorEl || _legacyEl).style.display = ''; }
       return;
     }
     mp.auth({ username });
@@ -8318,14 +8327,14 @@ function _createMpClient() {
       // Show waiting card briefly during game start (covers both resume and lobby→game transitions)
       showStep('waiting');
       if (resumed) {
-        document.getElementById('waiting-subtitle').textContent =
+        (document.getElementById('waiting-subtitle') || _legacyEl).textContent =
           `Resuming as ${faction === 'hero' ? 'Hero ⚔' : 'Witch ✦'}`;
-        document.getElementById('waiting-message').textContent =
+        (document.getElementById('waiting-message') || _legacyEl).textContent =
           `Restored! Starting game…`;
       } else {
-        document.getElementById('waiting-subtitle').textContent =
+        (document.getElementById('waiting-subtitle') || _legacyEl).textContent =
           `Game starting as ${faction === 'hero' ? 'Hero ⚔' : 'Witch ✦'}`;
-        document.getElementById('waiting-message').textContent =
+        (document.getElementById('waiting-message') || _legacyEl).textContent =
           `Starting game…`;
       }
       _currentLobby = null;
@@ -8376,10 +8385,10 @@ function _createMpClient() {
 
     onGamesUpdate() {
       // Server signals that the player's game list changed (plan submitted, round resolved)
-      if (stepOnline.style.display !== 'none') {
+      if (_isOnOnlineFlow()) {
         _fetchActiveSaves();
         _updateMultiplayerBadge();
-      } else if (stepAsync.style.display !== 'none') {
+      } else if (_isOnAsyncFlow()) {
         _fetchAsyncGames();
         _updateMultiplayerBadge();
       } else {
