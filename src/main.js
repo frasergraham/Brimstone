@@ -423,6 +423,13 @@ function init(witchIsAI, heroIsAI, autoplay = false, humanFactionId = null, opts
     const def = getFaction(humanFactionId);
     state.swapLeaderToFaction(def.side, humanFactionId);
   }
+  // Skirmish: swap the AI side's default leader to the randomized opponent.
+  if (opts?.enemyFactionId) {
+    const edef = getFaction(opts.enemyFactionId);
+    if (edef && edef.side !== getFaction(humanFactionId ?? '')?.side) {
+      state.swapLeaderToFaction(edef.side, opts.enemyFactionId);
+    }
+  }
   // Fog of war is always on for human-vs-AI (GameState defaults it to 'partial'
   // when any side is AI, 'none' for two-human games). The AI-debug toggle below
   // can still force it off for AI-vs-AI debugging.
@@ -9814,8 +9821,12 @@ function _ledgerStartSkirmish(factionId, opts = {}) {
   const def = getFaction(factionId);
   if (!def) return;
   const isDay = def.side === 'day';
+  // Opponent: a random champion drawn from the OTHER side's roster — pick a Day
+  // troop and you face a random Night leader, and vice-versa.
+  const enemies = getFactionsForSide(isDay ? 'night' : 'day').map(f => f.id);
+  const enemyFactionId = enemies.length ? enemies[Math.floor(Math.random() * enemies.length)] : null;
   document.getElementById('ledger-screen')?.classList.remove('is-active');
-  init(/*witchIsAI*/ isDay, /*heroIsAI*/ !isDay, /*autoplay*/ false, factionId, opts);
+  init(/*witchIsAI*/ isDay, /*heroIsAI*/ !isDay, /*autoplay*/ false, factionId, { ...opts, enemyFactionId });
 }
 
 // Online snapshot for Play With Others: signed-in flag, live games, and the
