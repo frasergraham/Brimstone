@@ -4808,6 +4808,12 @@ function _initCampaignMission(missionDef) {
   _setupLocalUI(canvas, witchAI, null, false);
   _roundHistory = [];
 
+  // Browser-verification probe: expose the live renderer (mirrors the scenario
+  // loader's window.__renderer3d) so scripts/gen-mission-thumbnails.mjs can
+  // capture a mission's starting-board thumbnail via the SAME captureMapThumbnail
+  // path the in-game saved thumbnails use. Read-only handle; inert in normal play.
+  if (typeof window !== 'undefined') window.__renderer3d = renderer;
+
   // Hide chronicle by default for story mode — less clutter during narrative
   ui._setChronicleOpen(false);
 
@@ -9292,6 +9298,28 @@ const _scenarioParam = new URLSearchParams(location.search).get('scenario');
 if (_scenarioParam) {
   try { initScenario(JSON.parse(_scenarioParam)); }
   catch (e) { console.error('Bad ?scenario= JSON:', e); }
+}
+
+// Dev thumbnail-generation hook: ?genMissionThumb=<missionId> boots that
+// mission's starting board directly (no menu/briefing/roster picking) and
+// exposes the live renderer (window.__renderer3d) so
+// scripts/gen-mission-thumbnails.mjs can capture each mission's fixed map image
+// via the SAME captureMapThumbnail() path the in-game saved thumbnails use.
+// Inert in normal play (param never present).
+const _genThumbParam = new URLSearchParams(location.search).get('genMissionThumb');
+if (_genThumbParam) {
+  (async () => {
+    try {
+      const camp = CAMPAIGNS.find(c => !c.disabled && (c.missions || []).some(m => m.id === _genThumbParam));
+      if (!camp) { console.error('genMissionThumb: no campaign has mission', _genThumbParam); return; }
+      _activeCampaign = new Campaign(camp, 1);
+      _activeCampaign.load();
+      const missionDef = _activeCampaign.getMissionDef?.(_genThumbParam);
+      if (!missionDef) { console.error('genMissionThumb: no mission def for', _genThumbParam); return; }
+      await _loadCampaignPortraits?.();
+      _initCampaignMission(missionDef);
+    } catch (e) { console.error('genMissionThumb failed:', e); }
+  })();
 }
 
 // ── Ledger menu data layer (Direction B redesign) ───────────────────────────

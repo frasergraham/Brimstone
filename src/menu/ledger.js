@@ -10,7 +10,7 @@
 
 import { mmSortRows, mmFormatRow } from '../main-menu-games.js';
 import { mountServerSelector } from '../server-selector.js';
-import { loadThumb } from './thumbnails.js';
+import { loadThumb, missionThumb } from './thumbnails.js';
 import { isModeAvailable, isFactionAvailable, COMING_SOON_LABEL } from '../demo-config.js';
 
 /** The six rail destinations, top to bottom (mirrors the mock). */
@@ -283,7 +283,7 @@ function _panelCampaign(body) {
     chron.className = 'lg-chronicle';
     for (const { m, index } of chap.missions) {
       const status = m.completed ? 'done' : (m.id === sel.nextMissionId ? 'current' : (m.available ? 'available' : 'locked'));
-      chron.appendChild(_missionRow(sel, m, status, index));
+      chron.appendChild(_missionRow(sel, m, status, index, data.campaignId));
     }
     body.appendChild(chron);
   }
@@ -1068,9 +1068,22 @@ function _placeholderPanel(body, dest) {
 
 // ── Small render helpers ─────────────────────────────────────────────────────
 
+// Resolve a game-row's map image. Online/skirmish rows show the live saved
+// thumbnail (or nothing). Campaign rows — a mid-mission save ('local-campaign')
+// or the next mission ready to start ('campaign-next') — fall back to the
+// mission's fixed pre-generated map image when no live thumbnail exists yet, so
+// a not-yet-played mission card still shows its board (matching skirmish).
+function _rowThumb(row) {
+  if (row?.kind === 'local-campaign' || row?.kind === 'campaign-next') {
+    const missionId = row._missionDef?.id ?? row._nextMissionId;
+    if (missionId) return missionThumb(missionId, row.room_id);
+  }
+  return loadThumb(row.room_id);
+}
+
 function _resumeHero(row) {
   const f = mmFormatRow(row);
-  const thumb = loadThumb(row.room_id);
+  const thumb = _rowThumb(row);
   const wrap = document.createElement('div');
   wrap.className = 'lg-resume';
   wrap.innerHTML =
@@ -1082,7 +1095,9 @@ function _resumeHero(row) {
       `<div class="lg-resume-meta">${esc(f.meta || '')}</div>` +
       (_gameTimeMeta(row) ? `<div class="lg-resume-meta m2">${esc(_gameTimeMeta(row))}</div>` : '') +
     `</div>`;
-  if (thumb) {
+  // Only the live saved snapshot opens game-details — a fixed mission map image
+  // (a not-yet-played mission) has no captured stats to show.
+  if (thumb && loadThumb(row.room_id)) {
     const te = wrap.querySelector('.lg-resume-thumb');
     te.classList.add('clickable');
     te.setAttribute('title', 'View game details');
@@ -1099,13 +1114,16 @@ function _feedRow(row, cta = null) {
   const f = mmFormatRow(row);
   const el = document.createElement('div');
   el.className = 'lg-feed-row' + (row.action_needed ? ' is-action' : '');
-  const thumb = loadThumb(row.room_id);
+  const thumb = _rowThumb(row);
   if (thumb) {
+    const savedThumb = loadThumb(row.room_id);   // live snapshot ⇒ opens game-details
     const th = document.createElement('div');
-    th.className = 'lg-feed-thumb clickable';
+    th.className = 'lg-feed-thumb' + (savedThumb ? ' clickable' : '');
     th.style.backgroundImage = `url(${thumb})`;
-    th.setAttribute('title', 'View game details');
-    th.addEventListener('click', (e) => { e.stopPropagation(); _openGameDetail(row); });
+    if (savedThumb) {
+      th.setAttribute('title', 'View game details');
+      th.addEventListener('click', (e) => { e.stopPropagation(); _openGameDetail(row); });
+    }
     el.appendChild(th);
   }
   const text = document.createElement('div');
@@ -1217,13 +1235,19 @@ function _activateRow(row) {
   _data?.activate?.(row);
 }
 
-function _missionRow(slot, m, status, index) {
+function _missionRow(slot, m, status, index, campaignId) {
   const playable = status === 'current' || status === 'available';
   const resume = status === 'current' && slot.resumeMissionId === m.id;
   const mark = status === 'done' ? '✓' : status === 'locked' ? '🔒' : '◆';
+  // Map image: the live saved thumbnail when this mission is in progress (keyed
+  // by its row id `<campaignId>/slot<N>/<missionId>`, captured at round-end like
+  // a skirmish), else the mission's fixed pre-generated map image.
+  const rowId = campaignId ? `${campaignId}/slot${slot.slot}/${m.id}` : null;
+  const img = missionThumb(m.id, rowId);
   const el = document.createElement('div');
   el.className = 'lg-mission is-' + status + (playable ? ' is-playable' : '');
   el.innerHTML =
+    `<span class="lg-mission-thumb" aria-hidden="true"${img ? ` style="background-image:url(${img})"` : ''}></span>` +
     `<span class="lg-mission-n gthc">${roman(index + 1)}</span>` +
     `<span class="lg-mission-name">${esc(m.title || m.id)}</span>` +
     (playable
