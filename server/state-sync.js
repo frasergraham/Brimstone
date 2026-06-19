@@ -150,6 +150,10 @@ export function serializeState(state) {
     disableScoring:       !!state.disableScoring,
     disableCycleBar:      !!state.disableCycleBar,
     disableScoreWin:      !!state.disableScoreWin,
+    // Campaign opt-outs for the two ambient per-side spawn mechanics — must
+    // survive the wire / mid-mission resume so the mission stays consistent.
+    disableNodeSurvivorSpawn: !!state.disableNodeSurvivorSpawn,
+    disableWitchSupport:      !!state.disableWitchSupport,
     nodeScoreThreshold:   state.nodeScoreThreshold ?? 4,
     noWitchMission:       !!state.noWitchMission,
     gameMode:             state.gameMode ?? 'standard',
@@ -410,6 +414,8 @@ export function deserializeState(snap) {
   state.disableScoring       = !!snap.disableScoring;
   state.disableCycleBar      = !!snap.disableCycleBar;
   state.disableScoreWin      = !!snap.disableScoreWin;
+  state.disableNodeSurvivorSpawn = !!snap.disableNodeSurvivorSpawn;
+  state.disableWitchSupport      = !!snap.disableWitchSupport;
   state.nodeScoreThreshold   = snap.nodeScoreThreshold ?? 4;
   state.noWitchMission       = !!snap.noWitchMission;
   state.maxDiscoverableSurvivors = snap.maxDiscoverableSurvivors ?? null;

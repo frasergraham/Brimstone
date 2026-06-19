@@ -297,6 +297,14 @@ export class GameState {
     // is a *loss* condition, not a win).
     this.disableScoreWin = !!mapDataOverride?.disableScoreWin;
 
+    // Campaign opt-out for the two ambient per-side spawn mechanics (Hero's
+    // node-survivor "the node calls to the living" spawn and the Witch's
+    // periodic graveyard zombie support troop). Default false ⇒ both run as
+    // normal for non-campaign play and missions that don't set the flag.
+    // Gated in factions.js applyEndOfRoundEffects.
+    this.disableNodeSurvivorSpawn = !!mapDataOverride?.disableNodeSurvivorSpawn;
+    this.disableWitchSupport      = !!mapDataOverride?.disableWitchSupport;
+
     // Max survivors discoverable from hidden-survivor tiles (null = unlimited).
     // NOTE: this START-only party-cap feature does NOT touch this cap —
     // mid-mission discovery stays uncapped by party size (the field count may
