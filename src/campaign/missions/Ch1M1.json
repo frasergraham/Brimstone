@@ -34,6 +34,9 @@
     "food": 1,
     "wood": 1
   },
+  "alsoCompletes": [
+    "tutorial"
+  ],
   "healBonus": 14,
   "lootOverrides": {
     "remove": [

@@ -6,6 +6,7 @@ import { getFaction } from '../factions.js';
 import { hexDistance } from '../hex.js';
 import { EntityType, applyLevel, normalizeItems, getEquippedWeaponIdOf,
          equipWeaponInItems, addItemInItems, removeItemInItems, getItemCountOf } from '../entities.js';
+import { SURVIVOR_ROSTER, SURVIVOR_COLORS } from '../content/survivors.js';
 import { ITEMS } from '../items.js';
 import { isRiver, hasBuilding } from '../tiles.js';
 import { evaluateUnlock } from './unlock.js';
@@ -126,6 +127,38 @@ export function snapshotSurvivor(entity) {
     // canonical shape so the roster snapshot never aliases the live entity.
     items:        normalizeItems(entity.items),
     effects:      permanentEffects,
+  };
+}
+
+/**
+ * Build a roster snapshot (same shape as {@link snapshotSurvivor}) for a named
+ * SURVIVOR_ROSTER character — the data-driven path for granting a survivor as a
+ * mission reward without spinning up a live Entity. Stats are the roster base
+ * (level 1, full HP, no carried items). Returns `null` for an unknown name.
+ *
+ * @param {string} name   exact SURVIVOR_ROSTER `name`.
+ * @returns {object|null} snapshot-shaped roster entry, or null if not found.
+ */
+export function rosterSnapshotFromName(name) {
+  const i = SURVIVOR_ROSTER.findIndex(c => c.name === name);
+  if (i < 0) return null;
+  const char = SURVIVOR_ROSTER[i];
+  return {
+    name:         char.name,
+    title:        char.title,
+    bio:          char.bio,
+    abilities:    char.ability ? [char.ability] : [],
+    abilityLabel: char.abilityLabel,
+    color:        SURVIVOR_COLORS[i % SURVIVOR_COLORS.length],
+    hp:           char.maxHp,
+    maxHp:        char.maxHp,
+    attack:       char.attack,
+    defense:      char.defense,
+    ...(typeof char.agility === 'number' ? { agility: char.agility } : {}),
+    level:        1,
+    xp:           0,
+    items:        {},
+    effects:      [],
   };
 }
 
@@ -996,6 +1029,16 @@ export class Campaign {
     const missionDef = this.getMissionDef(missionId);
 
     this.completedMissions.add(missionId);
+    // Data-driven completion fan-out: a mission may also mark other mission ids
+    // complete on win (`alsoCompletes: [...]`). Used so beating "The Awakening"
+    // after skipping the tutorial still flags the tutorial as done, keeping
+    // progression/unlock gates consistent. Idempotent — a Set add is a no-op for
+    // an already-completed id.
+    if (Array.isArray(missionDef?.alsoCompletes)) {
+      for (const id of missionDef.alsoCompletes) {
+        if (id) this.completedMissions.add(id);
+      }
+    }
     this.currentMission = this.getNextMission() ?? missionId;
 
     // Permadeath: replace roster with only surviving survivors
@@ -1045,10 +1088,19 @@ export class Campaign {
       }
     }
 
-    // Apply mission rewards
+    // Apply mission rewards. Numeric keys top up `resources`; the reserved
+    // `survivors` key (an array of { name? } specs) grants roster survivors —
+    // the reusable post-mission survivor-reward hook (see grantRewardSurvivors).
+    // Granting runs AFTER the roster is rebuilt above so the new ally survives
+    // the permadeath reconcile, and after the heal bonus so a freshly-granted
+    // survivor starts at full HP rather than over-healed.
     if (missionDef?.rewards) {
       for (const [key, val] of Object.entries(missionDef.rewards)) {
+        if (key === 'survivors') continue; // handled below — not a resource
         this.resources[key] = (this.resources[key] ?? 0) + val;
+      }
+      if (Array.isArray(missionDef.rewards.survivors)) {
+        this.grantRewardSurvivors(missionDef.rewards.survivors);
       }
     }
 
@@ -1058,6 +1110,53 @@ export class Campaign {
     }
 
     this.save();
+  }
+
+  /**
+   * Grant survivors as a post-mission reward — the reusable data-driven hook
+   * behind a mission's `rewards.survivors` block. Each spec is `{ name? }`:
+   *   • a named spec adds THAT SURVIVOR_ROSTER character (so a mission can
+   *     promise a specific ally);
+   *   • a nameless / unknown-name spec adds a RANDOM roster character not
+   *     already in the party or fallen (so "a new survivor joins you" works
+   *     regardless of who was discovered mid-mission).
+   * Already-rostered and permadead (fallen) survivors are never granted, so the
+   * reward never duplicates a party member or resurrects a mourned one. Does NOT
+   * save on its own — the caller (applyMissionResult) persists afterward.
+   *
+   * @param {{name?:string}[]} specs
+   * @returns {string[]} the names actually granted (in order).
+   */
+  grantRewardSurvivors(specs) {
+    if (!Array.isArray(specs)) return [];
+    const granted = [];
+    // Names already spoken for: current party + the mourned dead + any granted
+    // earlier in this same call — so repeated nameless specs draw distinct allies.
+    const taken = new Set([
+      ...this.roster.map(s => s.name),
+      ...this.fallen.map(f => f.name),
+    ]);
+    for (const spec of specs) {
+      let snapshot = null;
+      const wanted = spec?.name;
+      if (wanted && !taken.has(wanted)) {
+        snapshot = rosterSnapshotFromName(wanted);
+      }
+      if (!snapshot) {
+        // Random pick from roster characters not already taken.
+        const candidates = SURVIVOR_ROSTER
+          .map(c => c.name)
+          .filter(n => !taken.has(n));
+        if (candidates.length === 0) continue; // roster exhausted — nothing to grant
+        const name = candidates[Math.floor(Math.random() * candidates.length)];
+        snapshot = rosterSnapshotFromName(name);
+      }
+      if (!snapshot) continue;
+      taken.add(snapshot.name);
+      this.roster.push(snapshot);
+      granted.push(snapshot.name);
+    }
+    return granted;
   }
 
   /**

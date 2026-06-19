@@ -8,7 +8,7 @@ import { EntityType, createMinion, createZombie, createWoodGolem, createSurvivor
 import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import {
   Campaign, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves,
-  reconcileRosterAfterMission, applyCarriedHeroLoadout,
+  reconcileRosterAfterMission, applyCarriedHeroLoadout, rosterSnapshotFromName,
 } from '../src/campaign/campaign.js';
 import { getFaction } from '../src/factions.js';
 import { ObjectiveType, processStoryTriggers } from '../src/campaign/missions.js';
@@ -850,6 +850,126 @@ describe('Campaign class', () => {
     });
     assert.ok(!c.completedMissions.has('prologue'));
     assert.equal(c.currentMission, 'prologue');
+  });
+
+  // ── Task A: post-mission survivor rewards (rewards.survivors hook) ─────────
+  test('rosterSnapshotFromName builds a roster entry from a named roster char', () => {
+    const snap = rosterSnapshotFromName('Mary Quinn');
+    assert.ok(snap, 'expected a snapshot for a known roster name');
+    assert.equal(snap.name, 'Mary Quinn');
+    assert.equal(snap.title, 'Nurse');
+    assert.equal(snap.hp, snap.maxHp);     // arrives at full health
+    assert.equal(snap.level, 1);
+    assert.deepEqual(snap.items, {});      // no carried gear
+    assert.ok(Array.isArray(snap.abilities));
+  });
+
+  test('rosterSnapshotFromName returns null for an unknown name', () => {
+    assert.equal(rosterSnapshotFromName('Nobody At All'), null);
+  });
+
+  test('grantRewardSurvivors adds a named survivor to the roster', () => {
+    const c = new Campaign(hollowDef);
+    const granted = c.grantRewardSurvivors([{ name: 'Thomas Putnam' }]);
+    assert.deepEqual(granted, ['Thomas Putnam']);
+    assert.equal(c.roster.length, 1);
+    assert.equal(c.roster[0].name, 'Thomas Putnam');
+  });
+
+  test('grantRewardSurvivors with an empty spec adds a random roster survivor', () => {
+    const c = new Campaign(hollowDef);
+    const granted = c.grantRewardSurvivors([{}]);
+    assert.equal(granted.length, 1);
+    assert.equal(c.roster.length, 1);
+    assert.equal(c.roster[0].name, granted[0]);
+    assert.ok(SURVIVOR_ROSTER.some(s => s.name === granted[0]),
+      'granted survivor must be a real roster character');
+  });
+
+  test('grantRewardSurvivors never duplicates a party member or fallen survivor', () => {
+    const c = new Campaign(hollowDef);
+    c.roster = [{ name: 'Mary Quinn', hp: 35, maxHp: 35 }];
+    c.fallen = [{ name: 'Thomas Putnam' }];
+    // Many empty specs — must draw distinct, fresh names each time.
+    const granted = c.grantRewardSurvivors([{}, {}, {}]);
+    assert.equal(granted.length, 3);
+    const names = new Set(granted);
+    assert.equal(names.size, 3, 'granted names must be distinct');
+    assert.ok(!names.has('Mary Quinn'), 'must not re-grant a party member');
+    assert.ok(!names.has('Thomas Putnam'), 'must not resurrect a fallen survivor');
+  });
+
+  test('completing Mission 3 (first_night) grants the promised survivor', () => {
+    const c = new Campaign(hollowDef);
+    // Stand at first_night with the chain already cleared.
+    for (const id of ['tutorial', 'prologue', 'gathering_survivors']) c.completedMissions.add(id);
+    c.currentMission = 'first_night';
+    const before = c.roster.length;
+    c.applyMissionResult('first_night', {
+      won: true,
+      survivors: [],            // no survivors carried out of the mission
+      resources: {},
+      heroStats: { hp: 14, maxHp: 14, attack: 3, defense: 2, items: {} },
+    });
+    assert.ok(c.completedMissions.has('first_night'));
+    assert.equal(c.roster.length, before + 1,
+      'beating Mission 3 must add the promised new ally to the roster');
+    assert.ok(SURVIVOR_ROSTER.some(s => s.name === c.roster[0].name));
+  });
+
+  test('Mission 3 reward survivor persists across save/load', () => {
+    localStorage.clear();
+    const c = new Campaign(hollowDef);
+    for (const id of ['tutorial', 'prologue', 'gathering_survivors']) c.completedMissions.add(id);
+    c.currentMission = 'first_night';
+    c.applyMissionResult('first_night', {
+      won: true, survivors: [], resources: {},
+      heroStats: { hp: 14, maxHp: 14, attack: 3, defense: 2, items: {} },
+    });
+    const grantedName = c.roster[0].name;
+    const reloaded = new Campaign(hollowDef);
+    assert.ok(reloaded.load(), 'save should reload');
+    assert.equal(reloaded.roster.length, 1);
+    assert.equal(reloaded.roster[0].name, grantedName);
+    localStorage.clear();
+  });
+
+  // ── Task B: beating The Awakening completes a skipped tutorial ─────────────
+  test('completing The Awakening (prologue) marks the tutorial complete too', () => {
+    const c = new Campaign(hollowDef);
+    // Tutorial was SKIPPED: not in completedMissions when we beat The Awakening.
+    assert.ok(!c.completedMissions.has('tutorial'));
+    c.currentMission = 'prologue';
+    c.applyMissionResult('prologue', {
+      won: true, survivors: [], resources: {},
+      heroStats: { hp: 14, maxHp: 14, attack: 3, defense: 2, items: {} },
+    });
+    assert.ok(c.completedMissions.has('prologue'));
+    assert.ok(c.completedMissions.has('tutorial'),
+      'beating The Awakening must also flag the skipped tutorial complete');
+  });
+
+  test('The Awakening tutorial-completion is idempotent and does not fire on defeat', () => {
+    const c = new Campaign(hollowDef);
+    c.currentMission = 'prologue';
+    // Defeat: nothing should be marked complete.
+    c.applyMissionResult('prologue', {
+      won: false, survivors: [], resources: {},
+      heroStats: { hp: 0, maxHp: 14, attack: 3, defense: 2, items: {} },
+    });
+    assert.ok(!c.completedMissions.has('tutorial'));
+    assert.ok(!c.completedMissions.has('prologue'));
+    // Now win — tutorial flips complete and stays complete on a replay.
+    c.applyMissionResult('prologue', {
+      won: true, survivors: [], resources: {},
+      heroStats: { hp: 14, maxHp: 14, attack: 3, defense: 2, items: {} },
+    });
+    assert.ok(c.completedMissions.has('tutorial'));
+    c.applyMissionResult('prologue', {
+      won: true, survivors: [], resources: {},
+      heroStats: { hp: 14, maxHp: 14, attack: 3, defense: 2, items: {} },
+    });
+    assert.equal([...c.completedMissions].filter(id => id === 'tutorial').length, 1);
   });
 
   test('permadeath: dead survivors are removed from roster', () => {
