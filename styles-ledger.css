@@ -199,6 +199,11 @@
 .lg-slot-confirm .lg-btn { flex:1; padding:5px 8px; font-size:12px; }
 .lg-btn-danger { border-color:rgba(200,80,80,.5); background:rgba(150,40,40,.25); color:#f0b0b0; }
 .lg-btn-danger:hover { background:rgba(180,50,50,.4); }
+/* Chapter heading above a group of missions in the chronicle. */
+.lg-chapter-head { font-family:var(--lg-display); font-size:18px; color:var(--lg-gold);
+  letter-spacing:.02em; margin:20px 0 10px; padding-bottom:7px;
+  border-bottom:1px solid rgba(212,167,44,.28); }
+.lg-chapter-head:first-child { margin-top:6px; }
 .lg-chronicle { display:flex; flex-direction:column; overflow:auto; }
 .lg-mission { display:flex; align-items:center; gap:15px; padding:10px 14px 10px 8px; border-bottom:1px solid rgba(255,255,255,.05); border-radius:4px; }
 .lg-mission.is-current { background:rgba(212,167,44,.08); }

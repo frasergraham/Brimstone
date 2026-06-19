@@ -52,8 +52,9 @@ import { nodeController } from './game.js';
 import { MissionConductor, areHintsSuppressed, markHintsSeen, resetAllHintsForCampaign } from './mission-conductor.js';
 import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel, getEquippedWeaponIdOf, normalizeItems, flattenItemCounts } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
-import { Campaign, CAMPAIGN_SLOT_COUNT, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
+import { Campaign, CAMPAIGN_SLOT_COUNT, getActiveSlot, setActiveSlot, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
 import { CAMPAIGNS } from './campaign/campaign-registry.js';
+import { campaignMissionNumber as _campaignMissionNumber, hasCampaignToContinue } from './campaign/continue-resolver.js';
 import { saveThumb, deleteThumb, loadThumb, saveStats, loadStats } from './menu/thumbnails.js';
 import { processStoryTriggers } from './campaign/missions.js';
 import { MissionLogicEngine } from './mission-logic/engine.js';
@@ -5792,63 +5793,90 @@ function _localCampaignRows() {
     for (const camp of CAMPAIGNS) {
       if (camp.disabled) continue;
       const missions = camp.missions || [];
+      const missionTotal = missions.length;
 
-      for (let slot = 1; slot <= CAMPAIGN_SLOT_COUNT; slot++) {
-        const hasMidMissionSave = new Set();
+      // Continue tracks ONE playthrough per campaign — the persisted active slot
+      // (the one the player last selected/started), defaulting to slot 1. We
+      // scan only that slot so Continue resumes the playthrough the player cares
+      // about, not whichever slot an autosave touched most recently.
+      const slot = getActiveSlot(camp.id);
+      const hasMidMissionSave = new Set();
 
-        // 1. Scan missions for any that have a mid-mission save file in this slot
-        for (const m of missions) {
-          const save = loadCampaignMissionSave(camp.id, m.id, slot);
-          if (!save) continue;
-          hasMidMissionSave.add(m.id);
-          rows.push({
-            kind: 'local-campaign',
-            room_id: `${camp.id}/slot${slot}/${m.id}`,
-            title: `📖 ${m.title || m.id}`,
-            round: null,
-            phase: null,
-            action_needed: false,
-            turn_deadline: null,
-            updated_at: save.updatedAt ? Math.floor(save.updatedAt / 1000) : 0,
-            is_local: true,
-            _campaignId: camp.id,
-            _slotIndex: slot,
-            _missionTitle: m.title || m.id,
-            _campaignDef: camp,
-            _missionDef: m,
-          });
-        }
-
-        // 2. If this slot has progress and a next mission is available (no mid-
-        //    mission save for it), show a "campaign-next" entry so the player
-        //    can jump straight to the party select / briefing screen.
-        const c = new Campaign(camp, slot);
-        if (!c.load()) continue;        // no save → no progress in this slot
-        if (c.isComplete()) continue;    // all missions done
-        const nextId = c.getNextMission();
-        if (!nextId) continue;
-        if (hasMidMissionSave.has(nextId)) continue; // already shown above
-        const mDef = c.getMissionDef(nextId);
-        if (!mDef) continue;
+      // 1. Scan missions for any that have a mid-mission save file in this slot
+      for (const m of missions) {
+        const save = loadCampaignMissionSave(camp.id, m.id, slot);
+        if (!save) continue;
+        hasMidMissionSave.add(m.id);
+        const num = _campaignMissionNumber(camp, m.id);
         rows.push({
-          kind: 'campaign-next',
-          room_id: `${camp.id}/slot${slot}/${nextId}`,
-          title: `📖 ${camp.title}`,
+          kind: 'local-campaign',
+          room_id: `${camp.id}/slot${slot}/${m.id}`,
+          title: `📖 ${m.title || m.id}`,
+          round: null,
+          phase: null,
           action_needed: false,
           turn_deadline: null,
-          updated_at: c.updatedAt ? Math.floor(c.updatedAt / 1000) : 0,
+          updated_at: save.updatedAt ? Math.floor(save.updatedAt / 1000) : 0,
           is_local: true,
           _campaignId: camp.id,
           _slotIndex: slot,
+          _missionTitle: m.title || m.id,
+          _missionNumber: num,
+          _missionTotal: missionTotal,
           _campaignDef: camp,
-          _missionDef: mDef,
-          _nextMissionId: nextId,
-          _nextMissionTitle: mDef.title || nextId,
+          _missionDef: m,
         });
       }
+
+      // 2. If this slot has progress and a next mission is available (no mid-
+      //    mission save for it), show a "campaign-next" entry so the player
+      //    can jump straight to the party select / briefing screen.
+      const c = new Campaign(camp, slot);
+      if (!c.load()) continue;        // no save → no progress in this slot
+      if (c.isComplete()) continue;    // all missions done
+      const nextId = c.getNextMission();
+      if (!nextId) continue;
+      if (hasMidMissionSave.has(nextId)) continue; // already shown above
+      const mDef = c.getMissionDef(nextId);
+      if (!mDef) continue;
+      rows.push({
+        kind: 'campaign-next',
+        room_id: `${camp.id}/slot${slot}/${nextId}`,
+        title: `📖 ${camp.title}`,
+        action_needed: false,
+        turn_deadline: null,
+        updated_at: c.updatedAt ? Math.floor(c.updatedAt / 1000) : 0,
+        is_local: true,
+        _campaignId: camp.id,
+        _slotIndex: slot,
+        _campaignDef: camp,
+        _missionDef: mDef,
+        _nextMissionId: nextId,
+        _nextMissionTitle: mDef.title || nextId,
+        _missionNumber: _campaignMissionNumber(camp, nextId),
+        _missionTotal: missionTotal,
+      });
     }
   } catch {}
   return mmDedupeCampaignRows(rows);
+}
+
+/**
+ * Whether the menu has anything to "Continue" into without hitting the network:
+ * a local single-player save, or a campaign row from the persisted active slot.
+ * A signed-in player may also have online games waiting, so a live session
+ * counts as continuable too. Used to decide the menu's initial destination —
+ * Continue when there's something to resume, Campaign for a brand-new player.
+ */
+export function hasContinuableGames() {
+  try {
+    if (_localSpRows().length > 0) return true;
+    // Active-slot-aware campaign check (Task 5/6) — same resolution the Continue
+    // card uses, so "default to Campaign" matches what Continue would show.
+    if (hasCampaignToContinue(CAMPAIGNS)) return true;
+    if (loadSession()) return true;   // online games may be waiting after a fetch
+  } catch { /* localStorage unavailable — treat as nothing to continue */ }
+  return false;
 }
 
 /**
@@ -9091,11 +9119,19 @@ function _ledgerCampaignData() {
       resumeMissionId,
       missions: (c.getMissionList?.() ?? []).map(m => ({
         id: m.id, title: m.title, completed: !!m.completed, available: !!m.available,
+        chapter: c.getMissionDef?.(m.id)?.chapter ?? 1,
         briefing: c.getMissionDef?.(m.id)?.briefing ?? '',
       })),
     });
   }
-  const active = slots.filter(s => s.started).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0] || slots[0];
+  // Prefer the persisted active slot (the one the player last selected/started).
+  // Fall back to the most-recently-touched started slot, then slot 1, so a
+  // never-chosen campaign still lands somewhere sensible.
+  const persisted = getActiveSlot(camp.id);
+  const active = slots.find(s => s.slot === persisted && s.started)
+    || slots.filter(s => s.started).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0]
+    || slots.find(s => s.slot === persisted)
+    || slots[0];
   return { campaignId: camp.id, title: camp.title, slots, activeSlotIndex: active?.slot ?? 1 };
 }
 
@@ -9106,6 +9142,9 @@ function _ledgerCampaignData() {
 async function _ledgerStartCampaignMission(slotIndex, missionId, resume = false) {
   const camp = CAMPAIGNS.find(c => !c.disabled) || CAMPAIGNS[0];
   if (!camp) return;
+  // This slot is now the playthrough the player is on — persist it so Continue
+  // and the Campaign destination resume here next time.
+  setActiveSlot(camp.id, slotIndex);
   _activeCampaign = new Campaign(camp, slotIndex);
   _activeCampaign.load();
   const id = missionId || _activeCampaign.getNextMission?.();
@@ -9350,6 +9389,11 @@ function _buildLedgerData() {
     },
     replays:          () => _collectReplayRows(),
     campaign:         () => _ledgerCampaignData(),
+    // Remember which playthrough slot the player selected so Continue tracks it.
+    setActiveCampaignSlot: (slot) => {
+      const camp = CAMPAIGNS.find(c => !c.disabled) || CAMPAIGNS[0];
+      if (camp) setActiveSlot(camp.id, slot);
+    },
     startMission:     (slot, missionId, resume) => _ledgerStartCampaignMission(slot, missionId, resume),
     campaignParty:    (slot) => _ledgerCampaignParty(slot),
     deleteCampaignSlot: (slot) => {
@@ -9395,7 +9439,11 @@ function _buildLedgerData() {
     ss?.style.setProperty('display', 'none');
     import('./menu/ledger.js').then(({ initLedger }) => {
       const session = loadSession();
-      const api = initLedger({ playerName: session?.username || 'Wanderer', data: _buildLedgerData() });
+      // Land a brand-new player (nothing to resume) on Campaign so they head
+      // straight for the tutorial; anyone with a game in progress opens on
+      // Continue. Uses the same active-slot-aware continuable check.
+      const start = hasContinuableGames() ? 'continue' : 'campaign';
+      const api = initLedger({ playerName: session?.username || 'Wanderer', data: _buildLedgerData(), start });
       api?.show();
       // Re-show the ledger if anything reveals the legacy #setup-screen (e.g.
       // game-over → back to menu) while we're not in a game.

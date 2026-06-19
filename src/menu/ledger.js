@@ -218,7 +218,11 @@ function _panelCampaign(body) {
       : `<div class="lg-slot-tag">Slot ${roman(s.slot)}</div>` +
         `<div class="lg-slot-title gthc">New</div>` +
         `<div class="lg-slot-sub">begin a playthrough</div>`;
-    card.addEventListener('click', () => { _campSlot = s.slot; _campBriefing = null; select('campaign'); });
+    card.addEventListener('click', () => {
+      _campSlot = s.slot; _campBriefing = null;
+      _data?.setActiveCampaignSlot?.(s.slot);   // persist so Continue tracks this slot
+      select('campaign');
+    });
 
     // Started slots get a ✕ to wipe them (asks for confirmation first).
     if (s.started) {
@@ -245,19 +249,59 @@ function _panelCampaign(body) {
 
   if (_campView === 'party') { _renderPartyView(body, sel); return; }
 
-  body.appendChild(_cap(`The Chronicle of Missions · Slot ${roman(sel.slot)}`));
-  const chron = document.createElement('div');
-  chron.className = 'lg-chronicle';
   const missions = sel.missions || [];
   if (!missions.length) {
+    const chron = document.createElement('div');
+    chron.className = 'lg-chronicle';
     chron.appendChild(_empty('No missions found for this campaign.'));
-  } else {
-    missions.forEach((m, i) => {
-      const status = m.completed ? 'done' : (m.id === sel.nextMissionId ? 'current' : (m.available ? 'available' : 'locked'));
-      chron.appendChild(_missionRow(sel, m, status, i));
-    });
+    body.appendChild(chron);
+    return;
   }
-  body.appendChild(chron);
+  // Group missions into chapters (delineated headings), so additional chapters
+  // can slot in later just by tagging missions with a higher `chapter` number.
+  // Within each chapter the mission's display index stays its overall campaign
+  // position (so the Roman numeral matches the briefing's "Mission N").
+  for (const chap of _groupByChapter(missions)) {
+    body.appendChild(_chapterHeading(chap.chapter));
+    const chron = document.createElement('div');
+    chron.className = 'lg-chronicle';
+    for (const { m, index } of chap.missions) {
+      const status = m.completed ? 'done' : (m.id === sel.nextMissionId ? 'current' : (m.available ? 'available' : 'locked'));
+      chron.appendChild(_missionRow(sel, m, status, index));
+    }
+    body.appendChild(chron);
+  }
+}
+
+// Display titles for each campaign chapter. Defaults to "Chapter N" for any
+// chapter not named here, so adding a chapter is data-only.
+const CHAPTER_TITLES = {
+  1: 'Welcome to Caleb\'s Hollow',
+};
+
+/** Bucket a flat mission list into ordered chapters, preserving each mission's
+ *  overall campaign index (used for its Roman-numeral label). Missions with no
+ *  `chapter` tag fall into Chapter 1. */
+function _groupByChapter(missions) {
+  const order = [];
+  const byChapter = new Map();
+  missions.forEach((m, index) => {
+    const chapter = Number.isFinite(m.chapter) ? m.chapter : 1;
+    if (!byChapter.has(chapter)) { byChapter.set(chapter, []); order.push(chapter); }
+    byChapter.get(chapter).push({ m, index });
+  });
+  return order.map(chapter => ({ chapter, missions: byChapter.get(chapter) }));
+}
+
+/** A delineating chapter heading above its missions, e.g.
+ *  "Chapter 1 — Welcome to Caleb's Hollow". */
+function _chapterHeading(chapter) {
+  const name = CHAPTER_TITLES[chapter];
+  const text = name ? `Chapter ${chapter} — ${name}` : `Chapter ${chapter}`;
+  const el = document.createElement('div');
+  el.className = 'lg-chapter-head';
+  el.textContent = text;
+  return el;
 }
 
 /** Mission briefing — shown before a mission launches (title, briefing, Begin). */

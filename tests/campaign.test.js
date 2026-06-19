@@ -797,7 +797,7 @@ describe('Campaign class', () => {
     const c = new Campaign(hollowDef);
     const m = c.getMissionDef('prologue');
     assert.ok(m);
-    assert.equal(m.title, 'The Awakening');
+    assert.equal(m.title, 'The Awakening - Tutorial');
   });
 
   test('getMapBuilder returns builder from campaignDef', () => {
