@@ -10,7 +10,7 @@
 
 import { mmSortRows, mmFormatRow, mmIsCampaignRow } from '../main-menu-games.js';
 import { mountServerSelector } from '../server-selector.js';
-import { loadThumb, missionThumb } from './thumbnails.js';
+import { loadThumb, missionThumb, campaignMissionRowId } from './thumbnails.js';
 import { isModeAvailable, isFactionAvailable, COMING_SOON_LABEL } from '../demo-config.js';
 
 /** The six rail destinations, top to bottom (mirrors the mock). */
@@ -324,6 +324,18 @@ function _chapterHeading(chapter) {
 function _campaignBriefing(body) {
   const b = _campBriefing;
   body.appendChild(_backRow('‹ Back to the chronicle', () => { _campBriefing = null; select('campaign'); }));
+
+  // Two-column briefing: the map image on the LEFT, the mission text (kicker +
+  // title + briefing copy) on the RIGHT. The columns stack on narrow widths
+  // (see .lg-brief-cols in styles-ledger.css). The back row and the Begin/Resume
+  // button stay full-width, above and below the columns.
+  const cols = document.createElement('div');
+  cols.className = 'lg-brief-cols';
+
+  cols.appendChild(_briefMapImage(b));
+
+  const textCol = document.createElement('div');
+  textCol.className = 'lg-brief-col-text';
   const head = document.createElement('div');
   head.className = 'lg-brief-head';
   // Mission number is 0-based from the tutorial; Mission 0 reads "Tutorial".
@@ -331,13 +343,16 @@ function _campaignBriefing(body) {
   head.innerHTML =
     `<div class="lg-brief-kicker">${esc(kicker)}</div>` +
     `<div class="lg-brief-title gthc">${esc(b.title)}</div>`;
-  body.appendChild(head);
-  body.appendChild(_briefMapImage(b));
-  const rule = document.createElement('div'); rule.className = 'ledger-rule'; body.appendChild(rule);
+  textCol.appendChild(head);
+  const rule = document.createElement('div'); rule.className = 'ledger-rule'; textCol.appendChild(rule);
   const text = document.createElement('p');
   text.className = 'lg-brief-text';
   text.textContent = b.briefing || 'The night waits. Steel yourself and step into the dark.';
-  body.appendChild(text);
+  textCol.appendChild(text);
+  cols.appendChild(textCol);
+
+  body.appendChild(cols);
+
   const begin = _button(b.resume ? '▶ Resume Mission' : '▶ Begin Mission', 'gold',
     () => _data?.startMission?.(b.slot, b.missionId, b.resume));
   begin.style.marginTop = '20px';
@@ -357,7 +372,7 @@ function _missionNumLabel(index) {
  *  larger view than the list-card thumbs, so the briefing shows the board the
  *  player is stepping into. */
 function _briefMapImage(b) {
-  const rowId = b.campaignId ? `${b.campaignId}/slot${b.slot}/${b.missionId}` : null;
+  const rowId = campaignMissionRowId(b.campaignId, b.slot, b.missionId);
   const img = missionThumb(b.missionId, rowId);
   const el = document.createElement('div');
   el.className = 'lg-brief-map' + (img ? ' has-img' : '');
@@ -1338,7 +1353,7 @@ function _missionRow(slot, m, status, index, campaignId) {
   // Map image: the live saved thumbnail when this mission is in progress (keyed
   // by its row id `<campaignId>/slot<N>/<missionId>`, captured at round-end like
   // a skirmish), else the mission's fixed pre-generated map image.
-  const rowId = campaignId ? `${campaignId}/slot${slot.slot}/${m.id}` : null;
+  const rowId = campaignMissionRowId(campaignId, slot.slot, m.id);
   const img = missionThumb(m.id, rowId);
   const el = document.createElement('div');
   el.className = 'lg-mission is-' + status + (playable ? ' is-playable' : '');

@@ -434,17 +434,25 @@
 .lg-party .cprog-section-label .cprog-count { font-size:.72em; }
 .lg-party .cprog-inv-hint { display:block; margin:3px auto 0; }
 
-/* Mission briefing */
+/* Mission briefing — two columns: map image on the LEFT, mission text on the
+   RIGHT. Stacks to a single column on narrow widths (map on top). */
+.lg-brief-cols { display:flex; gap:24px; align-items:flex-start; margin-top:14px; }
+.lg-brief-col-text { flex:1 1 auto; min-width:0; }
 .lg-brief-head { margin-bottom:4px; }
 .lg-brief-kicker { font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--lg-label); }
 .lg-brief-title { font-family:var(--lg-display); font-size:30px; color:var(--lg-ink); margin-top:2px; }
 .lg-brief-text { font-size:15px; line-height:1.6; color:var(--lg-ink-2); margin-top:14px; max-width:62ch; }
-/* Big map preview — a larger view of the mission's board than the list cards. */
-.lg-brief-map { margin-top:14px; width:100%; max-width:520px; aspect-ratio:4/3; border-radius:6px;
+/* Big map preview — a larger view of the mission's board than the list cards.
+   In the two-column briefing it's the fixed-width LEFT column; the text flexes. */
+.lg-brief-map { flex:0 0 auto; width:380px; max-width:46%; aspect-ratio:4/3; border-radius:6px;
   border:1px solid rgba(255,255,255,.12); background:#0a0b10 center/cover no-repeat;
   display:flex; align-items:center; justify-content:center; font-size:42px; color:rgba(212,167,44,.4); }
 .lg-brief-map.has-img { border-color:rgba(212,167,44,.34); color:transparent; }
-@media (max-width:560px) { .lg-brief-map { max-width:100%; } }
+/* Stack on narrow widths — map on top, full-width, then the text below. */
+@media (max-width:680px) {
+  .lg-brief-cols { flex-direction:column; gap:16px; }
+  .lg-brief-map { width:100%; max-width:100%; }
+}
 
 /* Play Online — rhythms + battle */
 .lg-rhythms { display:grid; grid-template-columns:1fr; gap:12px; margin-bottom:16px; }

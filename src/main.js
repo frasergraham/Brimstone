@@ -56,7 +56,7 @@ import { hexKey as _hexKey } from './hex.js';
 import { Campaign, CAMPAIGN_SLOT_COUNT, getActiveSlot, setActiveSlot, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
 import { CAMPAIGNS } from './campaign/campaign-registry.js';
 import { campaignMissionNumber as _campaignMissionNumber, campaignMissionTotal as _campaignMissionTotal, hasCampaignToContinue } from './campaign/continue-resolver.js';
-import { saveThumb, deleteThumb, loadThumb, saveStats, loadStats } from './menu/thumbnails.js';
+import { saveThumb, deleteThumb, loadThumb, saveStats, loadStats, campaignMissionRowId } from './menu/thumbnails.js';
 import { processStoryTriggers } from './campaign/missions.js';
 import { MissionLogicEngine } from './mission-logic/engine.js';
 import { createGameContext } from './mission-logic/game-context.js';
@@ -5009,6 +5009,13 @@ function _handleCampaignMissionEnd() {
   } else {
     // Defeat: restore party to pre-mission state (no permadeath, no stat changes)
     survivors = _activeCampaign.roster;
+    // Forget the failed run's last-round board snapshot. The thumbnail is keyed
+    // by the mission's row id (the SAME key `_captureRoundThumbnail` writes); a
+    // lost mission isn't "in progress", so dropping the saved thumb lets the card
+    // fall back to the mission's fixed pre-generated image (missionThumb →
+    // fixedMissionImage) instead of showing the stale failed-attempt snapshot.
+    deleteThumb(campaignMissionRowId(
+      _activeCampaign.campaignDef.id, _activeCampaign.slotIndex, missionDef.id));
   }
 
   // ── Render the debrief overlay ──────────────────────────────────────────
@@ -5248,7 +5255,7 @@ function _deleteSpSave(id) {
 function _captureRoundThumbnail(idOverride = null) {
   if (!renderer?.captureMapThumbnail || !state || state.gameOver || _autoplay) return;
   const id = idOverride || ((_activeCampaign && _activeMissionDef)
-    ? `${_activeCampaign.campaignDef.id}/slot${_activeCampaign.slotIndex}/${_activeMissionDef.id}`
+    ? campaignMissionRowId(_activeCampaign.campaignDef.id, _activeCampaign.slotIndex, _activeMissionDef.id)
     : _spSaveId);
   if (!id) return;
   try { saveStats(id, _extractStats(state)); } catch { /* detail snapshot is best-effort */ }
