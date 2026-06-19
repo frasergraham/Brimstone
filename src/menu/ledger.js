@@ -11,6 +11,7 @@
 import { mmSortRows, mmFormatRow } from '../main-menu-games.js';
 import { mountServerSelector } from '../server-selector.js';
 import { loadThumb } from './thumbnails.js';
+import { isModeAvailable, isFactionAvailable, COMING_SOON_LABEL } from '../demo-config.js';
 
 /** The six rail destinations, top to bottom (mirrors the mock). */
 const DESTINATIONS = [
@@ -100,18 +101,33 @@ function _renderRail() {
   host.replaceChildren();
   for (const d of DESTINATIONS) {
     const item = document.createElement('div');
-    item.className = 'ledger-rail-item';
+    const available = isModeAvailable(d.id);   // demo builds can flip a mode OFF
+    item.className = 'ledger-rail-item' + (available ? '' : ' is-soon');
     item.dataset.dest = d.id;
-    item.innerHTML = `<span class="ic">${d.icon}</span><span class="lb">${d.label}</span>`;
-    item.addEventListener('click', () => { _campBriefing = null; _campConfirmDelete = null; select(d.id); });
+    item.innerHTML = `<span class="ic">${d.icon}</span><span class="lb">${d.label}</span>` +
+      (available ? '' : `<span class="lg-soon-badge">${COMING_SOON_LABEL}</span>`);
+    if (available) {
+      item.addEventListener('click', () => { _campBriefing = null; _campConfirmDelete = null; select(d.id); });
+    } else {
+      item.setAttribute('aria-disabled', 'true');
+      item.title = `${d.label} — ${COMING_SOON_LABEL}`;
+    }
     host.appendChild(item);
   }
 }
 
 /** Light up a rail item and re-bind the ledger pane to that destination. */
 export function select(id) {
-  const dest = DESTINATIONS.find(d => d.id === id);
+  let dest = DESTINATIONS.find(d => d.id === id);
   if (!dest) return;
+  // A demo build can disable a mode — never bind the pane to a coming-soon
+  // destination (e.g. via the `start` default); fall back to Continue.
+  if (!isModeAvailable(dest.id)) {
+    dest = DESTINATIONS.find(d => d.id === 'continue' && isModeAvailable('continue')) ||
+           DESTINATIONS.find(d => isModeAvailable(d.id)) || dest;
+    if (!isModeAvailable(dest.id)) return;
+  }
+  id = dest.id;
   _activeId = id;
   document.querySelectorAll('#ledger-rail-items .ledger-rail-item').forEach((el) =>
     el.classList.toggle('is-active', el.dataset.dest === id));
@@ -412,9 +428,21 @@ function _pdragTarget(under, d) {
 function _panelSkirmish(body) {
   const factions = _data?.skirmishFactions?.() ?? [];
   if (!factions.length) return _placeholderPanel(body, { label: 'Skirmish' });
-  if (!factions.some(f => f.id === _skFaction)) _skFaction = factions[0].id;
+  // Default the selection to a champion that's actually available in this build
+  // (blocked champions can't be picked); only fall back to a blocked one if every
+  // champion is blocked (shouldn't happen).
+  if (!factions.some(f => f.id === _skFaction && isFactionAvailable(f.id))) {
+    _skFaction = (factions.find(f => isFactionAvailable(f.id)) || factions[0]).id;
+  }
+
+  // Tag the body so the Skirmish setup gets its own no-scroll layout: the
+  // champion picker flexes/scrolls internally while the options + Start row stay
+  // pinned and fully visible.
+  body.classList.add('lg-skirmish');
 
   body.appendChild(_cap('Your champion'));
+  const champs = document.createElement('div');
+  champs.className = 'lg-champ-scroll';
   for (const [side, label, icon] of [['day', 'Day — the Hero', '☀'], ['night', 'Night — the Witch', '🌙']]) {
     const fs = factions.filter((f) => f.side === side);
     if (!fs.length) continue;
@@ -425,8 +453,9 @@ function _panelSkirmish(body) {
     grid.className = 'lg-champions';
     for (const f of fs) grid.appendChild(_champCard(f));
     row.appendChild(grid);
-    body.appendChild(row);
+    champs.appendChild(row);
   }
+  body.appendChild(champs);
 
   body.appendChild(_cap('The night ahead'));
   const opts = document.createElement('div');
@@ -442,7 +471,10 @@ function _panelSkirmish(body) {
 
   const startRow = document.createElement('div');
   startRow.className = 'lg-skirmish-start';
-  startRow.appendChild(_button('▶ Start', 'gold', () => _data?.startSkirmish?.(_skFaction, { ..._skOpts })));
+  startRow.appendChild(_button('▶ Start', 'gold', () => {
+    if (!isFactionAvailable(_skFaction)) return;   // never launch a demo-blocked champion
+    _data?.startSkirmish?.(_skFaction, { ..._skOpts });
+  }));
   const summ = document.createElement('span');
   summ.className = 'lg-skirmish-summary';
   summ.id = 'lg-sk-summary';
@@ -453,7 +485,9 @@ function _panelSkirmish(body) {
 
 function _champCard(f) {
   const card = document.createElement('div');
-  card.className = 'lg-champion is-' + (f.side === 'night' ? 'night' : 'day') + (f.id === _skFaction ? ' is-selected' : '');
+  const available = isFactionAvailable(f.id);   // demo builds can block a champion
+  card.className = 'lg-champion is-' + (f.side === 'night' ? 'night' : 'day') +
+    (available && f.id === _skFaction ? ' is-selected' : '') + (available ? '' : ' is-soon');
   const stat = (lbl, val, tip) => `<span class="cprog-ustat"${tip ? ` title="${esc(tip)}"` : ''}>${lbl} <b>${val}</b></span>`;
   const statsHtml = f.atk != null
     ? `<div class="cprog-ustats">${stat('HP', f.hp)}${stat('ATK', f.atk)}${stat('DEF', f.def)}${stat('RNG', f.rng)}` +
@@ -469,11 +503,18 @@ function _champCard(f) {
   card.innerHTML =
     `<img src="${esc(f.img)}" alt="">` +
     `<div class="lg-champ-info">` +
-      `<div class="lg-champ-top"><span class="nm">${esc(f.name)}</span></div>` +
+      `<div class="lg-champ-top"><span class="nm">${esc(f.name)}</span>` +
+        (available ? '' : `<span class="lg-soon-badge">${COMING_SOON_LABEL}</span>`) +
+      `</div>` +
       statsHtml + weaponHtml + abilitiesHtml +
       (f.blurb ? `<div class="lg-champ-blurb">${esc(f.blurb)}</div>` : '') +
     `</div>`;
-  card.addEventListener('click', () => { _skFaction = f.id; select('skirmish'); });
+  if (available) {
+    card.addEventListener('click', () => { _skFaction = f.id; select('skirmish'); });
+  } else {
+    card.setAttribute('aria-disabled', 'true');
+    card.title = `${f.name} — ${COMING_SOON_LABEL}`;
+  }
   return card;
 }
 
@@ -702,8 +743,12 @@ function _lobbySeat(lobby, slot, { myId, isHost, canClaim }) {
     nm.textContent = (slot.name || 'Player') + (isMe ? ' · you' : '');
     el.appendChild(nm);
     if (isMe) {
-      // Switch your champion within your side.
-      const facs = (_data.factionsForSide?.(slot.side) || []).map((f) => ({ value: f.id, label: f.name }));
+      // Switch your champion within your side. Demo builds block some champions —
+      // they stay visible in the menu as a disabled "Coming Soon" entry.
+      const facs = (_data.factionsForSide?.(slot.side) || []).map((f) => {
+        const ok = isFactionAvailable(f.id);
+        return { value: f.id, label: f.name, sub: ok ? undefined : COMING_SOON_LABEL, disabled: !ok };
+      });
       const dd = _dropdown(facs, slot.factionId || slot.faction, (v) => _data.lobby?.setFaction?.(v));
       dd.classList.add('lg-fac-dd');
       el.appendChild(dd);
@@ -814,23 +859,38 @@ function _dropdown(options, value, onChange) {
   for (const o of options) {
     const item = document.createElement('button');
     item.type = 'button';
-    item.className = 'lg-dd-item' + (o.value === cur ? ' is-sel' : '');
+    item.className = 'lg-dd-item' + (o.value === cur ? ' is-sel' : '') + (o.disabled ? ' is-soon' : '');
     item.innerHTML = `<span class="lg-dd-item-label">${esc(o.label)}</span>` +
       (o.sub ? `<span class="lg-dd-item-sub">${esc(o.sub)}</span>` : '');
-    item.addEventListener('click', (e) => {
-      e.stopPropagation();
-      cur = o.value;
-      renderCap();
-      menu.querySelectorAll('.lg-dd-item').forEach((el) => el.classList.toggle('is-sel', el === item));
-      root.classList.remove('is-open');
-      onChange?.(cur);
-    });
+    if (o.disabled) {
+      // Visible but unpickable (e.g. a demo-blocked champion).
+      item.disabled = true;
+      item.setAttribute('aria-disabled', 'true');
+    } else {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        cur = o.value;
+        renderCap();
+        menu.querySelectorAll('.lg-dd-item').forEach((el) => el.classList.toggle('is-sel', el === item));
+        root.classList.remove('is-open');
+        onChange?.(cur);
+      });
+    }
     menu.appendChild(item);
   }
   capBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     const willOpen = !root.classList.contains('is-open');
     document.querySelectorAll('.lg-dd.is-open').forEach((el) => el.classList.remove('is-open'));
+    if (willOpen) {
+      // Open UPWARD when there isn't room below for the menu — keeps it fully
+      // on-screen (the skirmish dropdowns sit low in the panel), so opening one
+      // never gets clipped or forces a scroll.
+      const r = capBtn.getBoundingClientRect();
+      const want = Math.min(menu.scrollHeight || 240, 280) + 8;
+      const below = window.innerHeight - r.bottom;
+      root.classList.toggle('is-up', below < want && r.top > below);
+    }
     root.classList.toggle('is-open', willOpen);
   });
   root.appendChild(capBtn);

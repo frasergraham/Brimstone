@@ -38,6 +38,7 @@ import { sightRange, computeLineOfSight, hasLineOfSight, assignSlotOnTile } from
 import { ITEMS } from './items.js';
 import { ABILITIES } from './abilities.js';
 import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
+import { isFactionAvailable } from './demo-config.js';
 import { compileTurnBattleSummary, compileTurnBattlePairs, collectTurnFinds, deferredMoveEntityIds } from './battle-utils.js';
 import { collectWrapUpAttrition } from './post-round-effects.js';
 import { applyEffect } from './effects.js';
@@ -7631,8 +7632,10 @@ function _buildLobbyFactionPicker(lobby, slot) {
   select.className = 'setup-select lobby-faction-select';
   select.innerHTML = factions.map(f => {
     const selected = f.id === (slot.factionId ?? slot.faction) ? ' selected' : '';
-    const stub     = f.isStub() ? ' (stub)' : '';
-    return `<option value="${f.id}"${selected}>${_esc(f.name)}${stub}</option>`;
+    // Demo builds block some champions — show them disabled ("Coming Soon").
+    const blocked  = !isFactionAvailable(f.id);
+    const tag      = blocked ? ' (coming soon)' : (f.isStub() ? ' (stub)' : '');
+    return `<option value="${f.id}"${selected}${blocked ? ' disabled' : ''}>${_esc(f.name)}${tag}</option>`;
   }).join('');
   select.addEventListener('change', () => {
     if (!select.value) return;

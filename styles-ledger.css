@@ -261,6 +261,10 @@
 .lg-dd-menu { position:absolute; top:calc(100% + 4px); left:0; right:0; z-index:40; display:none;
   background:#14121c; border:1px solid #3a3052; border-radius:5px; overflow-y:auto; max-height:280px;
   box-shadow:0 12px 30px rgba(0,0,0,.55); }
+/* Flip the menu ABOVE the cap when there's no room below (set by _dropdown), so a
+   dropdown low in the panel opens fully on-screen instead of clipping / scrolling. */
+.lg-dd.is-up .lg-dd-menu { top:auto; bottom:calc(100% + 4px); box-shadow:0 -12px 30px rgba(0,0,0,.55); }
+.lg-dd.is-up.is-open .lg-dd-arrow { transform:rotate(0deg); }
 .lg-dd.is-open .lg-dd-menu { display:block; }
 .lg-dd-item { width:100%; display:flex; flex-direction:column; gap:1px; align-items:flex-start;
   background:none; border:0; border-bottom:1px solid rgba(255,255,255,.05); color:var(--lg-ink-2);
@@ -275,6 +279,39 @@
 .lg-fac-dd .lg-dd-cap { font-size:13px; padding:4px 8px; }
 .lg-skirmish-start { display:flex; align-items:center; gap:14px; margin-top:18px; }
 .lg-skirmish-summary { font-size:13px; color:var(--lg-faint); font-style:italic; }
+
+/* ── Demo "Coming Soon" gating (modes + champions) ────────────────────────────
+   Disabled-but-visible content: dimmed, not interactive, badged. */
+.lg-soon-badge {
+  font-size:9px; letter-spacing:.1em; text-transform:uppercase; white-space:nowrap;
+  color:#c9b277; background:rgba(212,167,44,.12); border:1px solid rgba(212,167,44,.3);
+  border-radius:9px; padding:1px 8px; line-height:1.5;
+}
+/* Rail entry flipped off for the demo. */
+.ledger-rail-item.is-soon { cursor:default; opacity:.55; }
+.ledger-rail-item.is-soon:hover .lb { color:#b3a98f; }   /* no hover brighten */
+.ledger-rail-item.is-soon .lg-soon-badge { margin-left:auto; }
+/* Champion card blocked for the demo — non-selectable, no hover lift. */
+.lg-champion.is-soon { cursor:default; opacity:.5; filter:grayscale(.5); }
+.lg-champion.is-soon:hover { border-color:#232036; }
+.lg-champion.is-soon .lg-soon-badge { margin-left:6px; }
+/* Blocked champion inside a faction dropdown (online lobby seat). */
+.lg-dd-item.is-soon { cursor:default; opacity:.5; }
+.lg-dd-item.is-soon:hover { background:none; }
+.lg-dd-item.is-soon .lg-dd-item-sub { color:var(--lg-gold-dim); }
+
+/* ── Skirmish setup: no scrolling ─────────────────────────────────────────────
+   The body fills the pane; only the champion picker scrolls internally so the
+   options + Start row stay pinned and fully visible (and a low dropdown opens
+   upward — see .lg-dd.is-up). No outer page scroll on this screen. */
+.ledger-pane-body.lg-skirmish { flex:1 1 auto; min-height:0; overflow:hidden; }
+.lg-skirmish .lg-champ-scroll { flex:1 1 auto; min-height:0; overflow-y:auto; padding-right:6px; }
+/* The "night ahead" caption, options, and Start row never shrink — always shown. */
+.lg-skirmish > .lg-cap:nth-of-type(2),
+.lg-skirmish .lg-opts,
+.lg-skirmish .lg-skirmish-start { flex:0 0 auto; }
+.lg-skirmish .lg-skirmish-start { margin-top:12px; }
+.lg-skirmish .lg-champ-side:last-child { margin-bottom:4px; }
 
 /* Campaign Missions/Party tabs + party container */
 .lg-camp-tabs { display:flex; gap:10px; margin:10px 0 16px; }
