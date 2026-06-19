@@ -1028,11 +1028,19 @@ function _detailStatsHTML(d) {
   out.push(`<div class="lg-detail-meta">${meta.join(' · ')}</div>`);
 
   if (d.score) {
-    out.push(`<div class="lg-detail-stat"><span>Node score</span><b>Hero ${d.score.hero} – ${d.score.witch} Witch</b>` +
-      `<i>first to ${d.score.threshold}</i></div>`);
+    const max = d.score.threshold || 4;
+    const pips = (side, n) => Array.from({ length: max }, (_, i) =>
+      `<span class="score-pip ${side}${i < n ? ' filled' : ''}"></span>`).join('');
+    out.push(`<div class="lg-detail-stat lg-detail-score"><span>Node score</span>` +
+      `<span class="lg-detail-tracks">` +
+        `<span class="score-track hero-track">${pips('hero', d.score.hero)}</span>` +
+        `<span class="score-track witch-track">${pips('witch', d.score.witch)}</span>` +
+      `</span><i>first to ${max}</i></div>`);
   }
   if (d.kills) {
-    out.push(`<div class="lg-detail-stat"><span>Slain</span><b>Hero ${d.kills.hero} · Witch ${d.kills.witch}</b></div>`);
+    out.push(`<div class="lg-detail-stat"><span>Slain</span>` +
+      `<b><span class="lg-fac-hero">Hero ${d.kills.hero}</span> · ` +
+      `<span class="lg-fac-witch">Witch ${d.kills.witch}</span></b></div>`);
   }
   if (d.players != null) {
     out.push(`<div class="lg-detail-stat"><span>Players</span><b>${d.players}</b></div>`);

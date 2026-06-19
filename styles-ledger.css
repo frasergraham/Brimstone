@@ -144,13 +144,17 @@
 .lg-detail-title { font-family:var(--lg-display); font-size:30px; color:var(--lg-ink); line-height:1.05; }
 .lg-detail-meta { color:var(--lg-gold-dim); font-size:13px; letter-spacing:.05em; text-transform:uppercase; margin:6px 0 16px; }
 .lg-detail-stat { display:flex; align-items:baseline; gap:8px; padding:8px 0; border-top:1px solid rgba(255,255,255,.06); font-size:14px; }
-.lg-detail-stat span { color:var(--lg-faint); min-width:92px; }
+.lg-detail-stat > span:first-child { color:var(--lg-faint); min-width:92px; }
 .lg-detail-stat b { color:var(--lg-ink); font-weight:600; }
 .lg-detail-stat i { color:var(--lg-faint); font-style:normal; font-size:12px; margin-left:auto; }
 .lg-detail-group { margin-top:16px; }
 .lg-detail-group .hd { font-size:12px; letter-spacing:.1em; text-transform:uppercase; margin-bottom:6px; }
-.lg-detail-group.is-hero .hd { color:var(--lg-gold-dim); }
-.lg-detail-group.is-witch .hd { color:#b08fd0; }
+.lg-detail-group.is-hero .hd { color:var(--hero); }
+.lg-detail-group.is-witch .hd { color:var(--witch); }
+.lg-fac-hero  { color:var(--hero); }
+.lg-fac-witch { color:var(--witch); }
+.lg-detail-score { align-items:center; }
+.lg-detail-tracks { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
 .lg-detail-group .u { display:flex; justify-content:space-between; gap:10px; padding:3px 0; }
 .lg-detail-group .u .nm { color:var(--lg-ink-2); font-size:13px; }
 .lg-detail-group .u .sb { color:var(--lg-faint); font-size:12px; }
