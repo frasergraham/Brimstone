@@ -4939,8 +4939,10 @@ function _leaveDebriefToLedger() {
   const gs = document.getElementById('game-screen');
   if (gs) gs.style.display = 'none';
   if (_ledgerApi) {
-    _ledgerApi.show();
-    _ledgerApi.select('campaign');
+    // Land on the mission LIST, not the briefing for the mission we just played
+    // (showCampaignList clears the primed _campBriefing).
+    if (_ledgerApi.showCampaignList) _ledgerApi.showCampaignList();
+    else { _ledgerApi.show(); _ledgerApi.select('campaign'); }
   } else {
     // No Ledger (shouldn't happen in normal play) — fall back to a reload, which
     // boots the menu fresh.

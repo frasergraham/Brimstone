@@ -92,7 +92,19 @@ export function initLedger({ playerName, start = 'continue', data = null } = {})
   });
   _renderRail();
   select(start);
-  return { show, hide, select };
+  return {
+    show, hide, select,
+    // Land on the campaign mission LIST, clearing any primed briefing / party
+    // sub-view — used after a mission ends so we don't re-open the briefing for
+    // the mission just played.
+    showCampaignList: () => {
+      _campBriefing = null;
+      _campConfirmDelete = null;
+      _campView = 'missions';
+      show();
+      select('campaign');
+    },
+  };
 }
 
 function _renderRail() {
