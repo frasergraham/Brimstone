@@ -9,6 +9,7 @@ import {
   buildPlayerStatusHtml,
   buildObjectivesHtml,
   buildMissionLogHtml,
+  buildMissionLogDescriptionHtml,
   buildNodeBadgeHtml,
   buildUnitDetailHtml,
   buildCycleInfoHtml,
@@ -637,5 +638,41 @@ describe('buildMissionLogHtml', () => {
     ]);
     assert.doesNotMatch(html, /<script>/);
     assert.match(html, /&lt;script&gt;/);
+  });
+});
+
+// ── buildMissionLogDescriptionHtml (the briefing header above objectives) ─────
+
+describe('buildMissionLogDescriptionHtml', () => {
+  test('no description → empty string (header hidden)', () => {
+    assert.equal(buildMissionLogDescriptionHtml(''), '');
+    assert.equal(buildMissionLogDescriptionHtml(undefined), '');
+    assert.equal(buildMissionLogDescriptionHtml('   '), '', 'whitespace-only is treated as empty');
+  });
+
+  test('renders the briefing text in the description block', () => {
+    const html = buildMissionLogDescriptionHtml('You awaken at the Caleb\'s Hollow Inn...');
+    assert.match(html, /mission-log-desc-text/);
+    assert.match(html, /You awaken at the Caleb/);
+  });
+
+  test('escapes HTML in the author-supplied briefing', () => {
+    const html = buildMissionLogDescriptionHtml('<b>danger</b> & dread');
+    assert.doesNotMatch(html, /<b>/);
+    assert.match(html, /&lt;b&gt;danger&lt;\/b&gt; &amp; dread/);
+  });
+
+  test('the description block sits ABOVE the objective list (authored order)', () => {
+    // Render order the UI uses: description header, then the <ul> rows. The
+    // concatenation proves the briefing precedes the first objective.
+    const desc = buildMissionLogDescriptionHtml('Cut down the dead.');
+    const list = buildMissionLogHtml([
+      { id: 'zk', label: 'Kill three zombies', target: 3, current: 0, completed: false },
+    ]);
+    const combined = desc + list;
+    assert.ok(
+      combined.indexOf('Cut down the dead.') < combined.indexOf('Kill three zombies'),
+      'briefing header appears before the objectives',
+    );
   });
 });

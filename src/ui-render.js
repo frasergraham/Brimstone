@@ -725,6 +725,21 @@ function _escHtml(s) {
 }
 
 /**
+ * Build the Mission Log description/briefing header block — the mission's
+ * briefing text shown ABOVE the objective list at the top of the Mission Log.
+ * Pure presentation (Show): a deterministic, HTML-escaped read of the mission's
+ * static description; never touches the DOM or engine state.
+ *
+ * @param {string} description - the mission briefing text (e.g. missionDef.briefing).
+ * @returns {string} the description markup, or '' when there is no description.
+ */
+export function buildMissionLogDescriptionHtml(description) {
+  const text = String(description ?? '').trim();
+  if (!text) return '';
+  return `<span class="mission-log-desc-text">${_escHtml(text)}</span>`;
+}
+
+/**
  * Build the Mission Log to-do list HTML (the top half of the Chronicle sidebar).
  * Pure — reads the authoritative objective list from the mission-logic engine and
  * returns markup; never touches the DOM or engine state (Sim/Show split).

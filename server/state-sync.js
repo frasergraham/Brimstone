@@ -177,6 +177,9 @@ export function serializeState(state) {
     fallenSurvivorNames:      [...(state.fallenSurvivorNames ?? [])],
     // Campaign-only flag — gates XP/veterancy. Must survive mid-mission resume.
     isCampaign:               !!state.isCampaign,
+    // Mission Log header text (Show-only). Round-tripped so a resumed campaign
+    // mission keeps its briefing above the objectives.
+    missionBriefing:          state.missionBriefing ?? '',
     log:                  [...state.log],
     witchObjectives:      state.witchObjectives.map(o => ({
       col:        o.col,
@@ -422,6 +425,7 @@ export function deserializeState(snap) {
   state.discoveredSurvivorCount  = snap.discoveredSurvivorCount  ?? 0;
   state.fallenSurvivorNames      = new Set(snap.fallenSurvivorNames ?? []);
   state.isCampaign               = !!snap.isCampaign;
+  state.missionBriefing          = snap.missionBriefing ?? '';
   state.log                  = [...snap.log];
   state.witchObjectives      = snap.witchObjectives.map(o => ({
     col:        o.col,

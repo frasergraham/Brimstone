@@ -1957,6 +1957,18 @@ body.renderer-3d.debug-counters #cam-counter { display: block; }
   border-bottom: 1px solid rgba(212,167,44,0.25);
 }
 
+/* Mission briefing/description — header block above the objectives. */
+.mission-log-desc {
+  margin: 0;
+  padding: 0.4rem 0.6rem 0.5rem;
+  font-size: 0.76rem;
+  line-height: 1.4;
+  color: var(--text-dim, #b8b2a4);
+  font-style: italic;
+  border-bottom: 1px solid rgba(212,167,44,0.18);
+}
+.mission-log-desc-text { display: block; }
+
 .mission-log-list {
   list-style: none;
   margin: 0;

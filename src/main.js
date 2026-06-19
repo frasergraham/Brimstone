@@ -796,7 +796,7 @@ function _drainLogicStoryEvents() {
 /** Refresh the Chronicle's Mission Log panel from the engine's authoritative
  *  objective list. Safe no-op for non-logic games (engine is null → []). */
 function _syncMissionLog() {
-  ui?.renderMissionLog?.(state?.logicEngine?.objectives?.() ?? []);
+  ui?.renderMissionLog?.(state?.logicEngine?.objectives?.() ?? [], state?.missionBriefing ?? '');
 }
 
 /** Drain ONLY the queued objectiveLog presentation events (toast + panel sync),
@@ -4499,6 +4499,9 @@ function _attachMissionLogic(state, missionDef) {
   const engine = new MissionLogicEngine(missionDef.logic, ctx);
   if (state._restoredLogicState) engine.load(state._restoredLogicState);
   state.attachLogicEngine(engine);
+  // Surface the mission briefing as the Mission Log header (Show-only). Stored
+  // on the GameState so it round-trips through state-sync for resume.
+  state.missionBriefing = missionDef.briefing || missionDef.description || '';
 }
 
 function _initCampaignMission(missionDef) {
@@ -4559,6 +4562,18 @@ function _initCampaignMission(missionDef) {
   // any planning/resolution so plan-1 onward earns XP. Round-tripped by
   // state-sync so a mid-mission resume keeps the flag.
   state.isCampaign = true;
+
+  // Browser-verification probe (mirrors the scenario loader's __scenarioState):
+  // the verifier-browser harness drives the live mission-logic engine through
+  // this handle to screenshot graph-driven beats (e.g. the Ch1M1 golem rising)
+  // without grinding a full AI game. Read-only handle; inert in normal play.
+  // Set right after `state` exists so it's available regardless of later init.
+  if (typeof window !== 'undefined') {
+    window.__campaignState = state;
+    if (!Object.getOwnPropertyDescriptor(window, '__ui')) {
+      Object.defineProperty(window, '__ui', { configurable: true, get: () => ui });
+    }
+  }
 
   // Apply custom phase cycle from mission definition
   if (missionDef.phaseCycle) {

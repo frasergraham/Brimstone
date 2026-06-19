@@ -237,6 +237,7 @@ describe('mission-log / the Ch1M1 demonstration shape', () => {
         { id: 'seq', type: 'sequence', params: { outputs: 3 } },
         { id: 'u3', type: 'updateObjective', params: { id: 'kill3', set: 3 } },
         { id: 'spawn', type: 'spawnUnits', params: { units: [{ type: 'wood_golem', spawnAt: 'near_hero' }] } },
+        { id: 'beat', type: 'storyBeat', params: { title: 'Something Rises', text: 'The corpses knit into a golem.' } },
         { id: 'setGolem', type: 'setObjective', params: { id: 'golem', label: 'Defeat the Wood Golem' } },
       ],
       [
@@ -247,6 +248,8 @@ describe('mission-log / the Ch1M1 demonstration shape', () => {
         exec('once', 'out', 'seq'),
         exec('seq', 'then0', 'u3'),
         exec('seq', 'then1', 'spawn'),
+        // The golem's Done pin fires the story beat — Sim (spawn) before Show (beat).
+        exec('spawn', 'done', 'beat'),
         exec('seq', 'then2', 'setGolem'),
       ],
     );
@@ -275,6 +278,15 @@ describe('mission-log / the Ch1M1 demonstration shape', () => {
     // The golem actually spawned (Sim ran), and exactly one golem-add toast fired.
     assert.equal(ctx._emitted.filter((e) => e.kind === 'spawn').length, 1);
     assert.equal(logsOf(ctx).filter((l) => l.change === 'added' && l.objective.id === 'golem').length, 1);
+
+    // A story beat (Show) accompanies the golem's appearance, AND it fires
+    // AFTER the spawn (Sim) — the corpses rise, then the narration plays.
+    const beats = ctx._emitted.filter((e) => e.kind === 'storyBeat');
+    assert.equal(beats.length, 1, 'exactly one golem story beat');
+    assert.equal(beats[0].title, 'Something Rises');
+    const spawnIdx = ctx._emitted.findIndex((e) => e.kind === 'spawn');
+    const beatIdx = ctx._emitted.findIndex((e) => e.kind === 'storyBeat');
+    assert.ok(spawnIdx >= 0 && spawnIdx < beatIdx, 'Sim spawn emitted before the Show beat');
   });
 
   test('the kill→golem chain fires once even if kills keep coming (Do Once)', () => {
@@ -284,9 +296,11 @@ describe('mission-log / the Ch1M1 demonstration shape', () => {
     eng.dispatch('killCount', { faction: 'hero', count: 3 });
     eng.dispatch('killCount', { faction: 'hero', count: 4 });
     eng.dispatch('killCount', { faction: 'hero', count: 5 });
-    // Exactly one golem objective + one golem spawn despite repeated >=3 pulses.
+    // Exactly one golem objective + one golem spawn + one story beat despite
+    // repeated >=3 pulses (Do Once gates the whole chain).
     assert.equal(eng.objectives().filter((o) => o.id === 'golem').length, 1);
     assert.equal(ctx._emitted.filter((e) => e.kind === 'spawn').length, 1);
+    assert.equal(ctx._emitted.filter((e) => e.kind === 'storyBeat').length, 1);
   });
 });
 

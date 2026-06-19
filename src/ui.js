@@ -20,7 +20,7 @@ import { compileTurnBattleSummary, compileTurnXpSummary } from './battle-utils.j
 import { buildWrapupCombatsHtml, wrapupIconHtml } from './wrapup-summary.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
-import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildMissionLogHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos, TurnCardAutoScroll, shouldAutoScrollToActive, computeFadeFlags } from './ui-render.js';
+import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildMissionLogHtml, buildMissionLogDescriptionHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos, TurnCardAutoScroll, shouldAutoScrollToActive, computeFadeFlags } from './ui-render.js';
 import {
   hideActionPopup, getEntityScreenPos, computeArcPositions,
   positionArcPopup, startArcTracking, positionPopup,
@@ -3884,17 +3884,26 @@ export class UIController {
     return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
-  renderMissionLog(objectives) {
+  renderMissionLog(objectives, description = '') {
     const section = this._el('mission-log-section');
     const list = this._el('mission-log-list');
     if (!section || !list) return;
+    const desc = this._el('mission-log-desc');
     const objs = Array.isArray(objectives) ? objectives : [];
     if (objs.length === 0) {
       section.style.display = 'none';
       list.innerHTML = '';
+      if (desc) { desc.innerHTML = ''; desc.style.display = 'none'; }
       return;
     }
     section.style.display = '';
+    // Mission briefing/description header — ABOVE the objectives (Show: pure,
+    // HTML-escaped read of the mission's static description text).
+    if (desc) {
+      const descHtml = buildMissionLogDescriptionHtml(description);
+      desc.innerHTML = descHtml;
+      desc.style.display = descHtml ? '' : 'none';
+    }
     list.innerHTML = buildMissionLogHtml(objs);
   }
 
