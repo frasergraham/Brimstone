@@ -2164,6 +2164,9 @@ export class Renderer3D {
 
     // ── Babylon state — populated by _initBabylon() on first draw ───────────
     this._babylon       = null; // module namespace once loaded
+    // Lazily-built soft radial texture shared by every Magic Bolt particle
+    // system (see `_magicParticleTexture`). Lives for the scene's lifetime.
+    this._magicParticleTex = null;
     // ── Building GLB model state (see `_loadBuildingModels`) ──────────────
     // `_buildingTemplates`   : Map<relPath, { mesh, scale }> — one hidden
     //                          source mesh per unique GLB variant path across
@@ -11584,8 +11587,14 @@ export class Renderer3D {
 
   // ─── Projectile animation ────────────────────────────────────────────────
 
-  /** Spawn a small projectile mesh and animate it from source → target hex
-   *  along a low parabolic arc. Mesh disposes when the animation ends. */
+  /** Spawn a projectile and animate it from source → target hex along a low
+   *  parabolic arc. The visual style is chosen by `projectileStyle` from the
+   *  weapon-derived type:
+   *    • 'magic'  (witch Magic Bolt) → a glowing PURPLE particle trail + burst
+   *    • 'streak' (bows / firearms)  → a bright stretched streak along travel
+   *    • 'orb'    (fallback)         → a plain emissive sphere
+   *  All transient meshes/materials/particle systems self-dispose when the
+   *  animation ends (mirrors `addSoundHorn`'s cleanup). */
   addProjectileAnim(projectileType, fromCol, fromRow, toCol, toRow, opts = {}) {
     if (!this._scene || !this._babylon) return;
     const BABYLON = this._babylon;
@@ -11593,44 +11602,154 @@ export class Renderer3D {
     const { x: toX,   z: toZ   } = hexToWorld(toCol,   toRow);
     const duration = opts.duration ?? 320;
     const FRAMES   = Math.max(6, Math.round(duration / 1000 * 60));
+    const { effect, color01 } = projectileStyle(projectileType);
+    const [r, g, b] = color01;
 
-    const ball = BABYLON.MeshBuilder.CreateSphere(
-      `proj_${projectileType ?? 'sparkle'}_${fromCol}_${fromRow}_${Date.now()}`,
-      { diameter: 0.25 }, this._scene,
-    );
-    ball.isPickable = false;
-    const mat = new BABYLON.StandardMaterial(`projmat_${ball.uniqueId}`, this._scene);
-    const [r, g, b] = projectileColor01(projectileType);
-    mat.diffuseColor  = new BABYLON.Color3(r, g, b);
-    mat.emissiveColor = new BABYLON.Color3(r, g, b);
-    mat.specularColor = new BABYLON.Color3(0, 0, 0);
-    ball.material = mat;
-
-    // Generate a 3-key arc: source, apex (midpoint + bump), target.
+    // Shared low-parabolic arc keyframes: source → apex (midpoint+bump) →
+    // target. Every style flies the same path; only the carrier mesh differs.
     const apexY = 0.6 + Math.hypot(toX - fromX, toZ - fromZ) * 0.12;
     const midX  = (fromX + toX) * 0.5;
     const midZ  = (fromZ + toZ) * 0.5;
-    ball.position.set(fromX, 0.5, fromZ);
+    const arcKeys = [
+      { frame: 0,          value: new BABYLON.Vector3(fromX, 0.5, fromZ) },
+      { frame: FRAMES / 2, value: new BABYLON.Vector3(midX,  apexY, midZ) },
+      { frame: FRAMES,     value: new BABYLON.Vector3(toX,   0.5, toZ) },
+    ];
+
+    // Carrier mesh — a streak (stretched & oriented) for arrows/bolts, else a
+    // small sphere. The magic effect rides an invisible sphere as its emitter.
+    let carrier;
+    const nameTag = `proj_${projectileType ?? 'sparkle'}_${fromCol}_${fromRow}_${Date.now()}`;
+    if (effect === 'streak') {
+      // Thin, long box stretched along local +Z; we point local +Z down the
+      // travel direction so the streak reads as an in-flight bolt, not an orb.
+      const len = 0.9;
+      carrier = BABYLON.MeshBuilder.CreateBox(
+        nameTag, { width: 0.07, height: 0.07, depth: len }, this._scene,
+      );
+      const dirX = toX - fromX;
+      const dirZ = toZ - fromZ;
+      // Yaw so local +Z aligns with (dirX, dirZ) on the ground plane. atan2
+      // gives the angle from +Z toward +X — Babylon's left-handed Y rotation.
+      carrier.rotation = new BABYLON.Vector3(0, Math.atan2(dirX, dirZ), 0);
+    } else {
+      // 'magic' emitter sphere and 'orb' fallback share the same small sphere;
+      // the magic one is made invisible so only its particles show.
+      carrier = BABYLON.MeshBuilder.CreateSphere(
+        nameTag, { diameter: 0.25 }, this._scene,
+      );
+    }
+    carrier.isPickable = false;
+    carrier.position.set(fromX, 0.5, fromZ);
+
+    const mat = new BABYLON.StandardMaterial(`projmat_${carrier.uniqueId}`, this._scene);
+    mat.diffuseColor  = new BABYLON.Color3(r, g, b);
+    mat.emissiveColor = new BABYLON.Color3(r, g, b);
+    mat.specularColor = new BABYLON.Color3(0, 0, 0);
+    carrier.material = mat;
+
+    if (effect === 'streak') {
+      // Bright, fully emissive so the streak pops against any phase light.
+      mat.emissiveColor = new BABYLON.Color3(
+        Math.min(1, r * 1.2), Math.min(1, g * 1.2), Math.min(1, b * 1.2));
+    }
+
+    // Magic: a purple particle system that follows the carrier (kept invisible
+    // so the bolt reads as pure glowing energy, never a hard sphere).
+    let particles = null;
+    if (effect === 'magic') {
+      carrier.visibility = 0;
+      particles = this._makeMagicProjectileParticles(carrier, color01);
+    }
 
     const animPos = new BABYLON.Animation('projPos', 'position', 60,
       BABYLON.Animation.ANIMATIONTYPE_VECTOR3, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
-    animPos.setKeys([
-      { frame: 0,           value: new BABYLON.Vector3(fromX, 0.5, fromZ) },
-      { frame: FRAMES / 2,  value: new BABYLON.Vector3(midX,  apexY, midZ) },
-      { frame: FRAMES,      value: new BABYLON.Vector3(toX,   0.5, toZ) },
-    ]);
+    animPos.setKeys(arcKeys);
 
     const promise = new Promise(resolve => {
-      this._scene.beginDirectAnimation(ball, [animPos], 0, FRAMES, false, 1, () => {
+      this._scene.beginDirectAnimation(carrier, [animPos], 0, FRAMES, false, 1, () => {
         if (typeof opts.onArrive === 'function') {
           try { opts.onArrive(); } catch (_) { /* swallow — playback continues */ }
         }
-        ball.dispose();
+        if (particles) {
+          // Stop emitting, then dispose after the live particles fade so the
+          // trail doesn't vanish abruptly at impact.
+          try { particles.stop(); } catch (_) { /* no-op */ }
+          const tail = (particles.maxLifeTime ?? 0.4) * 1000 + 120;
+          setTimeout(() => { try { particles.dispose(); } catch (_) { /* no-op */ } }, tail);
+        }
+        carrier.dispose();
         mat.dispose();
         resolve();
       });
     });
     this._trackAnim(promise);
+  }
+
+  /** Build a small purple `ParticleSystem` parented to `emitter` (the moving
+   *  carrier mesh) so the Magic Bolt leaves a glowing energy trail with a soft
+   *  burst at its head. Returns the started system, or null when particle
+   *  systems aren't available (headless test BABYLON stub). The caller owns
+   *  stopping + disposing it. */
+  _makeMagicProjectileParticles(emitter, color01) {
+    const BABYLON = this._babylon;
+    if (!BABYLON || typeof BABYLON.ParticleSystem !== 'function') return null;
+    const [r, g, b] = color01;
+    const ps = new BABYLON.ParticleSystem(
+      `magicProj_${emitter.uniqueId}`, 120, this._scene);
+    ps.particleTexture = this._magicParticleTexture();
+    ps.emitter = emitter;                       // follow the flying carrier
+    if (BABYLON.Vector3) {
+      ps.minEmitBox = new BABYLON.Vector3(-0.04, -0.04, -0.04);
+      ps.maxEmitBox = new BABYLON.Vector3( 0.04,  0.04,  0.04);
+    }
+    if (BABYLON.Color4) {
+      ps.color1    = new BABYLON.Color4(r, g, b, 1.0);
+      ps.color2    = new BABYLON.Color4(
+        Math.min(1, r + 0.25), Math.min(1, g + 0.1), Math.min(1, b + 0.05), 1.0);
+      ps.colorDead = new BABYLON.Color4(r * 0.4, g * 0.2, b * 0.5, 0.0);
+    }
+    ps.minSize = 0.14;
+    ps.maxSize = 0.34;
+    ps.minLifeTime = 0.18;
+    ps.maxLifeTime = 0.42;
+    ps.emitRate = 220;
+    if (BABYLON.ParticleSystem.BLENDMODE_ADD !== undefined) {
+      ps.blendMode = BABYLON.ParticleSystem.BLENDMODE_ADD;  // additive glow
+    }
+    ps.gravity = BABYLON.Vector3 ? new BABYLON.Vector3(0, 0, 0) : undefined;
+    ps.minEmitPower = 0.05;
+    ps.maxEmitPower = 0.25;
+    ps.updateSpeed  = 0.02;
+    try { ps.start(); } catch (_) { /* stub start may be a no-op */ }
+    return ps;
+  }
+
+  /** Lazily build + cache a soft radial-gradient texture for the magic
+   *  particle system. Painted procedurally via DynamicTexture so there's no
+   *  runtime asset/CDN dependency (matches the no-external-asset convention).
+   *  Shared across every magic bolt — disposed only with the scene. */
+  _magicParticleTexture() {
+    if (this._magicParticleTex) return this._magicParticleTex;
+    const BABYLON = this._babylon;
+    if (!BABYLON || typeof BABYLON.DynamicTexture !== 'function') return null;
+    const SZ = 64;
+    const tex = new BABYLON.DynamicTexture(
+      'magicParticleTex', { width: SZ, height: SZ }, this._scene, false);
+    tex.hasAlpha = true;
+    const ctx = typeof tex.getContext === 'function' ? tex.getContext() : null;
+    if (ctx && typeof ctx.createRadialGradient === 'function') {
+      const grad = ctx.createRadialGradient(SZ / 2, SZ / 2, 0, SZ / 2, SZ / 2, SZ / 2);
+      grad.addColorStop(0,   'rgba(255,255,255,1)');
+      grad.addColorStop(0.3, 'rgba(220,170,255,0.9)');
+      grad.addColorStop(0.7, 'rgba(155,89,182,0.4)');
+      grad.addColorStop(1,   'rgba(155,89,182,0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, SZ, SZ);
+      if (typeof tex.update === 'function') tex.update();
+    }
+    this._magicParticleTex = tex;
+    return tex;
   }
 
   /** No-op for the 3D path — projectile meshes self-dispose when their
@@ -20067,20 +20186,38 @@ export function movementHighlightPosition(col, row) {
 }
 
 /**
- * Projectile colour by type (linear-RGB, 0..1). Used by `addProjectileAnim`
- * for the sphere's diffuse/emissive colour. Unknown types fall back to a
- * neutral pale yellow.
+ * Projectile visual style by weapon-derived `projectileType` — the single
+ * source of truth that BOTH renderers dispatch on. Each entry names an
+ * `effect` family and a `color01` (linear-RGB, 0..1):
+ *
+ *   • 'sparkle' (witch Magic Bolt) → 'magic'  — a glowing PURPLE particle
+ *     trail/burst. (Was historically mis-coloured GREEN in 3D.)
+ *   • 'bolt'    (bows / crossbows / firearms / slings) → 'streak' — a bright
+ *     elongated streak oriented along the flight path.
+ *   • anything else → 'orb' — a plain pale sphere, so a new ranged weapon
+ *     renders *something* until its bespoke effect lands.
+ *
+ * Keeping the mapping pure + exported lets tests pin the type→effect table
+ * without spinning up a Babylon scene, and guarantees the 2D and 3D paths
+ * agree on which weapon gets which look.
+ */
+export function projectileStyle(projectileType) {
+  switch (projectileType) {
+    case 'sparkle':  // witch Magic Bolt
+      return { effect: 'magic',  color01: [0.62, 0.28, 0.95] };  // purple
+    case 'bolt':     // bows, crossbows, firearms, slings
+      return { effect: 'streak', color01: [0.95, 0.85, 0.55] };  // bright tan
+    default:
+      return { effect: 'orb',    color01: [1.0, 0.95, 0.7] };    // pale yellow
+  }
+}
+
+/**
+ * Projectile colour by type (linear-RGB, 0..1). Thin wrapper over
+ * `projectileStyle` kept for back-compat with existing callers/tests.
  */
 export function projectileColor01(projectileType) {
-  switch (projectileType) {
-    case 'sparkle':  // witch
-      return [0.4, 1.0, 0.5];
-    case 'arrow':    // hero
-    case 'crossbow':
-      return [0.85, 0.6, 0.25];
-    default:
-      return [1.0, 0.95, 0.7];
-  }
+  return projectileStyle(projectileType).color01;
 }
 
 // ─── Reaction effects: Sound Horn ring + Power-Node-Discovered burst ────────
