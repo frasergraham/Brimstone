@@ -4463,6 +4463,11 @@ function _initCampaignMission(missionDef) {
   mapData.disableScoring  = !!missionDef.disableScoring;
   mapData.disableCycleBar = !!missionDef.disableCycleBar;
   mapData.disableScoreWin  = !!missionDef.disableScoreWin;
+  // Campaign opt-out for the two ambient per-side spawn mechanics. A mission
+  // can drop them individually or together via `ambientSpawns: false`.
+  const ambientOff = missionDef.ambientSpawns === false;
+  mapData.disableNodeSurvivorSpawn = ambientOff || !!missionDef.disableNodeSurvivorSpawn;
+  mapData.disableWitchSupport      = ambientOff || !!missionDef.disableWitchSupport;
   if (missionDef.nodeScoreThreshold != null) {
     mapData.nodeScoreThreshold = missionDef.nodeScoreThreshold;
   }

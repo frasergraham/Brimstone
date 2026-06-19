@@ -486,9 +486,12 @@ describe('Wounded amplifies DOTs and attrition', () => {
       tile.buildingFootprintOf = null; tile.footprintHexes = [];
     }
     const startHp = surv.hp;
-    gs.setForcedDice(4);
+    // Night attrition now rolls 2d6 for the base bite (× attritionLevel), THEN
+    // applyIncomingDamage rolls the wounded amplifier — so the forced-dice queue
+    // is consumed base-d6, base-d6, wounded-d6 in that order.
+    gs.setForcedDice(2, 3, 4); // base 2d6 = 5 (×1), wounded 1D6 = 4
     applyPostRoundEffects(gs);
-    assert.equal(surv.hp, startHp - 11, 'attrition (1×7) + wounded 1D6 (4) = 11 HP loss');
+    assert.equal(surv.hp, startHp - 9, 'attrition 2d6 (2+3=5) + wounded 1D6 (4) = 9 HP loss');
   });
 });
 
