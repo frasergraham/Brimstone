@@ -487,7 +487,11 @@ Defined in `src/map.js`. Seeded procedural generation.
        │
 2. RIVER               Generate river path across map
        │
-3. BUILDINGS           Place INN + GRAVEYARD in opposite corners
+3. BUILDINGS           Place INN (hero start) + GRAVEYARD (witch start) on
+       │                OPPOSITE river banks, far enough apart to be out of
+       │                sight at game start (hex distance > START_SIGHT_CLEARANCE;
+       │                seeded-random, _pickFactionStarts). Tiny maps fall back to
+       │                the most-distant opposite-bank pair, then legacy corners.
        │                Cluster remaining buildings nearby
        │                Two-pass footprint materialization (see below)
        │

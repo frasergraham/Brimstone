@@ -98,6 +98,13 @@ describe('applyProjectedEquip yields an entity whose range reflects the projecti
 describe('getValidActions reflects the projected weapon range for plan highlights', () => {
   test('ranged→melee: a far enemy in bow range is NOT a melee target after equip', () => {
     const state = freshState();
+    // freshState() generates a fresh random map (Date.now() seed), so the tile
+    // between the two hand-placed units varies run to run. With fog on, BATTLE
+    // targets are gated by line-of-sight, so a forest/building on the
+    // intervening hex would intermittently hide the witch and flake the
+    // assertion. This test is about weapon-RANGE projection, not fog — pin fog
+    // off so visibility never gates the result.
+    state.fogOfWar = 'none';
     const hero  = state.hero;
     const witch = state.entities.find(e => e.type === EntityType.WITCH);
 
@@ -133,6 +140,9 @@ describe('getValidActions reflects the projected weapon range for plan highlight
 
   test('melee→ranged: a far enemy out of melee range BECOMES a target after equip', () => {
     const state = freshState();
+    // Pin fog off so line-of-sight over the (random-map) intervening hex never
+    // gates the distance-2 BATTLE target — see the sibling test above.
+    state.fogOfWar = 'none';
     const hero  = state.hero;
 
     // Use a controllable enemy minion placed 2 hexes away.
