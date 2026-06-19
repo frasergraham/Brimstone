@@ -145,26 +145,9 @@ describe('linkEmail auto-grants admin', () => {
 
 // ── Admin link visibility ────────────────────────────────────────────────────
 //
-// Static-markup wiring guard (kept deliberately): src/main.js looks up
-// `document.getElementById('admin-link')` and flips its display ON for admins.
-// If the id disappears, the reveal silently no-ops; if the element isn't
-// hidden inline, non-admins see the link flash before JS runs. The assertions
-// target the <a id="admin-link"> tag itself, not the whole file, so unrelated
-// markup can't satisfy them.
-
-describe('admin link in index.html', () => {
-  const html = readFileSync(resolve(root, 'index.html'), 'utf8');
-
-  test('the #admin-link element exists and is inline-hidden by default', () => {
-    const tag = html.match(/<a\b[^>]*\bid="admin-link"[^>]*>/);
-    assert.ok(tag, 'index.html should have an <a id="admin-link"> element (main.js reveals it for admins)');
-    assert.match(
-      tag[0],
-      /style="[^"]*display:\s*none[^"]*"/,
-      'the admin link element itself must carry display:none so non-admins never see it'
-    );
-  });
-});
+// The legacy menu's <a id="admin-link"> was removed at the ledger cutover; admins
+// reach the dashboard at /admin directly (main.js's reveal is null-safe, so it
+// simply no-ops when the link is absent). The admin auth gate below still matters.
 
 // ── Admin HTML page has auth gate ────────────────────────────────────────────
 //

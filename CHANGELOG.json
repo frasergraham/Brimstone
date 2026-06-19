@@ -1,5 +1,14 @@
 [
   {
+    "version": "1.8.1",
+    "date": "2026-06-19",
+    "summary": "Improvements",
+    "notes": [
+      "Remove the legacy menu DOM — fixes the boot flash",
+      "Decouple native sign-in from the legacy #auth-username input"
+    ]
+  },
+  {
     "version": "1.8.0",
     "date": "2026-06-19",
     "summary": "New features, and bug fixes",
