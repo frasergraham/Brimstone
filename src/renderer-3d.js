@@ -1021,6 +1021,16 @@ export const GROUND_LABEL_Y = 0.12;
 export const GROUND_LABEL_TEX_W = 512;
 export const GROUND_LABEL_TEX_H = 128;
 
+/** Cross-fade duration (ms) for a building ground label moving to a different
+ *  hex face as the camera orbits. Instead of SNAPPING the plane to the new
+ *  edge/yaw the instant the camera crosses a 60° sector boundary, the label's
+ *  material alpha ramps 1→0 over the first half (fading off the old face), the
+ *  plane is re-oriented/re-positioned to the new face at the midpoint (while
+ *  invisible), then alpha ramps 0→1 over the second half (fading onto the new
+ *  face). Matches XRAY_FADE_MS so all transient label motion reads at one tempo.
+ *  Operator-tunable. */
+export const LABEL_CROSS_FADE_MS = 200;
+
 /** Opacity of the "stand here" disc — a subtle 30% white wash. */
 export const GROUND_CIRCLE_ALPHA = 0.3;
 /** Radius (world units) of the "stand here" disc — a 0.4-diameter circle.
@@ -2418,7 +2428,13 @@ export class Renderer3D {
     // the building mesh in `_buildTileMesh`; never rebuilt (map topology is
     // immutable once the game starts).
     this._buildingGroundLabelsByKey = new Map(); // hexKey → { plane, mat, tex, disc, discMat, cx, cz }
-    this._groundLabelYaw = null;  // last applied snap yaw — re-pump only on change
+    this._groundLabelYaw = null;  // last SETTLED snap yaw — re-pump only on change
+    // In-flight label cross-fade (single shared fade across all labels — every
+    // label re-faces in lockstep, so one fade drives them all). Null when no
+    // transition is running. `pending` is the placement to settle onto; `applied`
+    // flips true once the midpoint repositions the planes. See
+    // `_pumpBuildingLabelFades` + `labelCrossFade`.
+    this._groundLabelFade = null; // { from, pending, applied, startMs, durMs } | null
     this._fogMaterialCache = new Map();  // base hex color → darker StandardMaterial
     this._fogActiveSet     = new Set();  // hexKeys currently rendered as fogged
     // Renderer-level fog DISPLAY override, toggled with the `T` hotkey for
@@ -10651,8 +10667,12 @@ export class Renderer3D {
       plane, mat, tex, disc, discMat, cx: hexX, cz: hexZ,
     });
     // Force the pump to re-apply orientation on the next frame so labels
-    // built after the cached yaw was set still get placed.
+    // built after the cached yaw was set still get placed. Cancel any in-flight
+    // cross-fade too so the next pump snaps every label (incl. this new one)
+    // straight onto the current face rather than stranding the newcomer.
     this._groundLabelYaw = null;
+    this._groundLabelFade = null;
+    if (mat && typeof mat.alpha === 'number') mat.alpha = 1;
   }
 
   /** Paint a ground-label DynamicTexture: the building name in the same
@@ -10692,11 +10712,27 @@ export class Renderer3D {
     if (typeof tex.update === 'function') tex.update();
   }
 
-  /** Per-frame: snap every building ground label to the hex-edge direction
-   *  that is currently the most horizontal on screen (`groundLabelPlacement`),
-   *  and hug the near-camera edge of its entrance hex. The snap only changes
-   *  when the camera yaw crosses a 60° sector boundary, so the early-out on
-   *  the cached yaw makes the steady-state cost one comparison per frame. */
+  /** Apply a `groundLabelPlacement` result to every label plane: yaw + hug the
+   *  near-camera edge of each entrance hex. The orientation is shared across all
+   *  labels (every label re-faces in lockstep), so one placement drives them all. */
+  _applyGroundLabelPlacement(placement) {
+    const map = this._buildingGroundLabelsByKey;
+    if (!map || !placement) return;
+    for (const entry of map.values()) {
+      if (!entry.plane) continue;
+      entry.plane.rotation.y = placement.yaw;
+      entry.plane.position.x = entry.cx + placement.offsetX;
+      entry.plane.position.z = entry.cz + placement.offsetZ;
+    }
+  }
+
+  /** Per-frame: when the camera yaw crosses a 60° sector boundary the labels'
+   *  most-horizontal-on-screen hex edge changes (`groundLabelPlacement`). Rather
+   *  than SNAP every label to the new edge/yaw, start a cross-fade — the labels
+   *  fade off the old face and fade onto the new one (`_pumpBuildingLabelFades`).
+   *  Steady-state cost is one comparison per frame thanks to the cached yaw. The
+   *  very first placement (cached yaw still null) snaps with no fade — there is
+   *  no "old face" to fade away from. */
   _pumpBuildingGroundLabels() {
     if (!this._camera) return;
     const map = this._buildingGroundLabelsByKey;
@@ -10708,13 +10744,66 @@ export class Renderer3D {
       target.x - cam.position.x,
       target.z - cam.position.z,
     );
-    if (!placement || placement.yaw === this._groundLabelYaw) return;
-    this._groundLabelYaw = placement.yaw;
+    if (!placement) return;
+    // Target yaw — accounting for an in-flight fade whose pending placement we
+    // may need to re-target if the camera keeps spinning before it settles.
+    const settledYaw = this._groundLabelYaw;
+    const inFlightYaw = this._groundLabelFade?.pending?.yaw;
+    // First-ever placement (or labels rebuilt): snap, no fade.
+    if (settledYaw === null && !this._groundLabelFade) {
+      this._groundLabelYaw = placement.yaw;
+      this._applyGroundLabelPlacement(placement);
+      return;
+    }
+    // No change vs the destination we're already heading to / sitting on.
+    if (placement.yaw === (inFlightYaw ?? settledYaw)) return;
+    // Yaw changed → (re)start the cross-fade toward the new placement. A fade
+    // already in flight is re-targeted from the CURRENT alpha so a fast spin
+    // glides instead of snapping, and never strands a label at alpha 0.
+    const sample = map.values().next().value;
+    const curAlpha = (sample?.mat && typeof sample.mat.alpha === 'number')
+      ? sample.mat.alpha
+      : 1;
+    this._groundLabelFade = {
+      from:    curAlpha,
+      pending: placement,
+      applied: false,
+      startMs: this._nowMs(),
+      durMs:   LABEL_CROSS_FADE_MS,
+    };
+  }
+
+  /** Per-frame: advance the in-flight building-label cross-fade. Ramps every
+   *  label's material alpha down off the old face, repositions all planes to the
+   *  new face at the midpoint, then ramps alpha back up. Cheap — runs only while
+   *  a fade is in flight, and clears itself once settled. */
+  _pumpBuildingLabelFades(now) {
+    const fade = this._groundLabelFade;
+    if (!fade) return;
+    const map = this._buildingGroundLabelsByKey;
+    if (!map || map.size === 0) { this._groundLabelFade = null; return; }
+    const { alpha, repositioned } = labelCrossFade({
+      from:    fade.from,
+      startMs: fade.startMs,
+      durMs:   fade.durMs,
+      now,
+    });
+    // Midpoint: snap all planes onto the new face exactly once (while invisible).
+    if (repositioned && !fade.applied) {
+      this._applyGroundLabelPlacement(fade.pending);
+      this._groundLabelYaw = fade.pending.yaw;
+      fade.applied = true;
+    }
     for (const entry of map.values()) {
-      if (!entry.plane) continue;
-      entry.plane.rotation.y = placement.yaw;
-      entry.plane.position.x = entry.cx + placement.offsetX;
-      entry.plane.position.z = entry.cz + placement.offsetZ;
+      if (entry.mat && typeof entry.mat.alpha === 'number') entry.mat.alpha = alpha;
+    }
+    const u = fade.durMs > 0 ? (now - fade.startMs) / fade.durMs : 1;
+    if (u >= 1) {
+      // Settle: pin alpha to full and drop the fade so steady state is free.
+      for (const entry of map.values()) {
+        if (entry.mat && typeof entry.mat.alpha === 'number') entry.mat.alpha = 1;
+      }
+      this._groundLabelFade = null;
     }
   }
 
@@ -15392,9 +15481,11 @@ export class Renderer3D {
     // Compass rose: rotate the top-left needle to keep pointing at map north
     // as the camera orbits. Skips the DOM write when alpha hasn't moved.
     this._pumpCompassRose();
-    // Building ground labels: re-snap to the most-horizontal-on-screen hex
-    // edge when the camera yaw crosses a sector boundary.
+    // Building ground labels: start a cross-fade to the most-horizontal-on-screen
+    // hex edge when the camera yaw crosses a sector boundary, then advance any
+    // in-flight fade (alpha down off the old face, reposition, alpha up).
     this._pumpBuildingGroundLabels();
+    this._pumpBuildingLabelFades(now);
     // Power-node outer-edge identifier outlines breathe between
     // NODE_OUTLINE_PULSE_MIN and NODE_OUTLINE_PULSE_MAX.
     this._pumpNodeOutlinePulse(now);
@@ -18427,6 +18518,40 @@ export function xrayFadeFactor({ from = 0, dir = 'in', startMs = 0, durMs = 0, n
   const u = Math.min(1, Math.max(0, (now - startMs) / durMs));
   const f = from + (target - from) * u;
   return Math.min(1, Math.max(0, f));
+}
+
+/**
+ * Single-plane "fade off the old face, fade onto the new face" cross-fade for a
+ * building ground label that has moved to a different hex edge. The fade is a
+ * V-shape over the duration: alpha ramps `from`→0 across the first half (the
+ * label dimming off its old face), reaches 0 at the midpoint where the caller
+ * re-orients/repositions the plane to the new face, then ramps 0→1 across the
+ * second half (the label brightening onto the new face).
+ *
+ * `from` is the alpha the fade STARTED at — usually 1, but a fade that reverses
+ * a still-in-flight fade should pass the current alpha so the down-ramp glides
+ * from wherever the label is rather than snapping to full first.
+ *
+ * Returns `{ alpha, repositioned }`:
+ *   - `alpha`        — 0..1 the material alpha should be this frame.
+ *   - `repositioned` — true once `now` has reached/passed the midpoint, i.e.
+ *                      the plane should now be sitting on the NEW face. The
+ *                      caller applies the new orientation exactly once on the
+ *                      first frame this flips true.
+ * A zero/negative duration snaps straight to the settled state (alpha 1, already
+ * repositioned). Kept Babylon-free so the curve is unit-testable.
+ */
+export function labelCrossFade({ from = 1, startMs = 0, durMs = 0, now = 0 }) {
+  if (!(durMs > 0)) return { alpha: 1, repositioned: true };
+  const u = Math.min(1, Math.max(0, (now - startMs) / durMs));
+  if (u < 0.5) {
+    // First half: ramp `from` → 0 (twice as fast since it spans half the time).
+    const f = from + (0 - from) * (u / 0.5);
+    return { alpha: Math.min(1, Math.max(0, f)), repositioned: false };
+  }
+  // Second half: ramp 0 → 1, label now on the new face.
+  const f = (u - 0.5) / 0.5;
+  return { alpha: Math.min(1, Math.max(0, f)), repositioned: true };
 }
 
 /**
