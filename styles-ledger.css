@@ -64,6 +64,21 @@
 .ledger-user .nm { font-size:13px; color:var(--lg-ink-2); }
 .ledger-user .st { font-size:11px; color:#5a5446; }
 
+/* Dev server switcher — tucked under the account name at the bottom of the rail
+   (overrides the legacy top-right absolute positioning from styles.css). */
+#ledger-screen #server-selector {
+  position:static; margin-top:10px;
+  display:flex; flex-direction:column; align-items:stretch; gap:4px;
+  font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:#5a5446;
+}
+#ledger-screen #server-selector select,
+#ledger-screen #server-selector input {
+  width:100%; box-sizing:border-box; cursor:pointer;
+  background:rgba(0,0,0,.3); border:1px solid rgba(255,255,255,.1);
+  color:var(--lg-ink-2); font-family:inherit; font-size:11px; text-transform:none;
+  padding:4px 6px; border-radius:4px;
+}
+
 /* ── LEDGER PANE ──────────────────────────────────────────────────────────── */
 .ledger-pane {
   flex:1; min-width:0; padding:36px 42px; display:flex; flex-direction:column; overflow:auto;

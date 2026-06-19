@@ -24,8 +24,12 @@ export async function initServerSelector(serverDevMode = false) {
   // Always show the server selector for now
   // if (!serverDevMode && !isDevMode) return;
 
-  const setupScreen = document.getElementById('setup-screen');
-  if (!setupScreen) return;
+  // Mount under the account name in the ledger rail (bottom-left). Fall back to
+  // the legacy setup-screen if the ledger frame isn't present for some reason.
+  const mount = document.querySelector('#ledger-screen .ledger-rail')
+             || document.getElementById('setup-screen');
+  if (!mount) return;
+  if (document.getElementById('server-selector')) return;   // already mounted
 
   // In Electron, BRIMSTONE_SERVER may not be set yet (async preload race).
   // Await the electron API to ensure we have the correct server URL.
@@ -69,7 +73,7 @@ export async function initServerSelector(serverDevMode = false) {
 
   wrap.appendChild(select);
   wrap.appendChild(input);
-  setupScreen.appendChild(wrap);
+  mount.appendChild(wrap);
 
   // ── Fetch Railway environments ────────────────────────────────────────────
   _fetchEnvironments(select, input, storedUrl);
