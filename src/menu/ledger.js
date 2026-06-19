@@ -921,11 +921,15 @@ function _othersBattle(body) {
     const mySide = st?.mySide;
     if (mySide) {
       body.appendChild(_note(`You fight for ${mySide === 'day' ? '☀ Day' : '🌙 Night'}.`));
-    } else {
-      const j = _button('⚔ Join the Battle', 'purple', () => _data.joinBattle?.());
-      j.style.marginTop = '14px';
-      body.appendChild(j);
     }
+    // Always offer a way into the live game. A player already in the battle needs
+    // to RETURN to it (joinBattle with no roomId ⇒ the server routes them back to
+    // their own room); an unjoined player JOINS. Previously the in-battle branch
+    // rendered only the status note with no button, so a joined player had no way
+    // to launch back in — a dead "launch screen that does nothing".
+    const j = _button(mySide ? '⚔ Return to Battle' : '⚔ Join the Battle', 'purple', () => _data.joinBattle?.());
+    j.style.marginTop = '14px';
+    body.appendChild(j);
   }).catch(() => { if (token === _renderToken) { loading.remove(); body.appendChild(_empty('Could not reach the Battle.')); } });
 }
 
