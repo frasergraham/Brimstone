@@ -348,6 +348,7 @@
 .lg-battle-live { font-size:12px; color:var(--lg-green); }
 .lg-battle-cta { font-size:13px; color:var(--lg-purple-lt); }
 .lg-battle-sub { font-size:12px; color:#8a8270; margin-top:6px; }
+.lg-battle-time { color:var(--lg-gold-dim); margin-top:3px; }
 .lg-btn-purple { border-color:var(--lg-purple); background:rgba(155,89,182,.2); color:#e6cdf2; }
 .lg-btn-purple:hover { background:rgba(155,89,182,.32); }
 

@@ -518,13 +518,15 @@ function _othersLanding(body) {
     // The persistent war's home on Play Online — "● live" once you've joined,
     // "View ▸" when it's available to join.
     const inBattle = battle?.kind === 'battle';
+    const battleTime = inBattle ? _gameTimeMeta(battle) : '';
     const bf = document.createElement('div');
     bf.className = 'lg-battle' + (inBattle ? ' is-live' : '');
     bf.innerHTML =
       `<div class="lg-battle-head"><span class="gthc">⚔ The Battle for Caleb's Hollow</span>` +
       `${inBattle ? '<span class="lg-battle-live">● live</span>' : '<span class="lg-battle-cta">View ▸</span>'}</div>` +
       `<div class="lg-battle-sub">Persistent 10v10 war — turns resolve at noon &amp; midnight.` +
-      `${inBattle && battle.round != null ? ' · Round ' + battle.round : ''}</div>`;
+      `${inBattle && battle.round != null ? ' · Round ' + battle.round : ''}</div>` +
+      (battleTime ? `<div class="lg-battle-sub lg-battle-time">${esc(battleTime)}</div>` : '');
     bf.addEventListener('click', () => { _othersView = 'battle'; select('others'); });
     body.appendChild(bf);
 
@@ -1081,12 +1083,21 @@ function _countdown(unixSec) {
   if (left < 86400) return `${Math.floor(left / 3600)}h left`;
   return `${Math.floor(left / 86400)}d left`;
 }
-// "last turn … · ⏱ … left" line for a saved online (MP) game; '' otherwise.
+// "last turn … · ⏱ … left" line for a saved online game or the Battle. MP games
+// carry a real updated_at; the Battle's last turn is derived from its deadline
+// (turns resolve on a 12h cadence — noon & midnight). '' when there's no data.
 function _gameTimeMeta(row) {
-  if (row.kind !== 'game') return '';
+  let last = null, dl = null;
+  if (row.kind === 'game') {
+    last = _relTime(row.updated_at);
+    dl = _countdown(row.turn_deadline);
+  } else if (row.kind === 'battle' && row.turn_deadline) {
+    last = _relTime(row.turn_deadline - 12 * 3600);
+    dl = _countdown(row.turn_deadline);
+  } else {
+    return '';
+  }
   const bits = [];
-  const last = _relTime(row.updated_at);
-  const dl = _countdown(row.turn_deadline);
   if (last) bits.push(`last turn ${last}`);
   if (dl) bits.push(`⏱ ${dl}`);
   return bits.join(' · ');
