@@ -375,7 +375,9 @@ function _resolveAsyncRound(roomId, timedOutPlayerIds) {
   const finalJson    = JSON.stringify(finalState);
   const resolvedRound = state.round - 1; // endRound already incremented
 
-  // Serialize steps for wire + storage
+  // Serialize steps for wire + storage. `logicEvents` (mission-logic SHOW events
+  // incl. Mission Log objective toasts — docs/09) are plain JSON; forward them
+  // verbatim when present, omit otherwise (byte-identical for normal games).
   const serializedSteps = steps.map(step => ({
     stepIndex:      step.stepIndex,
     playerEvents:   step.playerEvents.map(pe => ({
@@ -384,6 +386,7 @@ function _resolveAsyncRound(roomId, timedOutPlayerIds) {
       events:   _serializeEvents(pe.events),
     })),
     entitySnapshot: step.entitySnapshot ?? [],
+    ...(step.logicEvents ? { logicEvents: step.logicEvents } : {}),
   }));
 
   // Store replay round

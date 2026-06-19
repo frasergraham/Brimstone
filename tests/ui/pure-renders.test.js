@@ -8,6 +8,7 @@ import {
   buildPlanStepsHtml,
   buildPlayerStatusHtml,
   buildObjectivesHtml,
+  buildMissionLogHtml,
   buildNodeBadgeHtml,
   buildUnitDetailHtml,
   buildCycleInfoHtml,
@@ -576,5 +577,65 @@ describe('buildUnitDetailHtml — plan panel mirrors the Unit Stats Bar', () => 
     const html = buildUnitDetailHtml(entity, {});
     assert.match(html, /AGI/);
     assert.match(html, />4</);
+  });
+});
+
+// ── buildMissionLogHtml (the Chronicle's Mission Log to-do list) ──────────────
+
+describe('buildMissionLogHtml', () => {
+  test('empty list → empty string', () => {
+    assert.equal(buildMissionLogHtml([]), '');
+    assert.equal(buildMissionLogHtml(undefined), '');
+  });
+
+  test('a counted objective shows an "n/m" progress marker', () => {
+    const html = buildMissionLogHtml([
+      { id: 'zk', label: 'Kill three zombies', target: 3, current: 0, completed: false },
+    ]);
+    assert.match(html, /mission-log-marker">0\/3</);
+    assert.match(html, /Kill three zombies/);
+    assert.doesNotMatch(html, /mission-log-item done/);
+  });
+
+  test('progress advances the marker (2/3)', () => {
+    const html = buildMissionLogHtml([
+      { id: 'zk', label: 'Kill three zombies', target: 3, current: 2, completed: false },
+    ]);
+    assert.match(html, /mission-log-marker">2\/3</);
+  });
+
+  test('a completed objective gets the "done" class (strikethrough) + check marker', () => {
+    const html = buildMissionLogHtml([
+      { id: 'zk', label: 'Kill three zombies', target: 3, current: 3, completed: true },
+    ]);
+    assert.match(html, /class="mission-log-item done"/);
+    assert.match(html, /mission-log-marker">✓</);
+  });
+
+  test('a target-less objective is a plain checkbox', () => {
+    const html = buildMissionLogHtml([
+      { id: 'golem', label: 'Defeat the Wood Golem', target: null, current: 0, completed: false },
+    ]);
+    assert.match(html, /mission-log-marker">☐</);
+    assert.match(html, /Defeat the Wood Golem/);
+  });
+
+  test('renders multiple objectives in order (the Ch1M1 demo shape)', () => {
+    const html = buildMissionLogHtml([
+      { id: 'zk', label: 'Kill three zombies', target: 3, current: 3, completed: true },
+      { id: 'golem', label: 'Defeat the Wood Golem', target: null, current: 0, completed: false },
+    ]);
+    const items = html.match(/mission-log-item/g) ?? [];
+    assert.equal(items.length, 2);
+    // Completed item appears before the new one (authored order preserved).
+    assert.ok(html.indexOf('Kill three zombies') < html.indexOf('Defeat the Wood Golem'));
+  });
+
+  test('escapes HTML in author-supplied labels', () => {
+    const html = buildMissionLogHtml([
+      { id: 'x', label: '<script>bad</script>', target: null, current: 0, completed: false },
+    ]);
+    assert.doesNotMatch(html, /<script>/);
+    assert.match(html, /&lt;script&gt;/);
   });
 });

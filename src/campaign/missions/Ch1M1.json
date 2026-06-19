@@ -1227,6 +1227,74 @@
         },
         "x": 560,
         "y": 600
+      },
+      {
+        "id": "obj_set",
+        "type": "setObjective",
+        "params": {
+          "id": "zk",
+          "label": "Kill three zombies",
+          "target": 3
+        },
+        "x": 560,
+        "y": 40
+      },
+      {
+        "id": "kseq",
+        "type": "sequence",
+        "params": {
+          "outputs": 3
+        },
+        "x": 430,
+        "y": 180
+      },
+      {
+        "id": "u3",
+        "type": "updateObjective",
+        "params": {
+          "id": "zk",
+          "set": 3
+        },
+        "x": 700,
+        "y": 120
+      },
+      {
+        "id": "obj_golem",
+        "type": "setObjective",
+        "params": {
+          "id": "golem",
+          "label": "Defeat the Wood Golem"
+        },
+        "x": 700,
+        "y": 260
+      },
+      {
+        "id": "kp",
+        "type": "onKillCount",
+        "params": {
+          "faction": "hero",
+          "count": 1
+        },
+        "x": 40,
+        "y": 460
+      },
+      {
+        "id": "getKills",
+        "type": "getGameState",
+        "params": {
+          "field": "heroKills"
+        },
+        "x": 300,
+        "y": 540
+      },
+      {
+        "id": "uprog",
+        "type": "updateObjective",
+        "params": {
+          "id": "zk"
+        },
+        "x": 560,
+        "y": 460
       }
     ],
     "edges": [
@@ -1254,28 +1322,6 @@
       },
       {
         "from": {
-          "node": "n3",
-          "pin": "out"
-        },
-        "to": {
-          "node": "n4",
-          "pin": "in"
-        },
-        "kind": "exec"
-      },
-      {
-        "from": {
-          "node": "n5",
-          "pin": "onAllUnitsDead"
-        },
-        "to": {
-          "node": "n6",
-          "pin": "in"
-        },
-        "kind": "exec"
-      },
-      {
-        "from": {
           "node": "n10",
           "pin": "done"
         },
@@ -1292,6 +1338,94 @@
         },
         "to": {
           "node": "n10",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n0",
+          "pin": "out"
+        },
+        "to": {
+          "node": "obj_set",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n3",
+          "pin": "out"
+        },
+        "to": {
+          "node": "kseq",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "kseq",
+          "pin": "then0"
+        },
+        "to": {
+          "node": "u3",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "kseq",
+          "pin": "then1"
+        },
+        "to": {
+          "node": "n4",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "kseq",
+          "pin": "then2"
+        },
+        "to": {
+          "node": "obj_golem",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "kp",
+          "pin": "out"
+        },
+        "to": {
+          "node": "uprog",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "getKills",
+          "pin": "value"
+        },
+        "to": {
+          "node": "uprog",
+          "pin": "value"
+        },
+        "kind": "data"
+      },
+      {
+        "from": {
+          "node": "n5",
+          "pin": "onAllUnitsDead"
+        },
+        "to": {
+          "node": "n6",
           "pin": "in"
         },
         "kind": "exec"

@@ -1144,7 +1144,11 @@ function _executeResolution(room) {
 
   const finalState = serializeState(state);
 
-  // Serialize steps for the wire — playerEvents instead of heroEvents/witchEvents
+  // Serialize steps for the wire — playerEvents instead of heroEvents/witchEvents.
+  // `logicEvents` (mission-logic SHOW events: story beats, conversations, Mission
+  // Log objective toasts — docs/09) are plain JSON the resolver attached, so they
+  // forward verbatim when a logic mission runs server-side; absent for normal
+  // online games, so the field is omitted and the wire stays byte-identical.
   const serializedSteps = steps.map(step => ({
     stepIndex:      step.stepIndex,
     playerEvents:   step.playerEvents.map(pe => ({
@@ -1153,6 +1157,7 @@ function _executeResolution(room) {
       events:   _serializeEvents(pe.events),
     })),
     entitySnapshot: step.entitySnapshot ?? [],
+    ...(step.logicEvents ? { logicEvents: step.logicEvents } : {}),
   }));
 
   // Store round data for full-game replay (roundNum is pre-endRound value).

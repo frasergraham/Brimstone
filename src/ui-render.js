@@ -719,6 +719,34 @@ export function buildObjectivesHtml(witchObjectives, entities, nodeScore, gameMo
   return { html };
 }
 
+/** Minimal HTML escape for author-supplied objective labels. */
+function _escHtml(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * Build the Mission Log to-do list HTML (the top half of the Chronicle sidebar).
+ * Pure — reads the authoritative objective list from the mission-logic engine and
+ * returns markup; never touches the DOM or engine state (Sim/Show split).
+ *
+ * @param {Array<{ id, label, current, target, completed }>} objectives
+ * @returns {string} `<li>` rows; '' when there are no objectives.
+ */
+export function buildMissionLogHtml(objectives) {
+  const objs = Array.isArray(objectives) ? objectives : [];
+  return objs.map((o) => {
+    const done = !!o.completed;
+    const hasTarget = o.target != null;
+    const marker = done ? '✓'
+      : hasTarget ? `${Math.max(0, o.current ?? 0)}/${o.target}`
+      : '☐';
+    return `<li class="mission-log-item${done ? ' done' : ''}">`
+      + `<span class="mission-log-marker">${marker}</span>`
+      + `<span class="mission-log-label">${_escHtml(o.label ?? o.id ?? '')}</span>`
+      + `</li>`;
+  }).join('');
+}
+
 /**
  * Badge describing the Power Node occupying a hex, for the Unit Stats Bar.
  * Returns '' when the hex (col,row) is not part of any node cluster.

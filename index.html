@@ -61,7 +61,6 @@
       <button id="menu-btn" class="header-icon-btn" title="Menu">☰</button>
       <div id="turn-info"></div>
       <div class="header-buttons">
-        <button id="mission-info-btn" class="header-icon-btn" title="Mission Info" style="display:none">📜</button>
         <button id="replay-turn-btn" class="header-icon-btn replay-last-btn" title="Replay last turn" style="display:none">↺<span class="rt-label">Last Turn</span></button>
         <button id="end-turn-btn" class="header-icon-btn end-turn-header" data-tip="Lock in your plan — it resolves alongside your opponent’s">↩</button>
         <button id="plan-return-btn" class="header-icon-btn end-turn-header" title="Return to menu" style="display:none">← Menu</button>
@@ -81,12 +80,22 @@
     </div>
 
     <main id="game-main">
-      <!-- Chronicle sidebar — collapsible left-edge panel with pull-out tab -->
+      <!-- Chronicle sidebar — collapsible left-edge panel with pull-out tab.
+           Split horizontally: Mission Log (top, the live objective checklist
+           driven by the mission-logic graph) over the Chronicle (bottom, the
+           event log). The Mission Log section is hidden until the mission pushes
+           at least one objective. -->
       <div id="chronicle-sidebar" class="chronicle-panel collapsed">
         <!-- Pull-out tab — always visible so the panel can be reopened -->
         <button id="chronicle-tab" class="chronicle-tab" title="Toggle chronicle">
           <span class="chronicle-tab-label">Chronicle</span><span id="chronicle-tab-toggle" class="chronicle-tab-toggle">+</span>
         </button>
+        <div id="mission-log-section" class="mission-log-section" style="display:none">
+          <div class="chronicle-panel-header">
+            <span class="chronicle-title">🗒 Mission Log</span>
+          </div>
+          <ul id="mission-log-list" class="mission-log-list"></ul>
+        </div>
         <div class="chronicle-panel-header">
           <span class="chronicle-title">📜 Chronicle</span>
         </div>

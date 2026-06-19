@@ -509,6 +509,112 @@ registerNodeType({
   },
 });
 
+// ── Mission Log (live objective checklist) ──────────────────────────────────
+// The objective list is AUTHORITATIVE state on the engine (engineState.objectives),
+// mutated only by these SIM nodes from (state, plans, seed) — never presentation.
+// Each mutation also EMITS an `objectiveLog` event (a SHOW concern: toast + the
+// Chronicle "Mission Log" panel re-render) onto the presentation stream. The
+// state mutation is what serializes + survives resume; the emit is what animates.
+
+/** Find an objective entry by id (or undefined). */
+const findObjective = (engineState, id) =>
+  (engineState.objectives ??= []).find((o) => o.id === id);
+
+/** Emit the toast/panel SHOW event describing a log change. `change` is one of
+ *  'added' | 'progress' | 'completed' — the client picks the toast copy/icon. */
+const emitObjectiveLog = (api, objective, change) =>
+  api.emit({
+    kind: 'objectiveLog',
+    change,
+    objective: { ...objective },
+    // Snapshot the whole list so a client that missed an earlier event (resume,
+    // late-join spectator) can rebuild the panel from any single toast event.
+    objectives: (api.engineState.objectives ?? []).map((o) => ({ ...o })),
+  });
+
+// Set Objective — push a NEW objective onto the log, or redefine an existing one
+// (same id) in place. params: { id, label, target?, completed? }. `target` null
+// means a plain checkbox (no "n/m" marker); a number shows a progress marker.
+registerNodeType({
+  type: 'setObjective',
+  kind: NodeKind.SIM,
+  exec: { in: true, out: ['done'] },
+  data: { in: [{ name: 'label', type: 'string' }, { name: 'target', type: 'int' }] },
+  run: (api) => {
+    const id = api.param('id');
+    if (id == null || id === '') return { fire: ['done'] }; // ignore an unconfigured node
+    const label = api.input('label') ?? api.param('label', id);
+    const targetIn = api.input('target') ?? api.param('target', null);
+    const target = (targetIn == null || targetIn === '') ? null : Number(targetIn);
+    const completed = !!api.param('completed', false);
+    const objectives = (api.engineState.objectives ??= []);
+    const existing = objectives.find((o) => o.id === id);
+    const entry = {
+      id, label, target,
+      current: completed && target != null ? target : (existing?.current ?? 0),
+      completed,
+    };
+    if (existing) Object.assign(existing, entry); // redefine in place (keeps order)
+    else objectives.push(entry);
+    emitObjectiveLog(api, existing ?? entry, 'added');
+    return { fire: ['done'] };
+  },
+});
+
+// Update Objective — advance progress on an existing objective. The new `current`
+// is either an absolute value (`set` param / wired `value`) or, by default, +1.
+// Auto-completes (and emits 'completed') when current reaches target. No-op (but
+// still fires 'done') if the id isn't in the log — keeps graphs robust.
+registerNodeType({
+  type: 'updateObjective',
+  kind: NodeKind.SIM,
+  exec: { in: true, out: ['done'] },
+  data: { in: [{ name: 'value', type: 'int' }] },
+  // params: { id, set?:int (absolute), delta?:int (default +1) }
+  run: (api) => {
+    const id = api.param('id');
+    const obj = findObjective(api.engineState, id);
+    if (!obj) return { fire: ['done'] };
+    if (obj.completed) return { fire: ['done'] }; // already done — don't regress/re-toast
+
+    const prev = obj.current ?? 0;
+    const wired = api.input('value');
+    const setParam = api.param('set', undefined);
+    const setTo = wired ?? setParam;
+    let next = (setTo != null) ? Number(setTo) : prev + Number(api.param('delta', 1));
+
+    // Clamp to the target when one is set (a kill counter can over-shoot).
+    if (obj.target != null && next > obj.target) next = obj.target;
+
+    // Idempotent: re-driving with the same count (a cumulative kill-count event
+    // can re-fire on a round with no new kills) is a no-op — no regress, no toast.
+    if (next === prev) return { fire: ['done'] };
+    obj.current = next;
+
+    const justCompleted = obj.target != null && obj.current >= obj.target;
+    if (justCompleted) obj.completed = true;
+    emitObjectiveLog(api, obj, justCompleted ? 'completed' : 'progress');
+    return { fire: ['done'] };
+  },
+});
+
+// Complete Objective — mark an objective done (strikethrough) regardless of its
+// counter (e.g. a plot objective with no numeric target). Idempotent.
+registerNodeType({
+  type: 'completeObjective',
+  kind: NodeKind.SIM,
+  exec: { in: true, out: ['done'] },
+  // params: { id }
+  run: (api) => {
+    const obj = findObjective(api.engineState, api.param('id'));
+    if (!obj || obj.completed) return { fire: ['done'] };
+    obj.completed = true;
+    if (obj.target != null) obj.current = obj.target;
+    emitObjectiveLog(api, obj, 'completed');
+    return { fire: ['done'] };
+  },
+});
+
 // ════════════════════════════ SHOW nodes ════════════════════════════════════
 
 // Latent: emits the conversation presentation event and continues down 'done'
