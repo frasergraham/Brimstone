@@ -515,18 +515,18 @@ function _othersLanding(body) {
       () => { _createAsync = false; _othersView = 'find'; select('others'); }));
     body.appendChild(rh);
 
-    // Only surface the persistent Battle once the player is actually in it.
-    if (battle) {
-      const bf = document.createElement('div');
-      bf.className = 'lg-battle is-live';
-      bf.innerHTML =
-        `<div class="lg-battle-head"><span class="gthc">⚔ The Battle for Caleb's Hollow</span>` +
-        `<span class="lg-battle-live">● live</span></div>` +
-        `<div class="lg-battle-sub">Persistent 10v10 war — turns resolve at noon &amp; midnight.` +
-        `${battle.round != null ? ' · Round ' + battle.round : ''}</div>`;
-      bf.addEventListener('click', () => { _othersView = 'battle'; select('others'); });
-      body.appendChild(bf);
-    }
+    // The persistent war's home on Play Online — "● live" once you've joined,
+    // "View ▸" when it's available to join.
+    const inBattle = battle?.kind === 'battle';
+    const bf = document.createElement('div');
+    bf.className = 'lg-battle' + (inBattle ? ' is-live' : '');
+    bf.innerHTML =
+      `<div class="lg-battle-head"><span class="gthc">⚔ The Battle for Caleb's Hollow</span>` +
+      `${inBattle ? '<span class="lg-battle-live">● live</span>' : '<span class="lg-battle-cta">View ▸</span>'}</div>` +
+      `<div class="lg-battle-sub">Persistent 10v10 war — turns resolve at noon &amp; midnight.` +
+      `${inBattle && battle.round != null ? ' · Round ' + battle.round : ''}</div>`;
+    bf.addEventListener('click', () => { _othersView = 'battle'; select('others'); });
+    body.appendChild(bf);
 
     body.appendChild(_cap('Your games'));
     if (!games.length) {
@@ -964,6 +964,7 @@ function _resumeHero(row) {
       `<div class="lg-resume-kicker">${row.action_needed ? 'Your turn' : 'Continue'}</div>` +
       `<div class="lg-resume-title gthc">${esc(f.title)}</div>` +
       `<div class="lg-resume-meta">${esc(f.meta || '')}</div>` +
+      (_gameTimeMeta(row) ? `<div class="lg-resume-meta m2">${esc(_gameTimeMeta(row))}</div>` : '') +
     `</div>`;
   const actions = document.createElement('div');
   actions.className = 'lg-resume-actions lg-feed-actions';
@@ -978,7 +979,9 @@ function _feedRow(row, cta = null) {
   el.className = 'lg-feed-row' + (row.action_needed ? ' is-action' : '');
   const text = document.createElement('div');
   text.className = 'lg-feed-text';
-  text.innerHTML = `<div class="t">${esc(f.title)}</div><div class="m">${esc(f.meta || '')}</div>`;
+  const t2 = _gameTimeMeta(row);
+  text.innerHTML = `<div class="t">${esc(f.title)}</div><div class="m">${esc(f.meta || '')}</div>` +
+    (t2 ? `<div class="m2">${esc(t2)}</div>` : '');
   el.appendChild(text);
   const actions = document.createElement('div');
   actions.className = 'lg-feed-actions';
@@ -1059,6 +1062,35 @@ function roman(n) {
   return out;
 }
 function esc(s)      { return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+// Relative "time ago" for a unix-seconds timestamp (the last turn).
+function _relTime(unixSec) {
+  if (!unixSec) return null;
+  const d = Date.now() / 1000 - unixSec;
+  if (d < 60) return 'just now';
+  if (d < 3600) return `${Math.floor(d / 60)}m ago`;
+  if (d < 86400) return `${Math.floor(d / 3600)}h ago`;
+  return `${Math.floor(d / 86400)}d ago`;
+}
+// Countdown to a unix-seconds deadline (the next turn deadline).
+function _countdown(unixSec) {
+  if (!unixSec) return null;
+  const left = unixSec - Date.now() / 1000;
+  if (left <= 0) return 'overdue';
+  if (left < 3600) return `${Math.ceil(left / 60)}m left`;
+  if (left < 86400) return `${Math.floor(left / 3600)}h left`;
+  return `${Math.floor(left / 86400)}d left`;
+}
+// "last turn … · ⏱ … left" line for a saved online (MP) game; '' otherwise.
+function _gameTimeMeta(row) {
+  if (row.kind !== 'game') return '';
+  const bits = [];
+  const last = _relTime(row.updated_at);
+  const dl = _countdown(row.turn_deadline);
+  if (last) bits.push(`last turn ${last}`);
+  if (dl) bits.push(`⏱ ${dl}`);
+  return bits.join(' · ');
+}
 
 export function show() { _root?.classList.add('is-active'); }
 export function hide() { _root?.classList.remove('is-active'); }

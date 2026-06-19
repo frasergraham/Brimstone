@@ -9836,9 +9836,10 @@ async function _ledgerOnline() {
   return {
     signedIn,
     games: rows.filter(r => r.kind === 'game'),
-    // Only the Battle the player is actually IN (myBattle) — a 'battle-invite'
-    // (war exists but not joined) no longer surfaces on the landing.
-    battle: rows.find(r => r.kind === 'battle') || null,
+    // The Battle for the Play Online landing card — joined ('battle') OR available
+    // to join ('battle-invite'). It still stays OUT of the Continue resumable feed
+    // (activeGames filters 'battle-invite') so it's only "resumable" once joined.
+    battle: rows.find(r => r.kind === 'battle' || r.kind === 'battle-invite') || null,
   };
 }
 
