@@ -10028,6 +10028,17 @@ if (new URLSearchParams(location.search).get('ledger') != null) {
         }
       }).observe(ss, { attributes: true, attributeFilter: ['style'] });
     }
+    // A starting game shows #game-screen. Online games begin via the native
+    // lobby (which never touches #setup-screen, so the campaign/skirmish path of
+    // hiding the ledger before launch doesn't run) — get the ledger out of the
+    // way whenever the viewport appears. The setup-screen guard re-shows it when
+    // the game ends.
+    const gs = document.getElementById('game-screen');
+    if (gs && api) {
+      new MutationObserver(() => {
+        if (getComputedStyle(gs).display !== 'none') api.hide();
+      }).observe(gs, { attributes: true, attributeFilter: ['style'] });
+    }
   }).catch((e) => console.error('Ledger preview load failed:', e));
 }
 
