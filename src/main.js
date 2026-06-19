@@ -5098,7 +5098,7 @@ function _participantsFromEntities(entities) {
   const sides = { hero: [], witch: [] };
   const generic = { hero: {}, witch: {} };
   for (const e of entities || []) {
-    const side = e.owner === 'witch' ? 'witch' : 'hero';
+    const side = e.owner in sides ? e.owner : 'hero';   // bucket by side; default unknown to hero
     const alive = (e.hp ?? 0) > 0;
     if (e.name) {
       sides[side].push({ label: e.name, sub: `${_prettyType(e.type)} · ${Math.max(0, e.hp ?? 0)}/${e.maxHp ?? '?'} HP`, alive });
