@@ -114,6 +114,7 @@
   border-radius:6px; padding:16px; margin-bottom:20px; }
 .lg-resume-thumb { width:170px; height:108px; flex:none; border-radius:4px; display:flex; align-items:center; justify-content:center;
   font-size:40px; color:rgba(245,200,66,.5); background:radial-gradient(circle at 50% 40%, rgba(40,32,18,.9), rgba(8,9,13,.95)); border:1px solid rgba(212,167,44,.2); }
+.lg-resume-thumb.has-img { background-size:cover; background-position:center; border-color:rgba(212,167,44,.34); }
 .lg-resume-body { flex:1; min-width:0; display:flex; flex-direction:column; }
 .lg-resume-kicker { font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--lg-gold-dim); margin-bottom:4px; }
 .lg-resume-title { font-family:var(--lg-display); font-weight:600; font-size:28px; color:var(--lg-ink); line-height:1.02; }
@@ -126,6 +127,45 @@
   border-radius:5px; padding:10px 14px; cursor:pointer; }
 .lg-feed-row:hover { border-color:#33304a; background:rgba(20,22,32,.8); }
 .lg-feed-row.is-action { border-color:rgba(76,175,125,.4); }
+.lg-feed-thumb { width:56px; height:42px; flex:none; border-radius:4px; background-size:cover; background-position:center;
+  border:1px solid rgba(212,167,44,.22); }
+.lg-feed-thumb.clickable, .lg-resume-thumb.clickable { cursor:zoom-in; }
+.lg-feed-thumb.clickable:hover, .lg-resume-thumb.clickable:hover { border-color:var(--lg-gold-dim); }
+
+/* Game-detail overlay (thumbnail click) — bigger thumbnail + stats side panel */
+.lg-detail-back { position:fixed; inset:0; z-index:1000; display:flex; align-items:center; justify-content:center; padding:24px;
+  background:rgba(4,5,9,.78); backdrop-filter:blur(3px); }
+.lg-detail { position:relative; display:flex; width:100%; max-width:860px; max-height:86vh;
+  background:rgba(18,16,24,.97); border:1px solid rgba(212,167,44,.34); border-radius:10px; overflow:hidden;
+  box-shadow:0 24px 80px rgba(0,0,0,.6); }
+.lg-detail-img { flex:none; width:46%; min-height:360px; background:#0a0b10 center/cover no-repeat;
+  display:flex; align-items:center; justify-content:center; font-size:60px; color:rgba(245,200,66,.4); }
+.lg-detail-side { flex:1; min-width:0; padding:24px 26px; overflow-y:auto; }
+.lg-detail-title { font-family:var(--lg-display); font-size:30px; color:var(--lg-ink); line-height:1.05; }
+.lg-detail-meta { color:var(--lg-gold-dim); font-size:13px; letter-spacing:.05em; text-transform:uppercase; margin:6px 0 16px; }
+.lg-detail-stat { display:flex; align-items:baseline; gap:8px; padding:8px 0; border-top:1px solid rgba(255,255,255,.06); font-size:14px; }
+.lg-detail-stat > span:first-child { color:var(--lg-faint); min-width:92px; }
+.lg-detail-stat b { color:var(--lg-ink); font-weight:600; }
+.lg-detail-stat i { color:var(--lg-faint); font-style:normal; font-size:12px; margin-left:auto; }
+.lg-detail-group { margin-top:16px; }
+.lg-detail-group .hd { font-size:12px; letter-spacing:.1em; text-transform:uppercase; margin-bottom:6px; }
+.lg-detail-group.is-hero .hd { color:var(--hero); }
+.lg-detail-group.is-witch .hd { color:var(--witch); }
+.lg-fac-hero  { color:var(--hero); }
+.lg-fac-witch { color:var(--witch); }
+.lg-detail-score { align-items:center; }
+.lg-detail-tracks { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+.lg-detail-group .u { display:flex; justify-content:space-between; gap:10px; padding:3px 0; }
+.lg-detail-group .u .nm { color:var(--lg-ink-2); font-size:13px; }
+.lg-detail-group .u .sb { color:var(--lg-faint); font-size:12px; }
+.lg-detail-group .u.dead { opacity:.45; }
+.lg-detail-close { position:absolute; top:10px; right:12px; width:30px; height:30px; border-radius:50%; cursor:pointer;
+  background:rgba(0,0,0,.45); border:1px solid rgba(255,255,255,.15); color:var(--lg-ink-2); font-size:13px; }
+.lg-detail-close:hover { border-color:var(--lg-gold-dim); color:var(--lg-ink); }
+@media (max-width:680px) {
+  .lg-detail { flex-direction:column; max-height:90vh; }
+  .lg-detail-img { width:100%; min-height:200px; }
+}
 .lg-feed-text { flex:1; min-width:0; }
 .lg-feed-text .t { font-size:15px; color:#d4c9b0; }
 .lg-feed-text .m { font-size:12px; color:var(--lg-faint); }

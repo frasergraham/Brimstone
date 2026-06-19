@@ -1,5 +1,20 @@
 [
   {
+    "version": "1.8.3",
+    "date": "2026-06-19",
+    "summary": "New features, and bug fixes",
+    "notes": [
+      "Rich game-detail for multiplayer games via round-end stats snapshot",
+      "Show power-node ownership dots in the game-detail score tracker",
+      "Game-detail uses the in-game score pips + faction-coloured deaths",
+      "Game-detail overlay on thumbnail click",
+      "Capture save-game thumbnails for online games too",
+      "Client-side save-game thumbnails (local games)",
+      "Avoid hardcoded faction comparison in participant grouping",
+      "Online handlers crashed touching legacy DOM removed at cutover"
+    ]
+  },
+  {
     "version": "1.8.2",
     "date": "2026-06-19",
     "summary": "New features, and improvements",
