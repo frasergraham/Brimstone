@@ -606,18 +606,36 @@ function _othersLanding(body) {
     body.appendChild(rh);
 
     // The persistent war's home on Play Online — "● live" once you've joined,
-    // "View ▸" when it's available to join.
+    // "View ▸" when it's available to join. Like any online game, a joined Battle
+    // gets a live map thumbnail (the round-end snapshot keyed by its room id) and
+    // a clickable game-detail modal — see _battleThumb / _feedRow / _openGameDetail.
     const inBattle = battle?.kind === 'battle';
     const battleTime = inBattle ? _gameTimeMeta(battle) : '';
+    const battleThumb = inBattle ? _battleThumb(battle) : null;
     const bf = document.createElement('div');
-    bf.className = 'lg-battle' + (inBattle ? ' is-live' : '');
+    bf.className = 'lg-battle' + (inBattle ? ' is-live' : '') + (battleThumb ? ' has-thumb' : '');
     bf.innerHTML =
-      `<div class="lg-battle-head"><span class="gthc">⚔ The Battle for Caleb's Hollow</span>` +
-      `${inBattle ? '<span class="lg-battle-live">● live</span>' : '<span class="lg-battle-cta">View ▸</span>'}</div>` +
-      `<div class="lg-battle-sub">Persistent 10v10 war — turns resolve at noon &amp; midnight.` +
-      `${inBattle && battle.round != null ? ' · Round ' + battle.round : ''}</div>` +
-      (battleTime ? `<div class="lg-battle-sub lg-battle-time">${esc(battleTime)}</div>` : '');
+      (inBattle
+        // The live snapshot opens game-details; with no snapshot yet a placeholder
+        // glyph still shows so the card has a board, matching feed/resume rows.
+        ? `<div class="lg-battle-thumb${battleThumb ? ' has-img clickable' : ''}" aria-hidden="true"` +
+            `${battleThumb ? ` style="background-image:url(${battleThumb})" title="View battle details"` : ''}>` +
+            `${battleThumb ? '' : '🜂'}</div>`
+        : '') +
+      `<div class="lg-battle-body">` +
+        `<div class="lg-battle-head"><span class="gthc">⚔ The Battle for Caleb's Hollow</span>` +
+        `${inBattle ? '<span class="lg-battle-live">● live</span>' : '<span class="lg-battle-cta">View ▸</span>'}</div>` +
+        `<div class="lg-battle-sub">Persistent 10v10 war — turns resolve at noon &amp; midnight.` +
+        `${inBattle && battle.round != null ? ' · Round ' + battle.round : ''}</div>` +
+        (battleTime ? `<div class="lg-battle-sub lg-battle-time">${esc(battleTime)}</div>` : '') +
+      `</div>`;
     bf.addEventListener('click', () => { _othersView = 'battle'; select('others'); });
+    // The thumbnail click opens the detail modal instead of the Battle view (same
+    // as feed/resume rows). Stop propagation so the card's own click doesn't fire.
+    if (battleThumb) {
+      const bte = bf.querySelector('.lg-battle-thumb');
+      bte?.addEventListener('click', (e) => { e.stopPropagation(); _openGameDetail(battle); });
+    }
     body.appendChild(bf);
 
     body.appendChild(_cap('Your games'));
@@ -1079,6 +1097,15 @@ function _rowThumb(row) {
     if (missionId) return missionThumb(missionId, row.room_id);
   }
   return loadThumb(row.room_id);
+}
+
+// The Battle for Caleb's Hollow is an online game, so its map thumbnail comes
+// from the same place every online game's does: the round-end snapshot saved
+// under the room id (here the battle's room_id == b.roomId), captured locally
+// when this player resolves a round. No snapshot yet ⇒ null (the card shows a
+// placeholder glyph). A battle-invite (never joined) has no room_id ⇒ no thumb.
+function _battleThumb(battle) {
+  return battle?.room_id ? loadThumb(battle.room_id) : null;
 }
 
 function _resumeHero(row) {
