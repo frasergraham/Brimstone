@@ -25,7 +25,7 @@ import {
 } from './ai-debug.js';
 import {
   MultiplayerClient, MirrorState, loadSession, clearSession,
-  checkEmailTokenInUrl, requestLinkEmail, requestEmailLogin, fetchIdentities,
+  checkEmailTokenInUrl, requestLinkEmail, requestEmailLogin,
 } from './multiplayer.js';
 import { VERSION, BUILD_VERSION } from './version.js';
 import { buildPlayerStatusHtml } from './ui-render.js';
@@ -54,7 +54,7 @@ import { MissionConductor, areHintsSuppressed, markHintsSeen, resetAllHintsForCa
 import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel, getEquippedWeaponIdOf, normalizeItems, flattenItemCounts } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, CAMPAIGN_SLOT_COUNT, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
-import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
+import { CAMPAIGNS } from './campaign/campaign-registry.js';
 import { processStoryTriggers } from './campaign/missions.js';
 import { MissionLogicEngine } from './mission-logic/engine.js';
 import { createGameContext } from './mission-logic/game-context.js';
@@ -3549,21 +3549,7 @@ let _currentLobby = null;
 
 // Main-menu mode buttons (flattened from the former New Game submenu — they now
 // live directly on the welcome card between Active Games and Replays).
-document.getElementById('btn-ng-battle')  ?.addEventListener('click', () => _showBattleScreen());
-document.getElementById('btn-ng-campaign')?.addEventListener('click', () => {
-  // Skip the chapter picker entirely — only Chapter 1 ships, so route the
-  // "Campaign" choice straight to its save-slot picker. Chapters 2–4 remain in
-  // the registry (disabled) but the chapter-select screen is no longer surfaced.
-  const ch1 = getCampaignById('calebs_hollow_prologue');
-  if (ch1) _showCampaignSlotScreen(ch1);
-  else _showCampaignSelectScreen(); // defensive fallback
-});
-document.getElementById('btn-ng-vsai')    ?.addEventListener('click', () => _showSinglePlayerScreen());
-document.getElementById('btn-ng-online')  ?.addEventListener('click', () => _showOnlineScreen());
 
-document.getElementById('setup-session-name')?.addEventListener('click', () => { _initAccountPage(); showStep('account'); });
-document.getElementById('btn-account-back') ?.addEventListener('click', () => showStep('mode'));
-document.getElementById('btn-changelog-back')?.addEventListener('click', () => showStep('mode'));
 document.getElementById('reconnect-back')?.addEventListener('click', () => location.reload());
 
 // Initialize persistent session bar on page load
@@ -3637,34 +3623,7 @@ if (isNativeMobile) {
 }
 
 // Version badge opens revision history
-document.getElementById('version-badge')?.addEventListener('click', (e) => {
-  e.preventDefault();
-  _openChangelog();
-});
 
-let _changelogLoaded = false;
-function _openChangelog() {
-  showStep('changelog');
-  if (_changelogLoaded) return;
-  fetch('/CHANGELOG.json')
-    .then(r => r.json())
-    .then(releases => {
-      const container = document.getElementById('changelog-body');
-      container.innerHTML = releases.map(r => `
-        <div class="changelog-release">
-          <div class="changelog-version-heading">v${r.version}</div>
-          <div class="changelog-date">${r.date}${r.summary ? ' — ' + r.summary : ''}</div>
-          <ul class="changelog-notes">
-            ${r.notes.map(n => `<li>${n}</li>`).join('')}
-          </ul>
-        </div>
-      `).join('');
-      _changelogLoaded = true;
-    })
-    .catch(() => {
-      document.getElementById('changelog-body').textContent = 'Could not load revision history.';
-    });
-}
 
 // ── Electron desktop app integration ─────────────────────────────────────────
 // Wires up server settings UI and auto-update notifications when running inside
@@ -3763,16 +3722,7 @@ if (window.electronAPI) {
 
 // ── Single Player screen ───────────────────────────────────────────────────────
 
-function _showSinglePlayerScreen() {
-  showStep('singleplayer');
-  _renderSpSaves();
-}
 
-document.getElementById('btn-singleplayer-back')?.addEventListener('click', () => {
-  if (ui) ui.destroy();
-  renderer = null; ui = null; state = null;
-  showStep('mode');
-});
 
 // ── Campaign / Story Mode ─────────────────────────────────────────────────────
 
@@ -3899,127 +3849,13 @@ function _resumeCampaignMission(missionId) {
   _startLocalPlanningPhase();
 }
 
-function _showCampaignSelectScreen() {
-  const listEl = document.getElementById('campaign-select-list');
-  listEl.innerHTML = CAMPAIGNS.map(c => {
-    const disabled = c.disabled === true;
-    const progress = disabled ? { status: 'new', completed: 0, total: 0 }
-                              : Campaign.getAggregateProgress(c);
-    const locked = disabled || (c.prerequisiteCampaign
-      ? !Campaign.isCampaignCompleted(getCampaignById(c.prerequisiteCampaign))
-      : false);
-    // Status class is applied when the campaign is playable and has progress.
-    const statusClass = (!disabled && !locked && progress.status !== 'new')
-      ? ` status-${progress.status}`
-      : '';
-    const cls = `campaign-select-item${disabled ? ' disabled' : locked ? ' locked' : ''}${statusClass}`;
-    const titlePrefix = disabled ? '' : locked ? '🔒 ' : '';
-    let statusBadge = '';
-    if (disabled) {
-      statusBadge = '<div class="campaign-select-badge coming-soon">Coming Soon</div>';
-    } else if (locked) {
-      statusBadge = '<div class="campaign-select-badge locked-badge">Complete the previous chapter to unlock</div>';
-    } else if (progress.status === 'completed') {
-      statusBadge = '<div class="campaign-select-badge completed">✓ Completed</div>';
-    } else if (progress.status === 'in-progress') {
-      const progressText = progress.total > 0
-        ? `In Progress — ${progress.completed}/${progress.total} missions`
-        : 'In Progress';
-      statusBadge = `<div class="campaign-select-badge in-progress">${progressText}</div>`;
-    } else {
-      statusBadge = '<div class="campaign-select-badge new">New</div>';
-    }
-    return `<div class="${cls}" data-campaign="${c.id}">
-      <div class="campaign-select-title">${titlePrefix}${c.title}</div>
-      <div class="campaign-select-desc">${c.description}</div>
-      ${statusBadge}
-    </div>`;
-  }).join('');
-
-  listEl.querySelectorAll('.campaign-select-item:not(.locked):not(.disabled)').forEach(el => {
-    el.addEventListener('click', () => {
-      const def = getCampaignById(el.dataset.campaign);
-      if (def) _showCampaignSlotScreen(def);
-    });
-  });
-
-  showStep('campaign-select');
-}
 
 // ── Save-slot picker ──────────────────────────────────────────────────────────
 // Opens after a chapter is chosen, before the mission list. Lets the player
 // keep several independent playthroughs of the same campaign (e.g. restart
 // Chapter 1 in slot 2 while slot 1 sits mid-campaign).
-let _slotPickerCampaignDef = null;
 
-function _showCampaignSlotScreen(campaignDef) {
-  _slotPickerCampaignDef = campaignDef;
-  const titleEl = document.getElementById('campaign-slot-title');
-  if (titleEl) titleEl.textContent = campaignDef.title;
-  _renderCampaignSlotList();
-  showStep('campaign-slot');
-}
 
-function _renderCampaignSlotList() {
-  const campaignDef = _slotPickerCampaignDef;
-  const listEl = document.getElementById('campaign-slot-list');
-  if (!campaignDef || !listEl) return;
-
-  let html = '';
-  for (let slot = 1; slot <= CAMPAIGN_SLOT_COUNT; slot++) {
-    const info = Campaign.getSlotSummary(campaignDef, slot);
-    if (info.used) {
-      const when = _timeAgo(Math.floor((info.updatedAt ?? Date.now()) / 1000));
-      const progress = info.total > 0 ? ` · ${info.completed}/${info.total} missions` : '';
-      html += `<div class="campaign-slot-item used" data-slot="${slot}">
-        <div class="campaign-slot-info">
-          <div class="campaign-slot-name">Slot ${slot} — ${info.currentMissionTitle}</div>
-          <div class="campaign-slot-meta">Updated ${when}${progress}</div>
-        </div>
-        <div class="campaign-slot-actions">
-          <button class="setup-btn primary campaign-slot-continue" data-slot="${slot}">Continue</button>
-          <button class="setup-btn campaign-slot-delete" data-slot="${slot}" title="Delete this slot">✕</button>
-        </div>
-      </div>`;
-    } else {
-      html += `<div class="campaign-slot-item empty" data-slot="${slot}">
-        <div class="campaign-slot-info">
-          <div class="campaign-slot-name">Slot ${slot}</div>
-          <div class="campaign-slot-meta">Empty</div>
-        </div>
-        <div class="campaign-slot-actions">
-          <button class="setup-btn primary campaign-slot-new" data-slot="${slot}">New Game</button>
-        </div>
-      </div>`;
-    }
-  }
-  listEl.innerHTML = html;
-
-  listEl.querySelectorAll('.campaign-slot-new').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const slot = parseInt(btn.dataset.slot, 10);
-      // Claim the slot with a fresh progress blob so it reads as "in use".
-      new Campaign(campaignDef, slot).save();
-      _showCampaignScreen(campaignDef, undefined, slot);
-    });
-  });
-  listEl.querySelectorAll('.campaign-slot-continue').forEach(btn => {
-    btn.addEventListener('click', () => {
-      _showCampaignScreen(campaignDef, undefined, parseInt(btn.dataset.slot, 10));
-    });
-  });
-  listEl.querySelectorAll('.campaign-slot-delete').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const slot = parseInt(btn.dataset.slot, 10);
-      if (!confirm(`Delete Slot ${slot}? All progress, roster survivors, and resources in this slot will be lost. This cannot be undone.`)) return;
-      new Campaign(campaignDef, slot).delete();
-      for (const m of campaignDef.missions || []) {
-        deleteCampaignMissionSave(campaignDef.id, m.id, slot);
-      }
-      _renderCampaignSlotList();
-    });
-  });
-}
 
 async function _showCampaignScreen(campaignDef, autoMissionId, slotIndex = 1) {
   if (campaignDef) {
@@ -4126,19 +3962,6 @@ function _renderCampaignProgressScreen() {
 }
 
 /** Brief auto-dismissing confirmation toast on the Campaign Progress card. */
-let _cprogToastTimer = null;
-function _showCampaignProgressToast(text) {
-  const toast = document.getElementById('campaign-progress-toast');
-  if (!toast) return;
-  toast.textContent = text;
-  toast.style.display = '';
-  toast.classList.remove('campaign-progress-toast-out');
-  clearTimeout(_cprogToastTimer);
-  _cprogToastTimer = setTimeout(() => {
-    toast.classList.add('campaign-progress-toast-out');
-    setTimeout(() => { toast.style.display = 'none'; }, 600);
-  }, 2400);
-}
 
 function _wireCampaignProgressHandlers() {
   const maxActive = _progressMaxActive();
@@ -4315,67 +4138,6 @@ function _renderDeployRoster(heroStats, roster, maxActive) {
   });
 }
 
-function _renderCampaignScreen() {
-  const listEl = document.getElementById('campaign-mission-list');
-  const briefEl = document.getElementById('campaign-briefing');
-  const navEl = document.getElementById('campaign-nav');
-  const rosterEl = document.getElementById('campaign-roster-summary');
-  briefEl.style.display = 'none';
-  navEl.style.display = '';
-  listEl.style.display = '';
-
-  // Set campaign title from definition
-  const titleEl = document.getElementById('campaign-title');
-  if (titleEl && _activeCampaign?.campaignDef) {
-    titleEl.textContent = _activeCampaign.campaignDef.title;
-  }
-
-  // Party roster display (hero + survivors)
-  rosterEl.style.display = '';
-  const resEntries = Object.entries(_activeCampaign.resources).filter(([,v]) => v > 0);
-  const resourcesHtml = resEntries.length
-    ? `<div class="campaign-resources">${resEntries.map(([k,v]) => `<span class="cr-item"><span class="cr-icon">${_RESOURCE_ICONS[k] || ''}</span><span class="cr-count">${v}</span><span class="cr-label">${k}</span></span>`).join('')}</div>`
-    : '';
-  rosterEl.innerHTML =
-    `<div class="campaign-roster-label">Your Party <button id="btn-admin-add-survivor" class="admin-btn admin-add-btn" title="Add random survivor (testing)">+</button></div>` +
-    _campaignPartyHTML(_activeCampaign.heroStats, _activeCampaign.roster) +
-    resourcesHtml;
-
-  document.getElementById('btn-admin-add-survivor')?.addEventListener('click', () => {
-    const s = createSurvivor(0, 0, 'hero');
-    _activeCampaign.roster.push(snapshotSurvivor(s));
-    _activeCampaign.save();
-    _renderCampaignScreen();
-  });
-
-  // Mission list
-  const missions = _activeCampaign.getMissionList();
-  const campaignId = _activeCampaign.campaignDef.id;
-  listEl.innerHTML = missions.map(m => {
-    const unlocked = _campaignUnlocked || m.available;
-    const cls = m.completed ? 'campaign-mission completed' : unlocked ? 'campaign-mission available' : 'campaign-mission locked';
-    const icon = m.completed ? '✓' : unlocked ? '→' : '🔒';
-    const hasSave = loadCampaignMissionSave(campaignId, m.id, _activeCampaign.slotIndex) !== null;
-    const statusLabel = m.completed
-      ? '<span class="campaign-mission-status">Complete</span>'
-      : hasSave
-        ? '<span class="campaign-mission-status in-progress">In Progress</span>'
-        : '';
-    return `<div class="${cls}" data-mission="${m.id}">
-      <span class="campaign-mission-icon">${icon}</span>
-      <span class="campaign-mission-name">${m.title}</span>
-      ${statusLabel}
-    </div>`;
-  }).join('');
-
-  // Click handlers for missions
-  listEl.querySelectorAll('.campaign-mission.available').forEach(el => {
-    el.addEventListener('click', () => {
-      _campaignSelectedMission = el.dataset.mission;
-      _showMissionBriefing(_campaignSelectedMission);
-    });
-  });
-}
 
 function _showMissionBriefing(missionId) {
   const missionDef = _activeCampaign.getMissionDef(missionId);
@@ -5150,53 +4912,8 @@ function _handleCampaignMissionEnd() {
 }
 
 // Campaign event listeners
-document.getElementById('btn-campaign-select-back')?.addEventListener('click', () => showStep('mode'));
 // The slot picker is now the campaign entry point (the chapter screen is skipped),
 // so backing out of it returns to the main menu.
-document.getElementById('btn-campaign-slot-back')  ?.addEventListener('click', () => showStep('mode'));
-document.getElementById('btn-campaign-back')   ?.addEventListener('click', () => {
-  if (_activeCampaign) _showCampaignSlotScreen(_activeCampaign.campaignDef);
-  else showStep('mode');
-});
-document.getElementById('btn-briefing-back')   ?.addEventListener('click', () => {
-  // Return to the Progress landing (preserving the squad just chosen) — but if
-  // we arrived here via a single-mission campaign there's no landing to show.
-  if (_activeCampaign && _activeCampaign.campaignDef.missions.length > 1) {
-    _renderCampaignProgressScreen();
-    showStep('campaign-progress');
-  } else {
-    _renderCampaignScreen();
-  }
-});
-
-// Campaign Progress screen — static nav buttons (wired once).
-document.getElementById('btn-campaign-progress-back')?.addEventListener('click', () => {
-  if (_activeCampaign) _showCampaignSlotScreen(_activeCampaign.campaignDef);
-});
-document.getElementById('btn-campaign-progress-startover')?.addEventListener('click', () => {
-  if (confirm('Start over? All campaign progress, roster survivors, and resources in this slot will be lost. This cannot be undone.')) {
-    const def = _activeCampaign.campaignDef;
-    _activeCampaign.delete();
-    _showCampaignSlotScreen(def);
-  }
-});
-document.getElementById('btn-campaign-progress-unlock')?.addEventListener('click', () => {
-  _campaignUnlocked = !_campaignUnlocked;
-  const btn = document.getElementById('btn-campaign-progress-unlock');
-  if (btn) btn.textContent = _campaignUnlocked ? '🔒 Lock' : '🔓 Unlock All';
-  _renderCampaignProgressScreen();
-});
-document.getElementById('btn-campaign-progress-reset-hints')?.addEventListener('click', () => {
-  if (!_activeCampaign) return;
-  resetAllHintsForCampaign(_activeCampaign.campaignDef);
-  _showCampaignProgressToast('💡 Tutorial hints re-enabled for this campaign.');
-});
-document.querySelectorAll('.cprog-toggle-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    _progressPane = btn.dataset.pane === 'missions' ? 'missions' : 'party';
-    _renderCampaignProgressScreen();
-  });
-});
 
 // ── Main-menu column slide toggle (mobile: active games ↔ menus) ──────────────
 // Mirrors the Campaign Progress pane toggle — a class on the mode card drives
@@ -5213,40 +4930,6 @@ function _setMmColumn(col) {
     el.classList.toggle('active', el.dataset.col === _mmColumn);
   });
 }
-document.querySelectorAll('.mm-col-arrow, .mm-col-dot').forEach(el => {
-  el.addEventListener('click', () => _setMmColumn(el.dataset.col));
-});
-document.getElementById('btn-delete-campaign')  ?.addEventListener('click', () => {
-  if (confirm('Start over? All campaign progress, roster survivors, and resources will be lost. This cannot be undone.')) {
-    const def = _activeCampaign.campaignDef;
-    _activeCampaign.delete();
-    _showCampaignSlotScreen(def);
-  }
-});
-document.getElementById('btn-start-mission')   ?.addEventListener('click', () => {
-  if (!_campaignSelectedMission) return;
-  const missionDef = _activeCampaign.getMissionDef(_campaignSelectedMission);
-  if (missionDef) _initCampaignMission(missionDef);
-});
-document.getElementById('btn-resume-mission')  ?.addEventListener('click', () => {
-  if (!_campaignSelectedMission) return;
-  _resumeCampaignMission(_campaignSelectedMission);
-});
-document.getElementById('btn-restart-mission') ?.addEventListener('click', () => {
-  if (!_campaignSelectedMission) return;
-  deleteCampaignMissionSave(_activeCampaign.campaignDef.id, _campaignSelectedMission, _activeCampaign.slotIndex);
-  const missionDef = _activeCampaign.getMissionDef(_campaignSelectedMission);
-  if (missionDef) _initCampaignMission(missionDef);
-});
-document.getElementById('btn-admin-unlock')    ?.addEventListener('click', () => {
-  _campaignUnlocked = !_campaignUnlocked;
-  const btn = document.getElementById('btn-admin-unlock');
-  btn.textContent = _campaignUnlocked ? '🔒 Lock' : '🔓 Unlock All';
-  _renderCampaignScreen();
-});
-document.getElementById('btn-debrief-continue')?.addEventListener('click', () => {
-  _showCampaignScreen();
-});
 
 // Tab switching for In Progress / Completed panels (SP and MP)
 document.addEventListener('click', e => {
@@ -5282,11 +4965,6 @@ for (const btn of _qpFactionTiles) {
 // the human-controlled faction; the AI plays the side default on the
 // opposing side. Stubs are passed through to GameState.swapLeaderToFaction
 // so the human's leader gets stub stats.
-document.getElementById('btn-start-qp')?.addEventListener('click', () => {
-  const def     = getFaction(_qpFactionId);
-  const isDay   = def.side === 'day';
-  init(/*witchIsAI*/ isDay, /*heroIsAI*/ !isDay, /*autoplay*/ false, /*humanFactionId*/ _qpFactionId);
-});
 
 function _doRestart() {
   // Disconnect from server if in online mode
@@ -6973,11 +6651,6 @@ async function _startSpReplay(data) {
 function _replayRefs() { return { state, renderer, ui }; }
 
 /** Wrapper: swapState using the local module globals. */
-function _swapState(newState) {
-  const refs = { state, renderer, ui };
-  swapState(refs, newState);
-  state = refs.state;
-}
 
 async function _replayFullGame(rounds, winner, winReason, heroName, witchName, redrawFn, opts = {}) {
   const refs = _replayRefs();
@@ -7366,52 +7039,11 @@ async function _showBattleScreen() {
 // Sign-in button on the battle screen — open the auth dialog and return to
 // the battle screen on success (previous behavior routed to Account and
 // never came back).
-document.getElementById('btn-battle-signin')?.addEventListener('click', () => {
-  _showAuthDialog(() => _showBattleScreen());
-});
 
-document.getElementById('btn-battle-main')?.addEventListener('click', () => _showBattleScreen());
-document.getElementById('btn-battle-back')?.addEventListener('click', () => showStep('mode'));
-document.getElementById('btn-battle-join')?.addEventListener('click', function() {
-  const roomId = this.dataset.roomId || null;  // empty string → null for auto-select
-  // Tear down everything — kill any in-flight reconnect, destroy old UI
-  if (ui) ui.destroy();
-  state = null; renderer = null; ui = null;
-  _stopBattleCountdownTimer();
-  document.getElementById('game-screen').style.display = 'none';
-  // Disconnect the old mp client entirely to cancel any pending reconnect
-  // that could race with joinBattle and create duplicate handlers.
-  if (mp) { mp.disconnect(); mp = null; }
-  _ensureAuthed(() => {
-    mp.joinBattle(roomId);
-  });
-});
-document.getElementById('btn-battle-spectate')?.addEventListener('click', function() {
-  const roomId = this.dataset.roomId;
-  if (!roomId) return;
-  initSpectator(roomId);
-});
 
-document.getElementById('btn-online-back')?.addEventListener('click', () => {
-  if (mp) { mp.disconnect(); mp = null; }
-  if (ui) ui.destroy();
-  renderer = null; ui = null; state = null;
-  showStep('mode');
-  _updateMultiplayerBadge();
-});
-document.getElementById('btn-async-back')?.addEventListener('click', () => {
-  showStep('mode');
-  _updateMultiplayerBadge();
-});
-document.getElementById('btn-async-refresh')?.addEventListener('click', () => {
-  _fetchAsyncGames();
-});
 
 // ── Online flow ───────────────────────────────────────────────────────────────
 
-document.getElementById('btn-cancel-wait')?.addEventListener('click', () => {
-  _showOnlineScreen();
-});
 
 // ── Node count selectors — populate options based on map size ─────────────────
 
@@ -7435,226 +7067,37 @@ function _populateNodeCountSelect(selectId, mapSizeSelectId) {
   if (current >= min && current <= max) nodeEl.value = String(current);
 }
 
-document.getElementById('select-map-size')?.addEventListener('change', () => {
-  _populateNodeCountSelect('select-node-count', 'select-map-size');
-});
-document.getElementById('cg-map-size')?.addEventListener('change', () => {
-  _populateNodeCountSelect('cg-node-count', 'cg-map-size');
-});
 // Initialize on load
 _populateNodeCountSelect('select-node-count', 'select-map-size');
 _populateNodeCountSelect('cg-node-count', 'cg-map-size');
 
 // ── Create Game flow ──────────────────────────────────────────────────────────
 
-document.getElementById('btn-create-game')?.addEventListener('click', () => {
-  _ensureAuthed(() => showStep('create-game'));
-});
 
-document.getElementById('btn-create-game-back')?.addEventListener('click', () => {
-  showStep('online');
-});
 
-document.getElementById('btn-create-game-confirm')?.addEventListener('click', () => {
-  _ensureAuthed(() => {
-    const isAsync = document.querySelector('input[name="cg-mode"]:checked')?.value === 'async';
-    const timeoutEl = isAsync
-      ? document.getElementById('cg-turn-timeout-async')
-      : document.getElementById('cg-turn-timeout-live');
-    const config = {
-      fog:            document.getElementById('cg-fog').value,
-      mapSize:        document.getElementById('cg-map-size').value,
-      nodeCount:      parseInt(document.getElementById('cg-node-count')?.value ?? '3', 10),
-      playersPerSide: parseInt(document.querySelector('input[name="cg-pps"]:checked')?.value ?? '1', 10),
-      isPrivate:      document.getElementById('cg-private').checked,
-      isAsync,
-      turnIntervalMs: parseInt(timeoutEl?.value ?? '90000', 10),
-      aiDifficulty:   document.getElementById('cg-ai-difficulty')?.value ?? 'normal',
-    };
-    mp.createLobby(config);
-    // Transition to lobby card happens in onLobbyJoined callback
-  });
-});
 
-// Mode toggle — swap timeout dropdowns
-function _updateCreateGameMode() {
-  const isAsync = document.querySelector('input[name="cg-mode"]:checked')?.value === 'async';
-  const liveEl  = document.getElementById('cg-turn-timeout-live');
-  const asyncEl = document.getElementById('cg-turn-timeout-async');
-  if (liveEl)  liveEl.style.display  = isAsync ? 'none' : '';
-  if (asyncEl) asyncEl.style.display = isAsync ? '' : 'none';
-}
-
-for (const radio of document.querySelectorAll('input[name="cg-mode"]')) {
-  radio.addEventListener('change', _updateCreateGameMode);
-}
 
 // ── Join Game flow ────────────────────────────────────────────────────────────
 
-document.getElementById('btn-join-game')?.addEventListener('click', () => {
-  _ensureAuthed(() => {
-    showStep('join-game');
-    _loadPublicLobbies();
-  });
-});
 
-document.getElementById('btn-join-game-back')?.addEventListener('click', () => {
-  showStep('online');
-});
 
-document.getElementById('btn-join-private')?.addEventListener('click', () => {
-  const code = document.getElementById('join-code-input').value.trim().toUpperCase();
-  const err  = document.getElementById('join-game-error');
-  if (code.length !== 6) {
-    err.textContent = 'Enter a 6-letter room code.';
-    err.style.display = '';
-    return;
-  }
-  err.style.display = 'none';
-  _ensureAuthed(() => mp.joinLobby(code));
-});
 
 // ── Async Game flow ──────────────────────────────────────────────────────────
 
-function _getAsyncFaction() {
-  const checked = document.querySelector('input[name="async-faction"]:checked');
-  return checked ? checked.value : 'hero';
-}
 
-document.getElementById('btn-create-async')?.addEventListener('click', () => {
-  _ensureAuthed(() => {
-    showStep('async-create');
-    // Default faction radio to hero
-    const heroRadio = document.querySelector('input[name="async-faction"][value="hero"]');
-    if (heroRadio) heroRadio.checked = true;
-  });
-});
 
-document.getElementById('btn-join-async')?.addEventListener('click', () => {
-  _ensureAuthed(() => {
-    showStep('async-join');
-  });
-});
 
-document.getElementById('btn-async-create-back')?.addEventListener('click', () => {
-  showStep('async');
-});
 
-document.getElementById('btn-async-create-go')?.addEventListener('click', () => {
-  _ensureAuthed(() => {
-    const session = loadSession();
-    const base = window.BRIMSTONE_SERVER || '';
-    fetch(`${base}/api/async-games`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        token:        session.token,
-        faction:      _getAsyncFaction(),
-        mapSize:      document.getElementById('async-map-size').value,
-        fog:          document.getElementById('async-fog').value,
-        turnInterval: Number(document.getElementById('async-turn-interval').value),
-        inviteeEmail: document.getElementById('async-invitee-email').value.trim(),
-      }),
-    })
-      .then(r => r.json())
-      .then(result => {
-        if (result.error) {
-          _onlineError(result.error);
-          return;
-        }
-        document.getElementById('async-game-code').textContent = result.code;
-        showStep('async-created');
-        // Show invite confirmation if an email was specified
-        const inviteMsg = document.getElementById('async-invite-sent');
-        const invEmail = document.getElementById('async-invitee-email').value.trim();
-        if (invEmail && inviteMsg) {
-          inviteMsg.textContent = `Invite sent to ${invEmail}`;
-          inviteMsg.style.display = '';
-        } else if (inviteMsg) {
-          inviteMsg.style.display = 'none';
-        }
-        // Store roomId so host can open the game to plan
-        document.getElementById('btn-async-created-play')?.setAttribute('data-room-id', result.roomId);
-      })
-      .catch(() => _onlineError('Failed to create async game.'));
-  });
-});
 
-document.getElementById('btn-async-copy-code')?.addEventListener('click', () => {
-  const code = document.getElementById('async-game-code').textContent;
-  navigator.clipboard?.writeText(code);
-  const btn = document.getElementById('btn-async-copy-code');
-  btn.textContent = 'Copied!';
-  setTimeout(() => { btn.textContent = 'Copy Code'; }, 1500);
-});
 
-document.getElementById('btn-async-copy-link')?.addEventListener('click', () => {
-  const code = document.getElementById('async-game-code').textContent;
-  const inviteUrl = `${_linkOrigin()}#invite=${encodeURIComponent(code)}`;
-  navigator.clipboard?.writeText(inviteUrl);
-  const btn = document.getElementById('btn-async-copy-link');
-  btn.textContent = 'Copied!';
-  setTimeout(() => { btn.textContent = '📋 Copy Invite Link'; }, 1500);
-});
 
-document.getElementById('btn-async-created-done')?.addEventListener('click', () => {
-  _showAsyncScreen();
-});
 
-document.getElementById('btn-async-created-play')?.addEventListener('click', () => {
-  const roomId = document.getElementById('btn-async-created-play').getAttribute('data-room-id');
-  if (roomId) _openAsyncGame(roomId);
-});
 
 // Async join — the "Async" tab join is via the existing join-game code input,
 // but we also add a dedicated async join card for deep links and direct joins.
-document.getElementById('btn-async-join-go')?.addEventListener('click', () => {
-  const code = document.getElementById('async-join-code').value.trim().toUpperCase();
-  const err  = document.getElementById('async-join-error');
-  if (code.length !== 6) {
-    err.textContent = 'Enter a 6-character game code.';
-    err.style.display = '';
-    return;
-  }
-  err.style.display = 'none';
-  _ensureAuthed(() => _joinAsyncByCode(code));
-});
 
-document.getElementById('btn-async-join-back')?.addEventListener('click', () => {
-  showStep('async');
-});
 
 /** Join an async game by 6-char code (used by both the UI button and deep links). */
-function _joinAsyncByCode(code) {
-  const session = loadSession();
-  const base = window.BRIMSTONE_SERVER || '';
-  fetch(`${base}/api/async-games/join`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token: session.token, code }),
-  })
-    .then(r => r.json())
-    .then(result => {
-      if (result.error) {
-        // Show error in the async join card if visible, otherwise alert
-        const err = document.getElementById('async-join-error');
-        if (err) {
-          err.textContent = result.error;
-          err.style.display = '';
-          showStep('async-join');
-          const input = document.getElementById('async-join-code');
-          if (input) input.value = code;
-        } else {
-          alert(result.error);
-        }
-        return;
-      }
-      _openAsyncGame(result.roomId);
-    })
-    .catch(() => {
-      alert('Failed to join async game.');
-    });
-}
 
 // ── Deep link handling for async games ──────────────────────────────────────
 
@@ -7749,22 +7192,6 @@ _fetchMainMenuGames();
 _renderReplaysList();
 
 /** Check if the player needs to submit a battle turn and show badge on main menu. */
-async function _updateBattleBadge() {
-  const badge = document.getElementById('battle-badge');
-  if (!badge) return;
-  const session = loadSession();
-  if (!session?.token) { badge.style.display = 'none'; return; }
-  try {
-    const res = await fetch(`${window.BRIMSTONE_SERVER || ''}/api/battle-status?token=${encodeURIComponent(session.token)}`);
-    const status = await res.json();
-    if (status?.myBattle && !status.myBattle.mySubmitted) {
-      badge.style.display = '';
-      badge.textContent = '!';
-    } else {
-      badge.style.display = 'none';
-    }
-  } catch { badge.style.display = 'none'; }
-}
 
 /**
  * Fetch active games count and show a badge on the Multiplayer button
@@ -7792,12 +7219,6 @@ function _updateMultiplayerBadge() {
     .catch(() => { badge.style.display = 'none'; });
 }
 
-function _loadPublicLobbies() {
-  if (!mp) return;
-  document.getElementById('public-lobbies-list').innerHTML =
-    '<p class="saves-empty">Loading…</p>';
-  mp.browseLobby();
-}
 
 function _renderPublicLobbies(rooms) {
   const list = document.getElementById('public-lobbies-list');
@@ -8223,21 +7644,8 @@ async function _loadFriendsIntoPopup(popup, lobby) {
   }
 }
 
-document.getElementById('btn-lobby-populate-ai')?.addEventListener('click', () => {
-  if (_currentLobby) mp.fillAllWithAI(_currentLobby.id, 'random');
-});
 
-document.getElementById('btn-lobby-start')?.addEventListener('click', () => {
-  if (_currentLobby) mp.startGame(_currentLobby.id);
-});
 
-document.getElementById('btn-lobby-leave')?.addEventListener('click', () => {
-  if (_currentLobby) {
-    mp.leaveLobby(_currentLobby.id);
-    _currentLobby = null;
-  }
-  showStep('online');
-});
 
 function _initMpStep() {
   const session      = loadSession();
@@ -8275,65 +7683,6 @@ function _initAsyncStep() {
 
 // ── Account page ──────────────────────────────────────────────────────────────
 
-async function _initAccountPage() {
-  const session = loadSession();
-  const signedOut = document.getElementById('acct-signed-out');
-  const signedIn  = document.getElementById('acct-signed-in');
-
-  _updateSessionBar();
-
-  if (!session) {
-    signedOut.style.display = '';
-    signedIn.style.display  = 'none';
-    return;
-  }
-
-  signedOut.style.display = 'none';
-  signedIn.style.display  = '';
-
-  // Username
-  const usernameEl = document.getElementById('acct-username');
-  usernameEl.textContent = _gcCredentials
-    ? session.username + '  (Game Center)'
-    : session.username;
-  document.getElementById('acct-name-edit').style.display = 'none';
-  document.getElementById('acct-name-error').style.display = 'none';
-  // Hide edit button for Game Center accounts — name is managed by Apple
-  const editNameBtn = document.getElementById('btn-acct-edit-name');
-  if (editNameBtn) editNameBtn.style.display = _gcCredentials ? 'none' : '';
-
-  // Email — fetch linked identities
-  const emailEl   = document.getElementById('acct-email');
-  const linkBtn   = document.getElementById('btn-acct-link-email');
-  const emailForm = document.getElementById('acct-email-form');
-  emailForm.style.display = 'none';
-  const emailStatus = document.getElementById('acct-email-status');
-  if (emailStatus) emailStatus.style.display = 'none';
-
-  try {
-    const identities = await fetchIdentities(session.token);
-    if (identities === null) {
-      // Token rejected by server — stale session
-      clearSession();
-      signedOut.style.display = '';
-      signedIn.style.display  = 'none';
-      _updateSessionBar();
-      return;
-    }
-    const emailIdentity = identities.find(i => i.provider === 'email');
-    if (emailIdentity) {
-      emailEl.textContent = emailIdentity.provider_id;
-      linkBtn.style.display = 'none';
-    } else {
-      emailEl.textContent = 'Not linked';
-      linkBtn.style.display = '';
-    }
-
-  } catch {
-    emailEl.textContent = 'Not linked';
-    linkBtn.style.display = '';
-  }
-}
 
 // ── Auth dialog ──────────────────────────────────────────────────────────────
 
@@ -8402,124 +7751,18 @@ function _hideAuthDialog() {
   _authDialogCallback = null;
 }
 
-document.getElementById('btn-auth-cancel')?.addEventListener('click', () => _hideAuthDialog());
 
-document.getElementById('btn-auth-signin')?.addEventListener('click', () => {
-  const errorEl = document.getElementById('auth-error');
-  errorEl.style.display = 'none';
 
-  const cb = _authDialogCallback;
-  _ensureAuthed(() => {
-    _hideAuthDialog();
-    if (cb) cb();
-  });
-});
-
-document.getElementById('btn-auth-email-login')?.addEventListener('click', async () => {
-  const email = document.getElementById('auth-email-input').value.trim();
-  if (!email) return;
-
-  const statusEl = document.getElementById('auth-email-status');
-  statusEl.textContent = 'Sending…';
-  statusEl.className   = 'setup-hint';
-  statusEl.style.display = '';
-
-  const result = await requestEmailLogin(email);
-  if (result.ok) {
-    statusEl.textContent = result.message || 'Check your email for the login link!';
-    statusEl.className   = 'setup-hint';
-  } else {
-    statusEl.textContent = result.error || 'Failed to send link.';
-    statusEl.className   = 'setup-error';
-  }
-});
 
 // Account: sign in via dialog
-document.getElementById('btn-acct-signin')?.addEventListener('click', () => {
-  _showAuthDialog(() => _initAccountPage());
-});
 
 // Account: edit username
-document.getElementById('btn-acct-edit-name')?.addEventListener('click', () => {
-  const session = loadSession();
-  document.getElementById('acct-name-input').value = session?.username || '';
-  document.getElementById('acct-name-edit').style.display = '';
-  document.getElementById('acct-name-error').style.display = 'none';
-});
 
-document.getElementById('btn-acct-cancel-name')?.addEventListener('click', () => {
-  document.getElementById('acct-name-edit').style.display = 'none';
-});
 
-document.getElementById('btn-acct-save-name')?.addEventListener('click', async () => {
-  const session = loadSession();
-  if (!session) return;
-
-  const input = document.getElementById('acct-name-input');
-  const newName = input.value.trim();
-  const errorEl = document.getElementById('acct-name-error');
-
-  try {
-    const res = await fetch(`${window.BRIMSTONE_SERVER || ''}/api/account/username`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: session.token, username: newName }),
-    });
-    const data = await res.json();
-
-    if (data.ok) {
-      // Update session in localStorage
-      session.username = data.player.username;
-      localStorage.setItem('brimstone_session', JSON.stringify(session));
-      // Update displays
-      document.getElementById('acct-username').textContent = data.player.username;
-      document.getElementById('acct-name-edit').style.display = 'none';
-      _updateSessionBar();
-    } else {
-      errorEl.textContent = data.error || 'Failed to change username.';
-      errorEl.style.display = '';
-    }
-  } catch {
-    errorEl.textContent = 'Network error. Please try again.';
-    errorEl.style.display = '';
-  }
-});
 
 // Account: link email
-document.getElementById('btn-acct-link-email')?.addEventListener('click', () => {
-  const form = document.getElementById('acct-email-form');
-  form.style.display = form.style.display === 'none' ? '' : 'none';
-});
 
-document.getElementById('btn-acct-send-link')?.addEventListener('click', async () => {
-  const session = loadSession();
-  if (!session) return;
 
-  const email = document.getElementById('acct-email-input').value.trim();
-  if (!email) return;
-
-  const statusEl = document.getElementById('acct-email-status');
-  statusEl.textContent = 'Sending…';
-  statusEl.className   = 'setup-hint';
-  statusEl.style.display = '';
-
-  const result = await requestLinkEmail(session.token, email);
-  if (result.ok) {
-    statusEl.textContent = result.message || 'Check your email for the link!';
-    statusEl.className   = 'setup-hint';
-  } else {
-    statusEl.textContent = result.error || 'Failed to send link.';
-    statusEl.className   = 'setup-error';
-  }
-});
-
-document.getElementById('btn-mp-signin')?.addEventListener('click', () => {
-  _showAuthDialog(() => {
-    _initMpStep();
-    _fetchActiveSaves();
-    _fetchCompletedGames();
-  });
-});
 
 function _signOut() {
   clearSession();
@@ -8546,47 +7789,9 @@ function _updateSessionBar() {
 
 // ── Persistent sign-out (footer bar) ────────────────────────────────────────
 
-document.getElementById('btn-setup-signout')?.addEventListener('click', async () => {
-  // If not logged in, the button reads "Sign In" — navigate to account page
-  if (!loadSession()) { _initAccountPage(); showStep('account'); return; }
-  // Warn if the account has no recovery method (no email, no Game Center)
-  if (!_gcCredentials) {
-    const session = loadSession();
-    if (session?.token) {
-      try {
-        const identities = await fetchIdentities(session.token);
-        const hasRecovery = identities?.some(i => i.provider === 'email' || i.provider === 'gamecenter');
-        if (!hasRecovery) {
-          const confirmed = confirm(
-            'Warning: You have no email or Game Center linked to this account. ' +
-            'If you sign out, you will lose access to this account permanently.\n\n' +
-            'Sign out anyway?'
-          );
-          if (!confirmed) return;
-        }
-      } catch { /* offline — proceed with sign-out */ }
-    }
-  }
-  _signOut();
-  _updateSessionBar();
-  // Refresh whichever screen is visible
-  _initMpStep();
-  _initAsyncStep();
-  _initAccountPage();
-  const activeList = document.getElementById('active-games-list');
-  if (activeList) activeList.innerHTML = '<p class="mm-games-empty">Sign in to see your active games.</p>';
-  const asyncList = document.getElementById('async-games-list');
-  if (asyncList) asyncList.innerHTML = '<p class="saves-empty">Sign in to see async games.</p>';
-});
 
 // ── Async sign-in ───────────────────────────────────────────────────────────
 
-document.getElementById('btn-async-signin')?.addEventListener('click', () => {
-  _showAuthDialog(() => {
-    _initAsyncStep();
-    _fetchAsyncGames();
-  });
-});
 
 // (Email login is now handled by the auth dialog)
 

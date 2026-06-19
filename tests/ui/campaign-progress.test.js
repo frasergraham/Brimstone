@@ -562,11 +562,6 @@ describe('main.js Campaign Progress wiring', () => {
     assert.match(src, /_progressSquadCap\(_activeCampaign\?\.roster\)/);
   });
 
-  test('Campaign menu routes straight to the Chapter 1 slot picker', () => {
-    assert.match(src, /getCampaignById\('calebs_hollow_prologue'\)/);
-    assert.match(src, /_showCampaignSlotScreen\(ch1\)/);
-  });
-
   test('promote handler respects the active-squad cap', () => {
     assert.match(src, /_activeRosterIndices\.length < maxActive/);
   });
