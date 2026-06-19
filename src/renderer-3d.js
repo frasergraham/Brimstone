@@ -8424,6 +8424,33 @@ export class Renderer3D {
       for (let i = 0; i < strokes.length; i++) {
         const rawPts = strokes[i];
         if (!rawPts || rawPts.length < 2) continue;
+        // ── Lone-hex pool fallback ──────────────────────────────────────────
+        // A river hex with no water neighbours carries a single `isPool` ring
+        // stroke (see `networkStrokesForTile` / `poolRingStroke`). Render it as
+        // a flat filled water disc at the river bed level so the lone hex is
+        // still visible, instead of trying to feed a closed ring through the
+        // ribbon/curvature pipeline (which would build a degenerate annulus).
+        if (rawPts.isPool && networkName === 'river') {
+          const c = rawPts.poolCentre || { x: 0, z: 0 };
+          const radius = rawPts.poolRadius || (RIVER_POOL_RADIUS * width / RIVER_RIBBON_WIDTH);
+          const disc = BABYLON.MeshBuilder.CreateDisc(
+            `river_pool_${tile.col}_${tile.row}_${i}`,
+            { radius, tessellation: 24, sideOrientation: BABYLON.Mesh.DOUBLESIDE },
+            scene,
+          );
+          // CreateDisc lies in the XY plane facing +Z; rotate flat so it lies in
+          // the XZ ground plane (facing +Y) and drop it to the river bed depth.
+          disc.rotation.x = Math.PI / 2;
+          disc.position.x = c.x;
+          disc.position.z = c.z;
+          disc.position.y = RIVER_BED_Y;
+          disc.isPickable = false;
+          ribbons.push(disc);
+          const plist = ribbonsByTileKey.get(tkey) || [];
+          plist.push(disc);
+          ribbonsByTileKey.set(tkey, plist);
+          continue;
+        }
         // Rounded terminus cap. A 1-neighbour ROAD stub dead-ends at its tile
         // centre (rawPts[0]); round that end into a fading semicircle so the
         // road dissolves into the ground instead of stopping in a hard
@@ -16350,6 +16377,13 @@ export function roadTileRibbonWidth(networkName, tile, baseWidth) {
 // fight without visibly hovering. 0.005 reads as flush — the new directional
 // sun cast shadows ACROSS the old raised ribbons that made them look levitated.
 export const RIVER_RIBBON_WIDTH = 0.85;
+/** Radius (world units) of the fallback water pool drawn on a LONE river hex —
+ *  a river tile with zero water neighbours that the connected-river ribbon
+ *  pipeline would otherwise skip entirely. Sized to read as a small puddle that
+ *  sits comfortably inside the hex (apothem = SQRT3/2 ≈ 0.866 at radius 1) and
+ *  roughly matches the in-map river's half-width footprint. Mirrors the 2D
+ *  renderer's pool disc radius. Operator-tunable. */
+export const RIVER_POOL_RADIUS = 0.42;
 /** Road ribbon width — narrower than the river (matches the 2D path's strokeWidth
  *  ratio: rivers wider than roads). ~0.35 × hex-width. */
 export const ROAD_RIBBON_WIDTH  = 0.6;
@@ -16746,6 +16780,25 @@ export function _edgeTo(here, there, radius = HEX_RADIUS_WORLD) {
   };
 }
 
+/** Build a closed ring of `{x,z}` samples (a circle) around a world-space
+ *  centre, used as the geometry for a lone river hex's fallback pool. The
+ *  ring is tagged `isPool` so `_buildNetworkMesh` recognises it and builds a
+ *  filled water disc rather than a 5-path ribbon. The first and last samples
+ *  coincide so the ring closes cleanly. Pure (no Babylon). */
+export function poolRingStroke(centre, radius = HEX_RADIUS_WORLD, segments = 16) {
+  const r = RIVER_POOL_RADIUS * radius;
+  const n = Math.max(3, segments | 0);
+  const ring = [];
+  for (let i = 0; i <= n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    ring.push({ x: centre.x + Math.cos(a) * r, z: centre.z + Math.sin(a) * r });
+  }
+  ring.isPool = true;
+  ring.poolCentre = { x: centre.x, z: centre.z };
+  ring.poolRadius = r;
+  return ring;
+}
+
 /**
  * Compute the bezier strokes for a single river OR road tile.
  *
@@ -16758,10 +16811,12 @@ export function _edgeTo(here, there, radius = HEX_RADIUS_WORLD) {
  *                  roads draw a centre→edge stub (dead-end at a building).
  *
  * Returns an array of "strokes" — each stroke is an array of `{x, z}` sample
- * points (≥ 2 entries) suitable for turning into a tube. May return [] for
- * tiles that should not draw (e.g. an isolated river hex with 0 neighbours).
+ * points (≥ 2 entries) suitable for turning into a tube. A lone RIVER hex with
+ * 0 neighbours returns a single closed pool ring (tagged `isPool`) so it still
+ * renders a visible water disc; a lone ROAD tile returns [] (nothing to join).
  *
  * Mirrors src/renderer.js's per-tile geometry:
+ *   • 0 neighbours → river: fallback pool ring (puddle). Road: nothing.
  *   • 1 neighbour  → river: through-bezier from the off-tile extension to the
  *                    edge. Road: straight stub from centre to edge midpoint.
  *   • 2 neighbours → smooth bezier through centre between the two edges.
@@ -16769,11 +16824,22 @@ export function _edgeTo(here, there, radius = HEX_RADIUS_WORLD) {
  *                     spokes from centre to the remaining edges.
  */
 export function networkStrokesForTile(tile, neighbours, opts = {}) {
-  if (!tile || !Array.isArray(neighbours) || neighbours.length === 0) return [];
+  if (!tile || !Array.isArray(neighbours)) return [];
   const radius = opts.radius ?? HEX_RADIUS_WORLD;
   const segments = opts.segments ?? NETWORK_BEZIER_SEGMENTS;
   const kind = opts.kind ?? 'river';
   const here = hexToWorld(tile.col, tile.row, radius);
+  if (neighbours.length === 0) {
+    // A lone hex with no network neighbour. Roads simply don't draw an
+    // isolated stub (nothing to connect to). A river hex, however, must stay
+    // VISIBLE — render a fallback pool/puddle: a closed ring of samples around
+    // the hex centre, tagged `isPool` so `_buildNetworkMesh` builds a filled
+    // water disc instead of a ribbon. Mirrors the 2D `planRiverTileBranches`
+    // pool fallback so game + editor render the lone hex the same way.
+    if (kind === 'road') return [];
+    const ring = poolRingStroke(here, radius);
+    return [ring];
+  }
   const edges = neighbours.map(n => {
     const there = hexToWorld(n.col, n.row, radius);
     return _edgeTo(here, there, radius);
@@ -16901,7 +16967,9 @@ export function buildRiverNetworkStrokes(tiles, hexKeyFn = hexKey, getNeighborsF
     if (!isWater(tile)) continue;
     const nbrs = getNeighborsFn(tile.col, tile.row)
       .filter(n => isWater(tiles.get(hexKeyFn(n.col, n.row))));
-    if (nbrs.length === 0) continue;
+    // A lone river hex (0 water neighbours) is no longer skipped — its
+    // `networkStrokesForTile` returns a pool ring (tagged `isPool`) so the hex
+    // still renders a visible water puddle instead of nothing.
     const strokes = networkStrokesForTile(tile, nbrs);
     if (strokes.length > 0) out.push({ tile, strokes });
   }
