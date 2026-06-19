@@ -33,6 +33,7 @@ const _skOpts = { mapSize: 'standard', nodeCount: 3, aiDifficulty: 'normal' };
 let _othersView = 'landing';     // Play With Others sub-view: 'landing'|'find'|'lobby'|'battle'
 let _lobby = null;               // current lobby state (from the onLobby push)
 let _lobbyList = [];             // open public lobbies (from onLobbyList)
+let _openLobbiesEl = null;       // the live open-lobbies <div> in the Find view
 let _createAsync = false;        // Find-a-Game create defaults to async cadence
 
 // Game-styled hover tooltip (position:fixed so the scrolling pane never clips it).
@@ -81,7 +82,10 @@ export function initLedger({ playerName, start = 'continue', data = null } = {})
   });
   _data?.onLobbyList?.((rooms) => {
     _lobbyList = rooms || [];
-    if (_activeId === 'others' && _othersView === 'find') select('others');
+    // Update the list IN PLACE — never select()/re-render here. _othersFind()
+    // calls browse() on every render, so re-rendering from this callback would
+    // loop (browse → onLobbyList → render → browse → …).
+    _renderOpenLobbiesList();
   });
   _renderRail();
   select(start);
@@ -536,23 +540,28 @@ function _othersFind(body) {
   body.appendChild(jrow);
 
   body.appendChild(_cap('Open lobbies'));
-  _data.lobby?.browse?.();
-  const list = document.createElement('div');
-  list.className = 'lg-feed';
-  if (!_lobbyList.length) {
-    list.appendChild(_empty('Looking for open games…'));
-  } else {
-    for (const room of _lobbyList) {
-      const pps = room.playersPerSide ?? room.pps ?? 1;
-      const el = document.createElement('div');
-      el.className = 'lg-feed-row';
-      el.innerHTML = `<div class="lg-feed-text"><div class="t">${esc(room.hostName || room.host || 'Open game')}</div>` +
-        `<div class="m">${pps}v${pps} · ${esc(cap(room.mapSize || 'standard'))}</div></div><span class="lg-feed-cta">join ▸</span>`;
-      el.addEventListener('click', () => _data.lobby?.join?.(room.code || room.id));
-      list.appendChild(el);
-    }
+  _openLobbiesEl = document.createElement('div');
+  _openLobbiesEl.className = 'lg-feed';
+  body.appendChild(_openLobbiesEl);
+  _renderOpenLobbiesList();          // paint with whatever we have
+  _data.lobby?.browse?.();           // then refresh — onLobbyList repaints in place
+}
+
+/** Repaint the open-lobbies list in place (no panel re-render — see onLobbyList). */
+function _renderOpenLobbiesList() {
+  const list = _openLobbiesEl;
+  if (!list || !list.isConnected) return;
+  list.replaceChildren();
+  if (!_lobbyList.length) { list.appendChild(_empty('Looking for open games…')); return; }
+  for (const room of _lobbyList) {
+    const pps = room.playersPerSide ?? room.pps ?? 1;
+    const el = document.createElement('div');
+    el.className = 'lg-feed-row';
+    el.innerHTML = `<div class="lg-feed-text"><div class="t">${esc(room.hostName || room.host || 'Open game')}</div>` +
+      `<div class="m">${pps}v${pps} · ${esc(cap(room.mapSize || 'standard'))}</div></div><span class="lg-feed-cta">join ▸</span>`;
+    el.addEventListener('click', () => _data.lobby?.join?.(room.code || room.id));
+    list.appendChild(el);
   }
-  body.appendChild(list);
 }
 
 /** The native lobby — Day/Night seats from live room state, with the seat
