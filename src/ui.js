@@ -5092,6 +5092,13 @@ export class UIController {
           html += `<div class="summary-game-over ${cls}">${winReason}</div>`;
         }
 
+        // Game-over dialog is JUST the victory/defeat message + buttons — no
+        // per-turn summary (combats/kills/resources/reckoning) and no speed
+        // controls. Write the message and skip the turn-summary body below.
+        if (gameOver) {
+          eventsEl.innerHTML = html;
+        } else {
+
         // Combat summary — aggregate damage between each pair of combatants
         const battleLines = compileTurnBattleSummary(
           steps ?? [], this.state.entities, ResEventType, PlanActionType,
@@ -5236,10 +5243,12 @@ export class UIController {
         if (this.state._takeoverMessages) this.state._takeoverMessages = [];
 
         eventsEl.innerHTML = html || `<div class="summary-neutral">No notable events this round.</div>`;
+        } // end !gameOver turn-summary body
       }
 
-      // Render replay-speed dropdown (compact single-button toggle + popup)
-      const speedRowEl = this._el('round-summary-speed-row');
+      // Render replay-speed dropdown (compact single-button toggle + popup).
+      // Game-over dialog has no speed controls.
+      const speedRowEl = gameOver ? null : this._el('round-summary-speed-row');
       if (speedRowEl) {
         const SPEED_ICONS = { cinematic: '🎬', fast: '⏩', vfast: '⏭' };
         const SPEED_DESCS = { cinematic: 'Dialog for important battles', fast: 'Cinematic pace, no popups', vfast: '1.5× speed, no popups' };
@@ -5290,14 +5299,26 @@ export class UIController {
 
       const nextBtn   = this._el('round-summary-next');
       const replayBtn = this._el('round-summary-replay');
+      const replayGroup = el.querySelector('.round-summary-replay-group');
       const actionsEl = el.querySelector('.round-summary-actions');
 
-      // Game-over: replace normal actions with play-again / view-map buttons
+      // Game-over dialog is JUST the victory/defeat message + a Return to Menu
+      // button (and Replay Full Game in skirmish/online). Drop the per-turn
+      // wrap-up controls entirely: no ↺ Replay, no speed dropdown.
       let gameOverBtns = null;
       if (gameOver && actionsEl) {
-        // Hide normal buttons
-        if (nextBtn)   nextBtn.style.display   = 'none';
-        // Keep replay visible
+        if (nextBtn) nextBtn.style.display = 'none';
+        // Hide the ↺ Replay + speed-row group; clear any stale speed markup left
+        // from an earlier non-game-over render of this same modal.
+        if (replayGroup) replayGroup.style.display = 'none';
+        const staleSpeedRow = this._el('round-summary-speed-row');
+        if (staleSpeedRow) {
+          staleSpeedRow.innerHTML = '';
+          if (staleSpeedRow._closePopup) {
+            document.removeEventListener('click', staleSpeedRow._closePopup);
+            staleSpeedRow._closePopup = null;
+          }
+        }
         gameOverBtns = document.createElement('div');
         gameOverBtns.className = 'round-summary-gameover-btns';
         gameOverBtns.innerHTML =
@@ -5305,6 +5326,7 @@ export class UIController {
           (hasFullReplay && !isCampaign ? `<button class="plan-btn secondary" data-action="replay-full">Replay Full Game</button>` : '');
         actionsEl.appendChild(gameOverBtns);
       } else if (nextBtn) {
+        if (replayGroup) replayGroup.style.display = '';
         nextBtn.style.display = '';
         nextBtn.textContent   = 'Plan Turn →';
       }
@@ -5317,6 +5339,9 @@ export class UIController {
         replayBtn?.removeEventListener('click', onReplay);
         if (gameOverBtns) gameOverBtns.remove();
         if (nextBtn) nextBtn.style.display = '';
+        // Restore the ↺ Replay / speed group hidden by the game-over branch so
+        // the shared modal renders normally for the next round.
+        if (replayGroup) replayGroup.style.display = '';
         if (speedRowEl?._closePopup) {
           document.removeEventListener('click', speedRowEl._closePopup);
           speedRowEl._closePopup = null;
