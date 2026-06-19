@@ -121,6 +121,23 @@ export function survivorCardHTML(s, idx, actionBtn) {
   </div>`;
 }
 
+/**
+ * Pure selector for the post-mission debrief headline + flavor text. `won` ⇒
+ * VICTORY + the mission's victoryText; a loss ⇒ DEFEAT + defeatText, each with a
+ * safe fallback. DOM-free so the WIN/LOSE selection is unit-testable.
+ * @param {{victoryText?:string, defeatText?:string}} missionDef
+ * @param {boolean} won
+ * @returns {{title:string, text:string}}
+ */
+export function buildDebriefHeader(missionDef, won) {
+  return {
+    title: won ? 'VICTORY' : 'DEFEAT',
+    text: won
+      ? (missionDef?.victoryText || 'Mission complete.')
+      : (missionDef?.defeatText || 'Mission failed.'),
+  };
+}
+
 export function campaignPartyHTML(heroStats, roster) {
   let html = '<div class="campaign-party">';
   const weaponLabel = heroStats.weapon ? ` (${heroStats.weapon.name || heroStats.weapon})` : '';

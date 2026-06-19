@@ -6903,6 +6903,88 @@ body.spectator-mode #game-screen   { display: flex !important; }
 
 /* (campaign-deploy-roster removed — replaced by Active/Reserve roster) */
 
+/* ── Campaign debrief overlay (post-mission Victory/Defeat) ──────────────────
+   A dedicated full-screen overlay shown over the game when a campaign mission
+   ends. Independent of the legacy #setup-screen so the Ledger observer never
+   touches it. The inner .debrief-* helpers below predate the overlay and are
+   reused for the stats/roster blocks. */
+#debrief-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1rem;
+  background: radial-gradient(ellipse at center, rgba(12, 8, 6, 0.92), rgba(4, 3, 2, 0.98));
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  overflow-y: auto;
+  animation: debrief-fade-in 0.5s ease;
+}
+
+@keyframes debrief-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.debrief-panel {
+  width: min(640px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  background: linear-gradient(180deg, rgba(28, 22, 18, 0.96), rgba(18, 14, 11, 0.98));
+  border: 1px solid var(--clr-gold, #d4a72c);
+  box-shadow: 0 0 40px rgba(0, 0, 0, 0.7), inset 0 0 60px rgba(0, 0, 0, 0.4);
+  border-radius: 10px;
+  padding: 1.75rem 1.5rem;
+  text-align: center;
+}
+
+.debrief-title {
+  font-size: 2.1rem;
+  letter-spacing: 0.12em;
+  margin: 0 0 0.5rem;
+  text-transform: uppercase;
+  color: var(--clr-gold, #d4a72c);
+  text-shadow: 0 0 18px rgba(212, 167, 44, 0.45);
+}
+
+/* Defeat tints the title blood-red instead of gold. */
+.debrief-panel.is-defeat .debrief-title {
+  color: #c0392b;
+  text-shadow: 0 0 18px rgba(192, 57, 43, 0.45);
+}
+
+.debrief-text {
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: var(--clr-text, #e8ddc8);
+  margin: 0 auto 0.5rem;
+  max-width: 46ch;
+  font-style: italic;
+}
+
+.debrief-overlay-stats {
+  justify-content: center;
+}
+
+.debrief-continue {
+  margin-top: 1.25rem;
+  padding: 0.6rem 2.2rem;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #1a120b;
+  background: var(--clr-gold, #d4a72c);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: filter 0.15s ease, transform 0.1s ease;
+}
+
+.debrief-continue:hover { filter: brightness(1.1); }
+.debrief-continue:active { transform: translateY(1px); }
+
 /* Debrief screen */
 .debrief-stats {
   margin: 0.75rem 0;
