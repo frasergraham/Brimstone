@@ -221,7 +221,22 @@
 /* Campaign Missions/Party tabs + party container */
 .lg-camp-tabs { display:flex; gap:10px; margin:10px 0 16px; }
 .lg-camp-tabs .lg-btn { flex:1; }
-.lg-party { display:flex; flex-direction:column; }
+/* Manage the Party: two columns — units flow with the page on the left, the
+   inventory is a fixed (sticky) right panel split Resources (top) / Equipment
+   (bottom). Kills the old nested 60vh scroll on the unit list. */
+.lg-party { display:flex; flex-direction:row; gap:16px; align-items:flex-start; }
+.lg-party .cprog-party-scroll { flex:1; min-width:0; max-height:none; overflow:visible; padding-right:0; }
+.lg-party .cprog-shared { position:sticky; top:4px; width:286px; flex-shrink:0; margin-top:0 !important;
+  max-height:calc(100vh - 84px); display:flex; flex-direction:column;
+  background:rgba(12,13,20,.62); border:1px solid #242236; border-radius:8px; padding:12px 12px 14px; }
+.lg-party .cprog-shared .cprog-section-label:first-child { margin-top:0; }
+.lg-party .cprog-shared .cprog-inv-grid { grid-template-columns:repeat(auto-fill, minmax(64px,1fr)); }
+.lg-party .cprog-shared .cprog-inv-grid.is-equipment { overflow-y:auto; flex:1; min-height:80px; align-content:start; }
+.lg-party .cprog-shared .cprog-slot.is-weapon { grid-column:span 2; }
+/* Mobile-only pull-out tab for the inventory drawer (hidden on desktop). */
+.lg-inv-tab { display:none; position:fixed; right:0; top:44%; z-index:121; writing-mode:vertical-rl;
+  background:var(--lg-purple); color:#fff; border:none; border-radius:7px 0 0 7px; padding:14px 7px;
+  font-size:12px; letter-spacing:.08em; cursor:pointer; box-shadow:-4px 0 12px rgba(0,0,0,.45); }
 
 /* Narrow unit cards: leader + active survivors share one row; reserve below. */
 .lg-party .cprog-grid { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:8px; }
@@ -388,4 +403,14 @@
   /* Party Manager: 4-up cards squish on narrow displays — cap at 2 per row. */
   .lg-party .cprog-grid,
   .lg-party .cprog-grid.reserve-grid { grid-template-columns:repeat(2, minmax(0,1fr)); }
+  /* Inventory becomes a right-edge pull-out drawer (the tab opens it; dragging a
+     weapon out collapses it so you can drop on a unit). */
+  .lg-party { flex-direction:column; }
+  .lg-party .cprog-party-scroll { width:100%; }
+  .lg-party .cprog-shared { position:fixed; top:0; right:0; bottom:0; width:min(82vw,320px); max-height:none;
+    z-index:120; transform:translateX(100%); transition:transform .22s ease; border-radius:0;
+    border-left:1px solid #2c2a42; box-shadow:-12px 0 30px rgba(0,0,0,.5); overflow-y:auto;
+    padding-top:calc(14px + env(safe-area-inset-top)); }
+  .lg-party .cprog-shared.is-open { transform:translateX(0); }
+  .lg-inv-tab { display:block; }
 }

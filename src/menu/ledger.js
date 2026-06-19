@@ -295,8 +295,21 @@ function _renderPartyView(body, sel) {
     }
     container.innerHTML = data.html;
     _wirePartyButtons(container, sel.slot);
+    _ensureInvTab(container);
   };
   Promise.resolve(_data?.preloadPortraits?.()).then(render).catch(render);
+}
+
+/** Mobile-only pull-out tab that opens/closes the inventory drawer. */
+function _ensureInvTab(container) {
+  const shared = container.querySelector('.cprog-shared');
+  if (!shared) return;
+  const tab = document.createElement('button');
+  tab.type = 'button';
+  tab.className = 'lg-inv-tab';
+  tab.textContent = '🎒 Inventory';
+  tab.addEventListener('click', () => shared.classList.toggle('is-open'));
+  container.appendChild(tab);
 }
 
 function _wirePartyButtons(container, slot) {
@@ -323,6 +336,9 @@ function _wirePartyButtons(container, slot) {
         from: el.dataset.from, idx: el.dataset.idx ?? null, weapon: el.dataset.weapon,
       }));
       el.classList.add('is-dragging');
+      // Mobile: dragging a weapon out of the inventory drawer collapses it so the
+      // unit cards are reachable as drop targets.
+      if (el.dataset.from === 'pool') container.querySelector('.cprog-shared')?.classList.remove('is-open');
     });
     el.addEventListener('dragend', () => el.classList.remove('is-dragging'));
   });
