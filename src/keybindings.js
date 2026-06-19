@@ -47,6 +47,7 @@ export const SHORTCUTS = Object.freeze([
   { keys: 'M',                label: 'Fit map to view (again: orient north-up)' },
   { keys: 'X',                label: 'Clear the selected unit’s actions' },
   { keys: 'Space / Enter',    label: 'Next action · Continue (replay / summary)' },
+  { keys: 'P',                label: 'Play / pause replay auto-play' },
   { keys: 'Shift + Enter',    label: 'Submit plan' },
 ]);
 
@@ -219,6 +220,14 @@ export function resolveKeyAction(e, { appMode, replayActive, reviewActive } = {}
   // X — clear selected unit's queued actions (planning only).
   if (!shift && (key === 'x' || key === 'X')) {
     return appMode === 'PLANNING' ? { id: 'clear-unit' } : null;
+  }
+
+  // P — toggle replay auto-play (play ⇄ pause). Active only while a replay /
+  // resolution step bar is on screen (both the full-game replay and the inline
+  // round-end resolution replay share the same #replay-playpause-btn). Inert
+  // elsewhere so it can't be pressed by accident during planning.
+  if (!shift && (key === 'p' || key === 'P')) {
+    return replayActive ? { id: 'replay-playpause' } : null;
   }
 
   // Space / Enter — one shared "advance" key: the executor clicks whichever
@@ -453,6 +462,14 @@ class KeybindingManager {
       case 'clear-unit':
         this._clearSelectedUnit();
         break;
+      case 'replay-playpause': {
+        // Reuse the AutoPlay button's own click handler so P toggles play/pause
+        // exactly like the on-screen control — for both the full-game replay and
+        // the inline round-end resolution replay (same #replay-playpause-btn).
+        const pp = document.getElementById('replay-playpause-btn');
+        if (pp && this._isVisible(pp)) pp.click();
+        break;
+      }
       case 'advance': {
         // Click whichever advance affordance is up, most specific first: the
         // cinematic combat-readout Continue, the round-summary Continue, then
