@@ -6164,6 +6164,11 @@ export class Renderer3D {
     this._light             = light;
     this._sunLight          = sunLight;
     this._shadowGenerator   = shadowGenerator;
+
+    // Isolate the overlay rendering groups' depth so they neither occlude
+    // against the world nor pollute its depth buffer — see the method's docs.
+    this._isolateOverlayDepthGroups(scene);
+
     // Default (pre-map) shadow fit — replaced with the real map bounds at the
     // end of `_buildMap`.
     this._applySunShadowFit(null);
@@ -14722,6 +14727,40 @@ export class Renderer3D {
     };
   }
 
+  /** Give each OVERLAY rendering group (attack arrows, unit icons) its own
+   *  cleared depth slate before it renders, so overlays neither depth-test
+   *  against the world nor leak their depth writes back into the shared buffer.
+   *
+   *  Why this exists — the depth-buffer glitch it fixes:
+   *  The scene clears the framebuffer's depth ONCE per frame
+   *  (`scene.autoClearDepthAndStencil`, default true), then renders rendering
+   *  groups in ascending order (0 world → ATTACK_OVERLAY_GROUP → UNIT_ICON_GROUP)
+   *  WITHOUT clearing depth between them — Babylon's `RenderingManager` only
+   *  re-clears a group's depth when that group has an explicit auto-clear setup,
+   *  and none did, so by default all groups shared one depth buffer for the whole
+   *  frame. That meant the OPAQUE, depth-writing attack-arrow tubes
+   *  (ATTACK_OVERLAY_GROUP) wrote their depth into the buffer the WORLD group (0)
+   *  had already filled; on strict GPU drivers those stale overlay depth values
+   *  corrupted the world group's depth-dependent passes (shadow-map receive + the
+   *  foliage depth-prepass), producing the operator's "trees render as flat
+   *  light-blue/white silhouettes + shadows with no caster" symptom. It is
+   *  intermittent and worsens with enemy count because more arrows = more opaque
+   *  depth writes polluting the buffer.
+   *
+   *  `setRenderingAutoClearDepthStencil(group, autoClear=true, depth=true,
+   *  stencil=false)` clears DEPTH (not stencil — the X-ray ghost stencil lives in
+   *  the world group and must survive) ahead of each overlay group. The world
+   *  group (0) is intentionally left untouched so it keeps the scene-level
+   *  frame-start clear and its own depth sorting. Net effect: overlays are true
+   *  "always-on-top" layers that can neither be occluded by world geometry nor
+   *  write depth back into it. Idempotent; safe with a stub scene (node tests). */
+  _isolateOverlayDepthGroups(scene) {
+    if (!scene || typeof scene.setRenderingAutoClearDepthStencil !== 'function') return;
+    // autoClear=true, depth=true, stencil=false
+    scene.setRenderingAutoClearDepthStencil(ATTACK_OVERLAY_GROUP, true, true, false);
+    scene.setRenderingAutoClearDepthStencil(UNIT_ICON_GROUP,      true, true, false);
+  }
+
   /** Size the sun's shadow camera to the given map bounds (or the pre-map
    *  default when null) and pin it there: Babylon's autoUpdateExtends /
    *  autoCalcShadowZBounds are switched OFF so the frustum stops re-fitting
@@ -18557,17 +18596,26 @@ export const ATTACK_BADGE_Y = 2.65;
 export const ATTACK_BADGE_SIZE = 0.55;
 
 /** Babylon `renderingGroupId` for planning-mode attack overlays (arrow
- *  tubes + ×N target badges). Strictly above all world geometry (group 0
- *  — terrain, ribbons, buildings, standees, hex outlines, plan ghosts) and
- *  the floating unit-icon billboard (group 2, owned by the icon fix in
- *  task t-40ab45b0) so the planning UI always draws on top — rendering
- *  groups bypass the depth buffer, which is what we need at the locked
- *  45° tilt where a unit cone can otherwise occlude an arrow shaft or
- *  badge that lives at the same screen pixel.
+ *  tubes + ×N target badges). Sits ABOVE all world geometry (group 0 —
+ *  terrain, ribbons, buildings, standees, hex outlines, move arrows, plan
+ *  ghosts) so the attack arrows always draw over the board, but BELOW the
+ *  unit-icon group (2) so the unit icons and the hit/crush percentages
+ *  painted into their badge texture always draw LAST, on top of every
+ *  arrow. (Previously this was group 3 — above the icons — which let the
+ *  arrows cover the icons + percentages: the draw-order bug this fix
+ *  corrects.)
  *
- *  Default Babylon `MaxRenderingGroupId` is 4 (valid range 0..3), so
- *  3 is the highest legal group without configuring the scene. */
-export const ATTACK_OVERLAY_GROUP = 3;
+ *  Depth isolation: this group's depth buffer is cleared before it renders
+ *  (see the `setRenderingAutoClearDepthStencil` block in `_initBabylon`),
+ *  so the arrows neither depth-test against world geometry (a tall tree must
+ *  never occlude an arrow shaft at the same screen pixel under the locked
+ *  45° tilt) nor leak their opaque depth writes back into the shared buffer
+ *  — the latter is what corrupted the world group's depth-dependent passes
+ *  (shadow receive / foliage depth-prepass), the "flat trees + orphan
+ *  shadows" symptom. The unit-icon group (2) is cleared the same way.
+ *
+ *  Default Babylon `MaxRenderingGroupId` is 4 (valid range 0..3). */
+export const ATTACK_OVERLAY_GROUP = 1;
 
 /**
  * Tally attacks per target hex from a `planGhostSteps` array. Returns
