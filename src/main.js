@@ -74,7 +74,7 @@ import {
   RESOURCE_ICONS as _RESOURCE_ICONS, hpColor as _hpColor,
   loadCampaignPortraits as _loadCampaignPortraits, getCampaignPortrait as _getCampaignPortrait,
   campaignCardHTML as _campaignCardHTML, survivorCardHTML as _survivorCardHTML,
-  campaignPartyHTML as _campaignPartyHTML, objectiveDescription as _objectiveDescription,
+  campaignPartyHTML as _campaignPartyHTML, buildDebriefHeader, objectiveDescription as _objectiveDescription,
   weaponName as _weaponName, weaponStatString as _weaponStatString,
   partyPaneHTML as _partyPaneHTML, missionListPaneHTML as _missionListPaneHTML,
   progressSquadCap as _progressSquadCap, fallenSectionHTML as _fallenSectionHTML,
@@ -4573,6 +4573,17 @@ function _initCampaignMission(missionDef) {
     if (!Object.getOwnPropertyDescriptor(window, '__ui')) {
       Object.defineProperty(window, '__ui', { configurable: true, get: () => ui });
     }
+    // Verification hook: force the end-of-mission debrief without grinding the
+    // mission to completion. Sets the winner + gameOver and runs the live
+    // _handleCampaignMissionEnd so the harness can screenshot a real WIN or LOSE
+    // debrief. Inert in normal play (never called).
+    window.__triggerCampaignDebrief = (won = true) => {
+      if (!state) return;
+      // gameOver is a derived getter (winner !== null) — setting winner is enough.
+      state.winner = won ? 'hero' : 'witch';
+      state.winReason = won ? 'objective' : 'defeat';
+      _handleCampaignMissionEnd();
+    };
   }
 
   // Apply custom phase cycle from mission definition
@@ -4893,6 +4904,43 @@ function _setupMissionHints(missionDef) {
   _missionConductor.start(); // no-op in hints mode; hints fire at planning start
 }
 
+// AbortController scoping the debrief overlay's listeners (Continue button). A
+// fresh controller per debrief so a previous mission's handler can never linger
+// on the shared #debrief-continue element and double-fire (see
+// reference_ui_teardown_listener_leaks).
+let _debriefAbort = null;
+
+// The live Ledger api ({ show, hide, select }), stashed at init so the debrief's
+// Continue can hand back to the campaign panel without fighting the setup-screen
+// observer. Null until the Ledger boots (special URL modes never init it).
+let _ledgerApi = null;
+
+/**
+ * Continue out of the campaign debrief: hide the overlay and route into the
+ * Ledger's Campaign panel. select('campaign') re-reads _ledgerCampaignData()
+ * fresh, so the just-completed mission shows done and the next one unlocked; the
+ * active slot was already persisted at launch, so the player lands on the right
+ * playthrough. Falls back to a hard reload if the Ledger never initialized.
+ */
+function _leaveDebriefToLedger() {
+  const ov = document.getElementById('debrief-overlay');
+  if (ov) ov.style.display = 'none';
+  _debriefAbort?.abort();
+  _debriefAbort = null;
+  // The mission is over and the game torn down; drop the in-game screen so the
+  // Ledger sits over a clean backdrop.
+  const gs = document.getElementById('game-screen');
+  if (gs) gs.style.display = 'none';
+  if (_ledgerApi) {
+    _ledgerApi.show();
+    _ledgerApi.select('campaign');
+  } else {
+    // No Ledger (shouldn't happen in normal play) — fall back to a reload, which
+    // boots the menu fresh.
+    location.reload();
+  }
+}
+
 function _handleCampaignMissionEnd() {
   if (!_activeCampaign || !_activeMissionDef || !state) return;
 
@@ -4951,30 +4999,42 @@ function _handleCampaignMissionEnd() {
     survivors = _activeCampaign.roster;
   }
 
-  // Show debrief screen
-  document.getElementById('game-screen').style.display = 'none';
-  document.getElementById('setup-screen').style.display = '';
+  // ── Render the debrief overlay ──────────────────────────────────────────
+  // A dedicated overlay (#debrief-overlay), NOT the dead legacy #setup-screen
+  // debrief step. The Ledger's setup-screen MutationObserver only watches
+  // #setup-screen, so revealing this overlay never bounces the player back to
+  // Continue. The data computed above (roster reconcile, applyMissionResult,
+  // fallen) is unchanged — only the display was rebuilt for the Ledger era.
+  const overlay = document.getElementById('debrief-overlay');
+  const panel = document.getElementById('debrief-panel');
+  const { title, text } = buildDebriefHeader(missionDef, won);
 
-  const title = won ? 'VICTORY' : 'DEFEAT';
-  const text = won ? (missionDef.victoryText || 'Mission complete.') : (missionDef.defeatText || 'Mission failed.');
-  (document.getElementById('debrief-title') || _legacyEl).textContent = title;
-  (document.getElementById('debrief-text') || _legacyEl).textContent = text;
+  const titleEl = document.getElementById('debrief-title');
+  if (titleEl) titleEl.textContent = title;
+  const textEl = document.getElementById('debrief-text');
+  if (textEl) textEl.textContent = text;
+  if (panel) panel.classList.toggle('is-defeat', !won);
 
-  // Stats
+  // Stats — rounds played, kills, surviving party size; plus the heal/rest bonus
+  // notice on a win when the mission grants one.
   const statsEl = document.getElementById('debrief-stats');
-  (statsEl || _legacyEl).innerHTML = `
-    <div>Rounds: ${state.round}</div>
-    <div>Kills: ${state.heroKills}</div>
-    <div>Survivors remaining: ${survivors.length}</div>
-  `;
-
-  // Heal bonus notice
-  if (won && missionDef.healBonus) {
-    (statsEl || _legacyEl).insertAdjacentHTML('afterend',
-      `<div class="debrief-heal">✦ Rest bonus: all survivors healed +${missionDef.healBonus} HP</div>`);
+  if (statsEl) {
+    statsEl.className = 'debrief-stats debrief-overlay-stats';
+    statsEl.innerHTML = `
+      <div>Rounds: ${state.round}</div>
+      <div>Kills: ${state.heroKills}</div>
+      <div>Survivors remaining: ${survivors.length}</div>
+    `;
+    // Heal bonus notice (sits below the stat row). Drop any stale notice from a
+    // prior debrief first so a re-show never stacks duplicates.
+    document.getElementById('debrief-overlay')?.querySelectorAll('.debrief-heal').forEach(el => el.remove());
+    if (won && missionDef.healBonus) {
+      statsEl.insertAdjacentHTML('afterend',
+        `<div class="debrief-heal">✦ Rest bonus: all survivors healed +${missionDef.healBonus} HP</div>`);
+    }
   }
 
-  // Roster status — rich party cards
+  // Roster status — rich party cards + this-run fallen memorial.
   const rosterEl = document.getElementById('debrief-roster');
   const heroSnap = won && state.hero ? {
     hp: state.hero.hp, maxHp: state.hero.maxHp,
@@ -4986,9 +5046,23 @@ function _handleCampaignMissionEnd() {
   // fallen are shown on the Progress screen; the debrief focuses on who was lost
   // THIS mission so the loss lands. Empty → no section.
   const missionTitleResolver = (id) => _activeCampaign.getMissionDef(id)?.title ?? id;
-  (rosterEl || _legacyEl).innerHTML = `<h3>${rosterHeading}</h3>` +
-    _campaignPartyHTML(heroSnap, survivors) +
-    _fallenSectionHTML(newlyFallen, missionTitleResolver);
+  if (rosterEl) {
+    rosterEl.innerHTML = `<h3>${rosterHeading}</h3>` +
+      _campaignPartyHTML(heroSnap, survivors) +
+      _fallenSectionHTML(newlyFallen, missionTitleResolver);
+  }
+
+  // Wire Continue → back to the Ledger's Campaign panel. A fresh AbortController
+  // per debrief so the previous mission's handler can never linger and double-fire.
+  _debriefAbort?.abort();
+  _debriefAbort = new AbortController();
+  const continueBtn = document.getElementById('debrief-continue');
+  if (continueBtn) {
+    continueBtn.addEventListener('click', _leaveDebriefToLedger, { signal: _debriefAbort.signal });
+  }
+
+  // Reveal the overlay over the game.
+  if (overlay) overlay.style.display = '';
 
   // Clean up game state — destroy the UIController and conductor first so their
   // event listeners don't leak onto the shared DOM and double-fire in the next game.
@@ -4997,8 +5071,6 @@ function _handleCampaignMissionEnd() {
   renderer = null; ui = null; witchAI = null; heroAI = null;
   _missionConductor = null;
   _activeMissionDef = null;
-
-  showStep('debrief');
 }
 
 // Campaign event listeners
@@ -9597,6 +9669,10 @@ function _buildLedgerData() {
       // Continue. Uses the same active-slot-aware continuable check.
       const start = hasContinuableGames() ? 'continue' : 'campaign';
       const api = initLedger({ playerName: session?.username || 'Wanderer', data: _buildLedgerData(), start });
+      // Stash the api module-side so the campaign debrief's Continue can route
+      // back into the Campaign panel (api.show() + api.select('campaign')) without
+      // tripping the setup-screen observer below.
+      _ledgerApi = api;
       api?.show();
       // Re-show the ledger if anything reveals the legacy #setup-screen (e.g.
       // game-over → back to menu) while we're not in a game.

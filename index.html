@@ -440,6 +440,22 @@
     <p  id="sp-win-reason"></p>
   </div>
 
+  <!-- ── Campaign debrief overlay ─────────────────────────────────────────────
+       The post-mission Victory/Defeat screen. A dedicated overlay (NOT the dead
+       legacy #setup-screen debrief step) so the Ledger's setup-screen observer
+       never bounces it back to Continue. Populated + shown by
+       _handleCampaignMissionEnd in main.js; Continue routes into the Ledger's
+       Campaign panel. -->
+  <div id="debrief-overlay" style="display:none">
+    <div id="debrief-panel" class="debrief-panel">
+      <h1 id="debrief-title" class="debrief-title"></h1>
+      <p  id="debrief-text"  class="debrief-text"></p>
+      <div id="debrief-stats" class="debrief-stats"></div>
+      <div id="debrief-roster" class="debrief-roster"></div>
+      <button id="debrief-continue" class="debrief-continue">Continue →</button>
+    </div>
+  </div>
+
   <!-- ── Tutorial overlay ─────────────────────────────────────────────────── -->
   <!-- Spotlight glow highlight for DOM elements; activated via .tutorial-spotlit class -->
   <div id="tutorial-backdrop"></div>
