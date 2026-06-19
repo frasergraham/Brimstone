@@ -3,7 +3,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mmUrgencyScore, mmSortRows, mmFormatRow, mmDedupeCampaignRows, mmCampaignProgressLabel } from '../src/main-menu-games.js';
+import { mmUrgencyScore, mmSortRows, mmFormatRow, mmDedupeCampaignRows, mmCampaignProgressLabel, mmIsCampaignRow } from '../src/main-menu-games.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -317,6 +317,33 @@ describe('mmFormatRow', () => {
     assert.ok(view.meta.includes('Mission 3'));
     assert.ok(!view.meta.includes('Mission 3/'));
   });
+
+  // Tweak 3 — numbering is 0-based from the tutorial; Mission 0 is the tutorial,
+  // so it reads "Tutorial" rather than "Mission 0".
+  test('the tutorial (mission number 0) reads "Tutorial", not "Mission 0"', () => {
+    const view = mmFormatRow({
+      kind: 'campaign-next',
+      title: '📖 Campaign',
+      _nextMissionTitle: "The Road to Caleb's Hollow - Tutorial",
+      _missionNumber: 0,
+      _missionTotal: 12,
+    });
+    assert.equal(view.title, "Tutorial — The Road to Caleb's Hollow - Tutorial");
+    assert.ok(view.meta.includes('Tutorial'));
+    assert.ok(!view.meta.includes('Mission 0'));
+  });
+
+  test('the first real mission (prologue) reads "Mission 1 / 12"', () => {
+    const view = mmFormatRow({
+      kind: 'campaign-next',
+      title: '📖 Campaign',
+      _nextMissionTitle: "Trouble at The Wanderer's Inn",
+      _missionNumber: 1,
+      _missionTotal: 12,
+    });
+    assert.equal(view.title, "Mission 1 — Trouble at The Wanderer's Inn");
+    assert.ok(view.meta.includes('Mission 1/12'));
+  });
 });
 
 // ── mmDedupeCampaignRows ──────────────────────────────────────────────────────
@@ -381,9 +408,35 @@ describe('mmCampaignProgressLabel', () => {
   test('shows "Mission N" when the total is unknown', () => {
     assert.equal(mmCampaignProgressLabel({ _missionNumber: 5 }), 'Mission 5');
   });
+  test('mission number 0 is the tutorial — reads "Tutorial"', () => {
+    assert.equal(mmCampaignProgressLabel({ _missionNumber: 0, _missionTotal: 12 }), 'Tutorial');
+    assert.equal(mmCampaignProgressLabel({ _missionNumber: 0 }), 'Tutorial');
+  });
   test('returns empty string when there is no mission number', () => {
     assert.equal(mmCampaignProgressLabel({}), '');
     assert.equal(mmCampaignProgressLabel({ _missionTotal: 7 }), '');
     assert.equal(mmCampaignProgressLabel(null), '');
+  });
+});
+
+// ── mmIsCampaignRow (Tweak 6 — thumbnail-click routing gate) ──────────────────
+// A campaign mission row's thumbnail opens the mission BRIEFING; a skirmish/
+// online/replay row's thumbnail opens the game-detail stats modal.
+describe('mmIsCampaignRow — thumbnail routes to briefing vs detail', () => {
+  test('campaign mission rows → briefing', () => {
+    assert.equal(mmIsCampaignRow({ kind: 'local-campaign' }), true);
+    assert.equal(mmIsCampaignRow({ kind: 'campaign-next' }), true);
+  });
+  test('skirmish / online / battle / replay rows → detail (not a campaign row)', () => {
+    assert.equal(mmIsCampaignRow({ kind: 'game' }), false);
+    assert.equal(mmIsCampaignRow({ kind: 'battle' }), false);
+    assert.equal(mmIsCampaignRow({ kind: 'battle-invite' }), false);
+    assert.equal(mmIsCampaignRow({ kind: 'local-sp' }), false);
+    assert.equal(mmIsCampaignRow({ kind: 'completed-sp' }), false);
+    assert.equal(mmIsCampaignRow({ kind: 'completed-mp' }), false);
+  });
+  test('safe on null / missing kind', () => {
+    assert.equal(mmIsCampaignRow(null), false);
+    assert.equal(mmIsCampaignRow({}), false);
   });
 });

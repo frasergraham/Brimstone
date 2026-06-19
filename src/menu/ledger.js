@@ -8,7 +8,7 @@
 // behind the `?ledger` dev preview until the single cutover.
 // ============================================================================
 
-import { mmSortRows, mmFormatRow } from '../main-menu-games.js';
+import { mmSortRows, mmFormatRow, mmIsCampaignRow } from '../main-menu-games.js';
 import { mountServerSelector } from '../server-selector.js';
 import { loadThumb, missionThumb } from './thumbnails.js';
 import { isModeAvailable, isFactionAvailable, COMING_SOON_LABEL } from '../demo-config.js';
@@ -326,10 +326,13 @@ function _campaignBriefing(body) {
   body.appendChild(_backRow('‹ Back to the chronicle', () => { _campBriefing = null; select('campaign'); }));
   const head = document.createElement('div');
   head.className = 'lg-brief-head';
+  // Mission number is 0-based from the tutorial; Mission 0 reads "Tutorial".
+  const kicker = (b.index ?? 0) === 0 ? 'Tutorial' : `Mission ${b.index}`;
   head.innerHTML =
-    `<div class="lg-brief-kicker">Mission ${roman((b.index ?? 0) + 1)}</div>` +
+    `<div class="lg-brief-kicker">${esc(kicker)}</div>` +
     `<div class="lg-brief-title gthc">${esc(b.title)}</div>`;
   body.appendChild(head);
+  body.appendChild(_briefMapImage(b));
   const rule = document.createElement('div'); rule.className = 'ledger-rule'; body.appendChild(rule);
   const text = document.createElement('p');
   text.className = 'lg-brief-text';
@@ -339,6 +342,29 @@ function _campaignBriefing(body) {
     () => _data?.startMission?.(b.slot, b.missionId, b.resume));
   begin.style.marginTop = '20px';
   body.appendChild(begin);
+}
+
+/** Displayed mission number label for a catalog index. The list is 0-based from
+ *  the tutorial (index 0 = "Tutorial", index 1 = the first real mission), so the
+ *  number shown matches the briefing's "Mission N". */
+function _missionNumLabel(index) {
+  return index === 0 ? '0' : roman(index);
+}
+
+/** Big map preview for the mission briefing — the live saved thumbnail when the
+ *  mission is mid-play (keyed by its row id `<campaignId>/slot<N>/<missionId>`,
+ *  captured at round-end), else the mission's fixed pre-generated map image. A
+ *  larger view than the list-card thumbs, so the briefing shows the board the
+ *  player is stepping into. */
+function _briefMapImage(b) {
+  const rowId = b.campaignId ? `${b.campaignId}/slot${b.slot}/${b.missionId}` : null;
+  const img = missionThumb(b.missionId, rowId);
+  const el = document.createElement('div');
+  el.className = 'lg-brief-map' + (img ? ' has-img' : '');
+  if (img) el.style.backgroundImage = `url(${img})`;
+  else el.textContent = '🜂';
+  el.setAttribute('aria-hidden', 'true');
+  return el;
 }
 
 /** Warband (Party) view — reuses the existing party-pane renderer + mutations.
@@ -1108,6 +1134,32 @@ function _battleThumb(battle) {
   return battle?.room_id ? loadThumb(battle.room_id) : null;
 }
 
+// A campaign-mission row routes its thumbnail click to the mission BRIEFING —
+// the game-detail stats modal is only meaningful for skirmish/online rows.
+const _isCampaignRow = mmIsCampaignRow;
+
+/** Open the mission briefing for a campaign feed row (Tweak 6): clicking a
+ *  campaign mission's thumbnail in Continue should show the briefing — which
+ *  carries the map + objectives — not the skirmish/online stats modal. Hops to
+ *  the Campaign destination with the briefing primed. */
+function _openCampaignBriefingFromRow(row) {
+  const missionDef = row._missionDef;
+  const missionId = missionDef?.id ?? row._nextMissionId;
+  if (!missionId) return;
+  _campBriefing = {
+    slot: row._slotIndex ?? 1,
+    missionId,
+    resume: row.kind === 'local-campaign',
+    title: missionDef?.title || row._missionTitle || row._nextMissionTitle || missionId,
+    briefing: missionDef?.briefing || '',
+    // Catalog index = the 0-based mission number we display.
+    index: row._missionNumber ?? 0,
+    campaignId: row._campaignId,
+  };
+  _campSlot = row._slotIndex ?? null;
+  select('campaign');
+}
+
 function _resumeHero(row) {
   const f = mmFormatRow(row);
   const thumb = _rowThumb(row);
@@ -1122,9 +1174,17 @@ function _resumeHero(row) {
       `<div class="lg-resume-meta">${esc(f.meta || '')}</div>` +
       (_gameTimeMeta(row) ? `<div class="lg-resume-meta m2">${esc(_gameTimeMeta(row))}</div>` : '') +
     `</div>`;
-  // Only the live saved snapshot opens game-details — a fixed mission map image
-  // (a not-yet-played mission) has no captured stats to show.
-  if (thumb && loadThumb(row.room_id)) {
+  // Campaign mission rows route their thumbnail to the BRIEFING (map +
+  // objectives) — the game-detail stats modal is meaningless for a campaign
+  // mission (Tweak 6). Every campaign row is clickable (it always has a board
+  // image). For skirmish/online rows, only the live saved snapshot opens
+  // game-details — a fixed mission map image has no captured stats to show.
+  if (thumb && _isCampaignRow(row)) {
+    const te = wrap.querySelector('.lg-resume-thumb');
+    te.classList.add('clickable');
+    te.setAttribute('title', 'View mission briefing');
+    te.addEventListener('click', () => _openCampaignBriefingFromRow(row));
+  } else if (thumb && loadThumb(row.room_id)) {
     const te = wrap.querySelector('.lg-resume-thumb');
     te.classList.add('clickable');
     te.setAttribute('title', 'View game details');
@@ -1143,13 +1203,22 @@ function _feedRow(row, cta = null) {
   el.className = 'lg-feed-row' + (row.action_needed ? ' is-action' : '');
   const thumb = _rowThumb(row);
   if (thumb) {
-    const savedThumb = loadThumb(row.room_id);   // live snapshot ⇒ opens game-details
+    // Campaign mission rows route to the BRIEFING (Tweak 6); skirmish/online
+    // rows open the game-detail stats modal, but only when a live snapshot was
+    // captured (a fixed mission map image has no stats to show).
+    const isCampaign = _isCampaignRow(row);
+    const savedThumb = loadThumb(row.room_id);
+    const clickable = isCampaign || !!savedThumb;
     const th = document.createElement('div');
-    th.className = 'lg-feed-thumb' + (savedThumb ? ' clickable' : '');
+    th.className = 'lg-feed-thumb' + (clickable ? ' clickable' : '');
     th.style.backgroundImage = `url(${thumb})`;
-    if (savedThumb) {
-      th.setAttribute('title', 'View game details');
-      th.addEventListener('click', (e) => { e.stopPropagation(); _openGameDetail(row); });
+    if (clickable) {
+      th.setAttribute('title', isCampaign ? 'View mission briefing' : 'View game details');
+      th.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (isCampaign) _openCampaignBriefingFromRow(row);
+        else _openGameDetail(row);
+      });
     }
     el.appendChild(th);
   }
@@ -1275,7 +1344,7 @@ function _missionRow(slot, m, status, index, campaignId) {
   el.className = 'lg-mission is-' + status + (playable ? ' is-playable' : '');
   el.innerHTML =
     `<span class="lg-mission-thumb" aria-hidden="true"${img ? ` style="background-image:url(${img})"` : ''}></span>` +
-    `<span class="lg-mission-n gthc">${roman(index + 1)}</span>` +
+    `<span class="lg-mission-n gthc">${esc(_missionNumLabel(index))}</span>` +
     `<span class="lg-mission-name">${esc(m.title || m.id)}</span>` +
     (playable
       ? `<button class="lg-btn lg-btn-gold lg-btn-sm">${resume ? '▶ Resume' : '▶ Play'}</button>`
@@ -1283,7 +1352,7 @@ function _missionRow(slot, m, status, index, campaignId) {
   if (playable) {
     const go = (e) => {
       e?.stopPropagation?.();
-      _campBriefing = { slot: slot.slot, missionId: m.id, resume, title: m.title || m.id, briefing: m.briefing || '', index };
+      _campBriefing = { slot: slot.slot, missionId: m.id, resume, title: m.title || m.id, briefing: m.briefing || '', index, campaignId };
       select('campaign');
     };
     el.querySelector('button')?.addEventListener('click', go);

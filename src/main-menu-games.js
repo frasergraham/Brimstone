@@ -98,16 +98,31 @@ export function mmDedupeCampaignRows(rows) {
 
 /**
  * Short "where in the campaign" marker for a campaign row's meta line, e.g.
- * "Mission 2/7" (or "Mission 2" when the total is unknown). Returns '' when the
- * row carries no mission number, so callers can safely push it unconditionally
- * — empty parts are dropped by the join. Reads `_missionNumber`/`_missionTotal`
- * set by the campaign-row builder.
+ * "Mission 2/12" (or "Mission 2" when the total is unknown). The mission number
+ * is 0-based from the tutorial — Mission 0 is the tutorial, so it reads
+ * "Tutorial" instead of "Mission 0/…". Returns '' when the row carries no
+ * mission number, so callers can safely push it unconditionally — empty parts
+ * are dropped by the join. Reads `_missionNumber`/`_missionTotal` set by the
+ * campaign-row builder.
  */
 export function mmCampaignProgressLabel(row) {
   const n = row?._missionNumber;
   if (n == null) return '';
+  if (n === 0) return 'Tutorial';
   const total = row?._missionTotal;
   return total != null ? `Mission ${n}/${total}` : `Mission ${n}`;
+}
+
+/**
+ * True for a campaign-mission row (a mid-mission save 'local-campaign', or the
+ * next mission ready to start 'campaign-next'). The Ledger routes a campaign
+ * row's thumbnail click to the mission BRIEFING (which carries the map +
+ * objectives); skirmish/online rows ('game', 'battle', completed replays) route
+ * to the game-detail stats modal instead. Pure so the routing gate is unit-
+ * testable without a DOM.
+ */
+export function mmIsCampaignRow(row) {
+  return row?.kind === 'local-campaign' || row?.kind === 'campaign-next';
 }
 
 const PHASE_LABELS = {
@@ -141,9 +156,11 @@ export function mmFormatRow(row) {
   if (row.kind === 'local-campaign' || row.kind === 'campaign-next') {
     const missionTitle = (row.kind === 'local-campaign' ? row._missionTitle : row._nextMissionTitle);
     if (missionTitle) {
-      title = row._missionNumber != null
-        ? `Mission ${row._missionNumber} — ${missionTitle}`
-        : missionTitle;
+      // Mission number is 0-based from the tutorial; Mission 0 is the tutorial,
+      // so it reads "Tutorial — …" rather than "Mission 0 — …".
+      const n = row._missionNumber;
+      const prefix = n == null ? null : (n === 0 ? 'Tutorial' : `Mission ${n}`);
+      title = prefix ? `${prefix} — ${missionTitle}` : missionTitle;
     }
   }
 

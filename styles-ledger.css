@@ -439,6 +439,12 @@
 .lg-brief-kicker { font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--lg-label); }
 .lg-brief-title { font-family:var(--lg-display); font-size:30px; color:var(--lg-ink); margin-top:2px; }
 .lg-brief-text { font-size:15px; line-height:1.6; color:var(--lg-ink-2); margin-top:14px; max-width:62ch; }
+/* Big map preview — a larger view of the mission's board than the list cards. */
+.lg-brief-map { margin-top:14px; width:100%; max-width:520px; aspect-ratio:4/3; border-radius:6px;
+  border:1px solid rgba(255,255,255,.12); background:#0a0b10 center/cover no-repeat;
+  display:flex; align-items:center; justify-content:center; font-size:42px; color:rgba(212,167,44,.4); }
+.lg-brief-map.has-img { border-color:rgba(212,167,44,.34); color:transparent; }
+@media (max-width:560px) { .lg-brief-map { max-width:100%; } }
 
 /* Play Online — rhythms + battle */
 .lg-rhythms { display:grid; grid-template-columns:1fr; gap:12px; margin-bottom:16px; }

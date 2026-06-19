@@ -55,7 +55,7 @@ import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, c
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, CAMPAIGN_SLOT_COUNT, getActiveSlot, setActiveSlot, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
 import { CAMPAIGNS } from './campaign/campaign-registry.js';
-import { campaignMissionNumber as _campaignMissionNumber, hasCampaignToContinue } from './campaign/continue-resolver.js';
+import { campaignMissionNumber as _campaignMissionNumber, campaignMissionTotal as _campaignMissionTotal, hasCampaignToContinue } from './campaign/continue-resolver.js';
 import { saveThumb, deleteThumb, loadThumb, saveStats, loadStats } from './menu/thumbnails.js';
 import { processStoryTriggers } from './campaign/missions.js';
 import { MissionLogicEngine } from './mission-logic/engine.js';
@@ -5976,7 +5976,9 @@ function _localCampaignRows() {
     for (const camp of CAMPAIGNS) {
       if (camp.disabled) continue;
       const missions = camp.missions || [];
-      const missionTotal = missions.length;
+      // Denominator excludes the tutorial (Mission 0), so the last real mission
+      // reads "Mission 12 / 12" rather than "/13".
+      const missionTotal = _campaignMissionTotal(camp);
 
       // Continue tracks ONE playthrough per campaign — the persisted active slot
       // (the one the player last selected/started), defaulting to slot 1. We

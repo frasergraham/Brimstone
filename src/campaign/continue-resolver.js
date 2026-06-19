@@ -12,12 +12,28 @@ import { Campaign, getActiveSlot } from './campaign.js';
 import { loadCampaignMissionSave } from './campaign-ui.js';
 
 /**
- * 1-based position of a mission within its campaign's ordered mission list, or
- * null when the mission isn't part of the campaign.
+ * Displayed mission number — 0-based FROM THE TUTORIAL: the tutorial (catalog
+ * index 0) reads "Mission 0", the first real mission (prologue) reads "Mission
+ * 1", and so on. This is just the mission's catalog index, so it lines up with
+ * the on-disk `Ch1M<N>` files (prologue = Ch1M1 = Mission 1). Returns null when
+ * the mission isn't part of the campaign.
  */
 export function campaignMissionNumber(campaignDef, missionId) {
   const idx = (campaignDef?.missions || []).findIndex(m => m.id === missionId);
-  return idx < 0 ? null : idx + 1;
+  return idx < 0 ? null : idx;
+}
+
+/**
+ * Denominator for the "Mission N / Total" label: the count of NON-tutorial
+ * missions (so the last real mission reads "Mission 12 / 12", not "/13"). The
+ * tutorial is excluded because it's "Mission 0" — it isn't counted toward the
+ * campaign's mission total.
+ */
+export function campaignMissionTotal(campaignDef) {
+  const missions = campaignDef?.missions || [];
+  // The first catalog entry is the tutorial (Mission 0); the rest are the real
+  // missions counted in the denominator.
+  return Math.max(0, missions.length - 1);
 }
 
 /**
@@ -42,7 +58,7 @@ export function resolveCampaignContinue(campaignDef, deps = {}) {
   const loadMission   = deps.loadMissionSave || loadCampaignMissionSave;
 
   const slot = activeSlotFn(campaignDef.id);
-  const missionTotal = (campaignDef.missions || []).length;
+  const missionTotal = campaignMissionTotal(campaignDef);
   const c = new CampaignCls(campaignDef, slot);
   if (!c.load()) return null;             // active slot has no save → nothing to continue
 
