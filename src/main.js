@@ -6374,16 +6374,13 @@ function _handleAsyncStateUpdate(msg) {
   _updateAsyncReplayBtn();
 
   // ── Finished / abandoned games ──
+  // Resume parity: don't FORCE the last-turn replay — show the result directly.
+  // The header "Last Turn" button (kept visible by _updateAsyncReplayBtn) lets
+  // the player optionally re-watch.
   if (msg.gameStatus === 'finished' || msg.gameStatus === 'abandoned') {
-    if (_asyncLastRound && _asyncSeenRound < _asyncLastRound.roundNum) {
-      _showAsyncTurnChoice(_asyncLastRound.roundNum, _asyncLastRound, () => {
-        const label = msg.winner === msg.faction ? 'Victory' : (msg.winner ? 'Defeat' : 'Game Over');
-        ui?._showResultDialog([label, msg.winReason || '']);
-      });
-    } else {
-      const label = msg.winner === msg.faction ? 'Victory' : (msg.winner ? 'Defeat' : 'Game Over');
-      ui?._showResultDialog([label, msg.winReason || '']);
-    }
+    if (_asyncLastRound) _asyncSeenRound = _asyncLastRound.roundNum;
+    const label = msg.winner === msg.faction ? 'Victory' : (msg.winner ? 'Defeat' : 'Game Over');
+    ui?._showResultDialog([label, msg.winReason || '']);
     return;
   }
 
@@ -6393,12 +6390,12 @@ function _handleAsyncStateUpdate(msg) {
     notifyRoundReady(mirror.round ?? 1, idleOpts);
   }
 
-  // ── Active game: unseen last round → offer replay before planning ──
-  if (_asyncLastRound && _asyncSeenRound < _asyncLastRound.roundNum) {
-    _showAsyncTurnChoice(_asyncLastRound.roundNum, _asyncLastRound, () => _enterAsyncPlanning(msg));
-  } else {
-    _enterAsyncPlanning(msg);
-  }
+  // ── Active game: land straight in planning ──
+  // Resume parity with skirmish/SP: don't FORCE the last-turn replay on resume.
+  // The "Last Turn" affordance is the header/menu button (_updateAsyncReplayBtn
+  // above + ui.onReplayLastTurn → _asyncWatchLastTurn); the player opts in.
+  if (_asyncLastRound) _asyncSeenRound = _asyncLastRound.roundNum;
+  _enterAsyncPlanning(msg);
 }
 
 // ── Async: planning & waiting ──────────────────────────────────────────────
@@ -8113,10 +8110,16 @@ async function _applyOnlinePlanningPhase(payload) {
     notifyRoundReady(state.round, wasIdleLastRound ? { wasIdle: true, faction: mp.myFaction } : undefined);
   }
 
-  // If we have a replay from the last round, play it before entering planning
-  const hadReplay = !!lastReplay;
-  if (lastReplay) {
-    await _playReconnectReplay(lastReplay);
+  // Resume parity with skirmish/SP: don't FORCE the last-turn replay on reconnect.
+  // Cache it so the on-demand "Last Turn" button (_replayLastTurnInline, keyed by
+  // state.round - 1) can find it, and land the player straight in planning. They
+  // can optionally re-watch via the header button — same affordance as offline.
+  if (lastReplay && typeof lastReplay.roundNum === 'number') {
+    _cacheReplay({
+      roundNum:     lastReplay.roundNum,
+      preStateJson: lastReplay.preStateJson,
+      stepsJson:    lastReplay.stepsJson,
+    });
   }
 
   // Prefer per-player budget; fall back to legacy faction budget for old servers.
@@ -8400,16 +8403,23 @@ function _createMpClient() {
       ui._triggerPostRoundEffects();
       redrawOnline();
 
-      // If the game just ended (e.g. resignation), show summary immediately
+      // If the game just ended (e.g. resignation), show summary immediately.
+      // Clean victory/defeat dialog (message + Return to Menu + Replay Full Game).
       if (state.gameOver && !isAnimating()) {
+        const goWinner = state.winner, goWinReason = state.winReason;
         ui._showResolutionSummary([], state.round, {
           gameOver: true,
-          winner: state.winner,
-          winReason: state.winReason,
+          winner: goWinner,
+          winReason: goWinReason,
           humanFaction: mp?.myFaction ?? null,
           hasFullReplay: _onlineRoundHistory.length > 0,
-        }).then(choice => {
-          if (choice === 'restart') location.reload();
+        }).then(async choice => {
+          if (choice === 'replay-full' && _onlineRoundHistory.length > 0) {
+            await _replayFullGame(_onlineRoundHistory, goWinner, goWinReason,
+              state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch',
+              redrawOnline);
+          }
+          location.reload();
         });
       }
     },
@@ -8823,23 +8833,25 @@ function _createMpClient() {
       // Set up planning mode with the correct budget and deadline
       if (!gameOver) {
         if (players) ui._players = players;
+
+        // Resume parity with skirmish/SP: don't FORCE the last-turn replay on
+        // join/reconnect. Cache it (keyed by roundNum == state.round - 1) so the
+        // on-demand "Last Turn" button can find it, and land straight in planning.
+        if (lastRound && !round.submittedPlan && !isResync &&
+            typeof lastRound.roundNum === 'number') {
+          _cacheReplay({
+            roundNum:          lastRound.roundNum,
+            preStateJson:      lastRound.preStateJson,
+            stepsJson:         lastRound.stepsJson,
+            finalEntitiesJson: lastRound.finalEntitiesJson ?? undefined,
+          });
+        }
         ui._hasReplayHistory = _onlineRoundHistory.length > 0;
 
-        // Play last round replay if available and this isn't a same-round resync
-        if (lastRound && !round.submittedPlan && !isResync) {
-          _playReconnectReplay(lastRound).then(() => {
-            ui._hasReplayHistory = _onlineRoundHistory.length > 0;
-            ui.enterPlanningMode(faction, round.budget, round.deadline ?? 0);
-            ui.onPlanSubmit = (plan) => mp.submitPlan(plan, state.round);
-            ui.onReturnToMenu = () => { location.reload(); };
-            ui.onReplayLastTurn = () => _replayLastTurnInline();
-          });
-        } else {
-          ui.enterPlanningMode(faction, round.budget, round.deadline ?? 0);
-          ui.onPlanSubmit = (plan) => mp.submitPlan(plan, state.round);
-          ui.onReturnToMenu = () => { location.reload(); };
-          ui.onReplayLastTurn = () => _replayLastTurnInline();
-        }
+        ui.enterPlanningMode(faction, round.budget, round.deadline ?? 0);
+        ui.onPlanSubmit = (plan) => mp.submitPlan(plan, state.round);
+        ui.onReturnToMenu = () => { location.reload(); };
+        ui.onReplayLastTurn = () => _replayLastTurnInline();
 
         // Restore submitted plan if reconnecting with an already-submitted plan
         if (round.submittedPlan) {
