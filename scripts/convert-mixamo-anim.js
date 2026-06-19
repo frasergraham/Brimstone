@@ -54,6 +54,7 @@ const JOBS = [
   { fbx: 'Hit.fbx', glb: 'hit.glb' },
   { fbx: 'Block.fbx', glb: 'block.glb' },
   { fbx: 'Running.fbx', glb: 'running-new.glb' },
+  { fbx: 'Death.fbx', glb: 'death.glb' },
 ];
 
 function resolveBinary() {

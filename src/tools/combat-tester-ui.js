@@ -108,11 +108,12 @@ export function playBattleResultAnims(renderer, actorSnap, targetSnap, result, r
   }
   if (result?.killed) {
     const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
-    if (typeof renderer.addDeathAnim === 'function') {
-      renderer.addDeathAnim(targetSnap.col, targetSnap.row, deadColor);
-    }
-    if (typeof renderer.addFadeOutAnim === 'function') {
-      renderer.addFadeOutAnim(targetSnap.id, 600);
+    if (typeof renderer.playDeathAnimAndFade === 'function') {
+      renderer.playDeathAnimAndFade(targetSnap.id, targetSnap.col, targetSnap.row, deadColor);
+    } else {
+      // Legacy fallback (older renderer without the combined method).
+      renderer.addDeathAnim?.(targetSnap.col, targetSnap.row, deadColor);
+      renderer.addFadeOutAnim?.(targetSnap.id, 600);
     }
   }
   redrawFn?.();

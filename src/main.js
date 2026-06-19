@@ -1771,8 +1771,10 @@ function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
   }
   if (result?.killed) {
     const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
-    renderer.addDeathAnim(tgtCol, tgtRow, deadColor);
-    renderer.addFadeOutAnim(targetSnap.id, 600);
+    // 3D: plays the Death (fall) clip on this unit's own clone, then a staged
+    // fade (1 → 0.5 across the clip, 0.5 → 0 on the ground). 2D (editor-only):
+    // legacy death-ring burst + fade. Same call site online + offline.
+    renderer.playDeathAnimAndFade(targetSnap.id, tgtCol, tgtRow, deadColor);
   }
   // Brute blast — expanding red ring covering the target hex + 6 neighbours.
   // Mirrors the horn's ring effect; fires before splash floaters so the
@@ -1789,8 +1791,7 @@ function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
     _applyDisplayHp(sh.id, -(sh.damage ?? 1));
     if (sh.killed) {
       const deadColor = sh.owner === 'hero' ? '#d4a72c' : '#9b59b6';
-      renderer.addDeathAnim(sh.col, sh.row, deadColor);
-      renderer.addFadeOutAnim(sh.id, 600);
+      renderer.playDeathAnimAndFade(sh.id, sh.col, sh.row, deadColor);
     }
   }
   redrawFn();
