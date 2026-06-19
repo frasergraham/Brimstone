@@ -345,10 +345,10 @@ function unitStatsHTML(unit) {
     `<span class="cprog-ustat"${title ? ` title="${title}"` : ''}>${lbl} <b>${val}</b></span>`;
   let html = `<div class="cprog-ustats">${stat('ATK', atk)}${stat('DEF', def)}${stat('RNG', rng)}` +
     `${stat('AGI', agi, 'Agility — higher acts earlier each turn')}</div>`;
-  const abilities = (unit.abilities || []).map((id) => ABILITIES[id]?.label).filter(Boolean);
+  const abilities = (unit.abilities || []).map((id) => ABILITIES[id]).filter(Boolean);
   if (abilities.length) {
-    html += `<div class="cprog-uabilities">${abilities.map((l) =>
-      `<span class="cprog-uability" title="${l}">✦ ${l}</span>`).join('')}</div>`;
+    html += `<div class="cprog-uabilities">${abilities.map((a) =>
+      `<span class="cprog-uability" data-tip="${String(a.description || '').replace(/"/g, '&quot;')}">✦ ${a.label}</span>`).join('')}</div>`;
   }
   return html;
 }

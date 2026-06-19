@@ -35,10 +35,42 @@ let _lobby = null;               // current lobby state (from the onLobby push)
 let _lobbyList = [];             // open public lobbies (from onLobbyList)
 let _createAsync = false;        // Find-a-Game create defaults to async cadence
 
+// Game-styled hover tooltip (position:fixed so the scrolling pane never clips it).
+let _tipEl = null, _tipAnchor = null;
+function _showTip(anchor, text) {
+  _hideTip();
+  if (!text) return;
+  _tipEl = document.createElement('div');
+  _tipEl.className = 'lg-tip';
+  _tipEl.textContent = text;
+  document.body.appendChild(_tipEl);
+  const r = anchor.getBoundingClientRect();
+  const t = _tipEl.getBoundingClientRect();
+  let left = Math.max(8, Math.min(r.left + r.width / 2 - t.width / 2, window.innerWidth - t.width - 8));
+  let top = r.top - t.height - 8;
+  if (top < 8) top = r.bottom + 8;          // flip below when there's no room above
+  _tipEl.style.left = `${left}px`;
+  _tipEl.style.top = `${top}px`;
+}
+function _hideTip() { if (_tipEl) { _tipEl.remove(); _tipEl = null; } _tipAnchor = null; }
+
 export function initLedger({ playerName, start = 'continue', data = null } = {}) {
   _root = document.getElementById('ledger-screen');
   if (!_root) return null;
   _data = data;
+  // Delegate hover tooltips for any [data-tip] in the pane (abilities, etc.).
+  const paneEl = document.getElementById('ledger-pane');
+  if (paneEl && !paneEl._tipsBound) {
+    paneEl._tipsBound = true;
+    paneEl.addEventListener('mouseover', (e) => {
+      const t = e.target.closest('[data-tip]');
+      if (t && t !== _tipAnchor) { _tipAnchor = t; _showTip(t, t.dataset.tip); }
+    });
+    paneEl.addEventListener('mouseout', (e) => {
+      const t = e.target.closest('[data-tip]');
+      if (t && !t.contains(e.relatedTarget)) _hideTip();
+    });
+  }
   const nameEl = document.getElementById('ledger-user-name');
   if (nameEl) nameEl.textContent = playerName || _data?.session?.()?.username || 'Wanderer';
   // Live lobby pushes → switch Play With Others into the lobby view + re-render.
@@ -331,23 +363,18 @@ function _panelSkirmish(body) {
   if (!factions.some(f => f.id === _skFaction)) _skFaction = factions[0].id;
 
   body.appendChild(_cap('Your champion'));
-  const grid = document.createElement('div');
-  grid.className = 'lg-champions';
-  for (const f of factions) {
-    const card = document.createElement('div');
-    card.className = 'lg-champion ' + (f.side === 'night' ? 'is-night' : 'is-day') + (f.id === _skFaction ? ' is-selected' : '');
-    card.innerHTML =
-      `<img src="${esc(f.img)}" alt="">` +
-      `<div class="lg-champ-info">` +
-        `<div class="lg-champ-top"><span class="nm">${esc(f.name)}</span>` +
-        `<span class="sd">${f.side === 'day' ? '☀ Day' : '🌙 Night'}</span></div>` +
-        (f.hp != null ? `<div class="lg-champ-stats">♥ ${f.hp} · ⚔ ${f.atk} · 🛡 ${f.def}</div>` : '') +
-        (f.blurb ? `<div class="lg-champ-blurb">${esc(f.blurb)}</div>` : '') +
-      `</div>`;
-    card.addEventListener('click', () => { _skFaction = f.id; select('skirmish'); });
-    grid.appendChild(card);
+  for (const [side, label, icon] of [['day', 'Day — the Hero', '☀'], ['night', 'Night — the Witch', '🌙']]) {
+    const fs = factions.filter((f) => f.side === side);
+    if (!fs.length) continue;
+    const row = document.createElement('div');
+    row.className = 'lg-champ-side is-' + side;
+    row.innerHTML = `<div class="lg-champ-side-label">${icon} ${label}</div>`;
+    const grid = document.createElement('div');
+    grid.className = 'lg-champions';
+    for (const f of fs) grid.appendChild(_champCard(f));
+    row.appendChild(grid);
+    body.appendChild(row);
   }
-  body.appendChild(grid);
 
   body.appendChild(_cap('The night ahead'));
   const opts = document.createElement('div');
@@ -370,6 +397,32 @@ function _panelSkirmish(body) {
   startRow.appendChild(summ);
   body.appendChild(startRow);
   _updateSkirmishSummary();
+}
+
+function _champCard(f) {
+  const card = document.createElement('div');
+  card.className = 'lg-champion is-' + (f.side === 'night' ? 'night' : 'day') + (f.id === _skFaction ? ' is-selected' : '');
+  const stat = (lbl, val, tip) => `<span class="cprog-ustat"${tip ? ` title="${esc(tip)}"` : ''}>${lbl} <b>${val}</b></span>`;
+  const statsHtml = f.atk != null
+    ? `<div class="cprog-ustats">${stat('HP', f.hp)}${stat('ATK', f.atk)}${stat('DEF', f.def)}${stat('RNG', f.rng)}` +
+      `${stat('AGI', f.agi, 'Agility — higher acts earlier each turn')}</div>`
+    : '';
+  const weaponHtml = f.weapon
+    ? `<div class="lg-champ-weapon">⚔ ${esc(f.weapon.name)}${f.weapon.stats ? ` <span class="lg-champ-wstats">${esc(f.weapon.stats)}</span>` : ''}</div>`
+    : '';
+  const abilitiesHtml = (f.abilities && f.abilities.length)
+    ? `<div class="cprog-uabilities">${f.abilities.map((a) =>
+        `<span class="cprog-uability" data-tip="${esc(a.description)}">✦ ${esc(a.label)}</span>`).join('')}</div>`
+    : '';
+  card.innerHTML =
+    `<img src="${esc(f.img)}" alt="">` +
+    `<div class="lg-champ-info">` +
+      `<div class="lg-champ-top"><span class="nm">${esc(f.name)}</span></div>` +
+      statsHtml + weaponHtml + abilitiesHtml +
+      (f.blurb ? `<div class="lg-champ-blurb">${esc(f.blurb)}</div>` : '') +
+    `</div>`;
+  card.addEventListener('click', () => { _skFaction = f.id; select('skirmish'); });
+  return card;
 }
 
 function _optSelect(key, label, options, parse) {

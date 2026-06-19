@@ -176,6 +176,15 @@
 .lg-champion.is-selected.is-day { border-color:var(--lg-gold-dim); background:rgba(40,32,18,.5); box-shadow:0 0 18px rgba(212,167,44,.33); }
 .lg-champion.is-selected.is-night { border-color:var(--lg-purple); background:rgba(22,14,26,.5); box-shadow:0 0 18px rgba(155,89,182,.33); }
 .lg-champion.is-selected .nm { color:var(--lg-ink); }
+/* Skirmish: Day/Night rows + the champion's default weapon line. Richer cards
+   top-align the icon next to the stacked stats. */
+.lg-champ-side { margin-bottom:16px; }
+.lg-champ-side-label { font-family:var(--lg-display); font-size:18px; margin:8px 0; }
+.lg-champ-side.is-day .lg-champ-side-label { color:var(--lg-gold); }
+.lg-champ-side.is-night .lg-champ-side-label { color:var(--lg-purple-lt); }
+.lg-champion { align-items:flex-start; }
+.lg-champ-weapon { font-size:11px; color:var(--lg-ink-2); margin-top:7px; }
+.lg-champ-wstats { color:var(--lg-gold-dim); font-size:10px; }
 .lg-opts { display:flex; gap:9px; }
 .lg-opt { flex:1; display:flex; flex-direction:column; gap:5px; background:rgba(16,18,26,.6); border:1px solid #232036; border-radius:5px; padding:9px 12px; }
 .lg-opt-label { font-size:11px; color:var(--lg-faint); }
@@ -221,12 +230,19 @@
 .lg-party .cprog-card.reserve .cprog-portrait, .lg-party .cprog-card.reserve .cprog-glyph { width:30px; height:30px; }
 .lg-party .cprog-name { font-size:.8rem; }
 
-/* In-game-style unit stats (ATK/DEF/RNG/AGI) + ability badges */
-.lg-party .cprog-ustats { display:flex; flex-wrap:wrap; gap:7px; margin-top:6px; }
-.lg-party .cprog-ustat { font-size:10px; color:var(--lg-faint); letter-spacing:.03em; }
-.lg-party .cprog-ustat b { color:var(--lg-ink-2); font-weight:600; }
-.lg-party .cprog-uabilities { display:flex; flex-wrap:wrap; gap:4px; margin-top:5px; }
-.lg-party .cprog-uability { font-size:9.5px; color:var(--lg-purple-lt); border:1px solid rgba(155,89,182,.3); border-radius:8px; padding:1px 6px; }
+/* In-game-style unit stats (ATK/DEF/RNG/AGI) + ability badges — shared by the
+   party cards and the Skirmish champion cards. */
+.ledger-pane-body .cprog-ustats { display:flex; flex-wrap:wrap; gap:7px; margin-top:6px; }
+.ledger-pane-body .cprog-ustat { font-size:10px; color:var(--lg-faint); letter-spacing:.03em; white-space:nowrap; }
+.ledger-pane-body .cprog-ustat b { color:var(--lg-ink-2); font-weight:600; }
+.ledger-pane-body .cprog-uabilities { display:flex; flex-wrap:wrap; gap:4px; margin-top:5px; }
+.ledger-pane-body .cprog-uability { font-size:9.5px; color:var(--lg-purple-lt); border:1px solid rgba(155,89,182,.3); border-radius:8px; padding:1px 7px; cursor:help; }
+.ledger-pane-body .cprog-uability:hover { border-color:var(--lg-purple); background:rgba(155,89,182,.12); }
+
+/* Game-styled hover tooltip (fixed-position so the scrolling pane never clips it). */
+.lg-tip { position:fixed; z-index:200; max-width:240px; background:#14121c; border:1px solid #3a3052; border-radius:5px;
+  padding:7px 11px; font-family:var(--lg-serif); font-size:12px; line-height:1.4; color:var(--lg-ink-2);
+  box-shadow:0 12px 30px rgba(0,0,0,.6); pointer-events:none; }
 
 /* Weapon slots on unit cards — full-width rows with name + stats (like the
    inventory); draggable to/from the armory, click a carried one to equip. */
@@ -272,8 +288,17 @@
 .lg-party .cprog-slot-name { font-size:9px; color:var(--lg-faint); text-align:center; line-height:1.1; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .lg-party .cprog-slot-n { position:absolute; top:2px; right:4px; font-size:9px; color:var(--lg-ink-2); }
 .lg-party .cprog-card[data-drop].is-drop { outline:1px solid var(--lg-purple); outline-offset:1px; }
-/* Footer breathing room so the inventory doesn't butt against the screen edge. */
-.lg-party { padding-bottom:40px; }
+/* Edge padding so drag-drop highlight outlines aren't clipped (left/bottom) and
+   the inventory has footer breathing room. */
+.lg-party { padding:3px 8px 44px; }
+/* More opaque card backgrounds so the text reads clearly over the backdrop. */
+.lg-party .cprog-card { background:rgba(14,16,22,.92); border-color:#2c2a42; }
+.lg-party .cprog-card.hero { background:rgba(36,30,16,.92); border-color:rgba(212,167,44,.45); }
+.lg-party .cprog-card.reserve { background:rgba(12,13,20,.88); }
+/* Bigger, centered section titles (Active Squad / Reserve / Resources / Equipment). */
+.lg-party .cprog-section-label { font-size:15px; text-align:center; letter-spacing:.05em; margin:16px 0 9px; color:var(--lg-ink-2); }
+.lg-party .cprog-section-label .cprog-count { font-size:.72em; }
+.lg-party .cprog-inv-hint { display:block; margin:3px auto 0; }
 
 /* Mission briefing */
 .lg-brief-head { margin-bottom:4px; }

@@ -37,6 +37,7 @@ import { planCombatFrames } from './combat-presentation.js';
 import { MAX_FORTIFY_LEVEL, MAX_FORTIFY_HP, FORTIFY_HP_PER_LEVEL, FORT_IMPASSABLE_THRESHOLD, deriveBlockedSlots } from './tiles.js';
 import { sightRange, computeLineOfSight, hasLineOfSight, assignSlotOnTile } from './actions.js';
 import { ITEMS } from './items.js';
+import { ABILITIES } from './abilities.js';
 import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
 import { compileTurnBattleSummary, compileTurnBattlePairs, collectTurnFinds, deferredMoveEntityIds } from './battle-utils.js';
 import { collectWrapUpAttrition } from './post-round-effects.js';
@@ -72,6 +73,7 @@ import {
   loadCampaignPortraits as _loadCampaignPortraits, getCampaignPortrait as _getCampaignPortrait,
   campaignCardHTML as _campaignCardHTML, survivorCardHTML as _survivorCardHTML,
   campaignPartyHTML as _campaignPartyHTML, objectiveDescription as _objectiveDescription,
+  weaponName as _weaponName, weaponStatString as _weaponStatString,
   partyPaneHTML as _partyPaneHTML, missionListPaneHTML as _missionListPaneHTML,
   progressSquadCap as _progressSquadCap, fallenSectionHTML as _fallenSectionHTML,
   missionRows as _missionRows,
@@ -9771,24 +9773,39 @@ async function _ledgerStartCampaignMission(slotIndex, missionId, resume = false)
 // The six selectable Skirmish champions, with portraits. The Day default
 // leader id is 'hero' (a Paladin); the rest are their own faction ids.
 function _ledgerSkirmishFactions() {
-  // Leader base stats (src/unit-types.js) + a one-line role, shown beside each
-  // champion icon in Skirmish.
-  const S = {
-    hero:        { hp: 98,  atk: 2, def: 2, blurb: 'Sturdy frontline — balanced, hard to topple.' },
-    rogue:       { hp: 70,  atk: 3, def: 1, blurb: 'Swift skirmisher — hits hard, but fragile.' },
-    captain:     { hp: 84,  atk: 2, def: 3, blurb: 'Stalwart commander — defensive, rallies allies.' },
-    witch:       { hp: 70,  atk: 2, def: 2, blurb: 'Dark summoner — conjures the restless dead.' },
-    necromancer: { hp: 70,  atk: 1, def: 2, blurb: 'Raises the dead — deadly with a horde at hand.' },
-    brute:       { hp: 126, atk: 4, def: 3, blurb: 'Towering bruiser — immense HP, crushing blows.' },
+  // A one-line role per champion; the rest of the stats come from the actual
+  // leader entity (with its default weapon equipped) so they match in-game.
+  const BLURB = {
+    hero:        'Sturdy frontline — balanced, hard to topple.',
+    rogue:       'Swift skirmisher — hits hard, but fragile.',
+    captain:     'Stalwart commander — defensive, rallies allies.',
+    witch:       'Dark summoner — conjures the restless dead.',
+    necromancer: 'Raises the dead — deadly with a horde at hand.',
+    brute:       'Towering bruiser — immense HP, crushing blows.',
   };
-  return [
+  const ROWS = [
     { id: 'hero',        name: 'Paladin',     side: 'day',   img: 'assets/char-paladin.png' },
     { id: 'rogue',       name: 'Rogue',       side: 'day',   img: 'assets/char-rogue.png' },
     { id: 'captain',     name: 'Captain',     side: 'day',   img: 'assets/char-captain.png' },
     { id: 'witch',       name: 'Witch',       side: 'night', img: 'assets/char-witch.png' },
     { id: 'necromancer', name: 'Necromancer', side: 'night', img: 'assets/char-necromancer.png' },
     { id: 'brute',       name: 'Brute',       side: 'night', img: 'assets/char-brute.png' },
-  ].filter(f => getFaction(f.id)).map(f => ({ ...f, ...S[f.id] }));
+  ];
+  const out = [];
+  for (const f of ROWS) {
+    const def = getFaction(f.id);
+    if (!def) continue;
+    let stats = {}, weapon = null, abilities = [];
+    try {
+      const L = def.createLeader(0, 0, 'preview');         // default weapon equipped
+      stats = { hp: L.maxHp, atk: L.getAttack(), def: L.getDefense(), rng: L.getRange(), agi: L.getAgility() };
+      const eq = getEquippedWeaponIdOf(L.items || {});
+      if (eq) weapon = { id: eq, name: _weaponName(eq), stats: _weaponStatString(eq) };
+      abilities = (L.abilities || []).map((a) => ({ label: ABILITIES[a]?.label || a, description: ABILITIES[a]?.description || '' }));
+    } catch { /* fall back to name-only card */ }
+    out.push({ ...f, ...stats, weapon, abilities, blurb: BLURB[f.id] });
+  }
+  return out;
 }
 
 // Launch a Skirmish vs AI from the Ledger. Picking a Day champion ⇒ the witch
