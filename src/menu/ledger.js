@@ -488,7 +488,10 @@ function _panelSkirmish(body) {
   const champs = document.createElement('div');
   champs.className = 'lg-champ-scroll';
   for (const [side, label, icon] of [['day', 'Day — the Hero', '☀'], ['night', 'Night — the Witch', '🌙']]) {
-    const fs = factions.filter((f) => f.side === side);
+    // Available champions first; demo-blocked ("coming soon") ones sort to the
+    // end of their side (stable sort preserves the authored order otherwise).
+    const fs = factions.filter((f) => f.side === side)
+      .sort((a, b) => (isFactionAvailable(a.id) ? 0 : 1) - (isFactionAvailable(b.id) ? 0 : 1));
     if (!fs.length) continue;
     const row = document.createElement('div');
     row.className = 'lg-champ-side is-' + side;
