@@ -1200,7 +1200,7 @@ async function _runEndOfRoundReview({
       action = await ui.showReplayWrapUp({
         titleHtml: wrap.title, combats: wrap.combats, discoveries: wrap.discoveries,
         loot: wrap.loot, attrition: wrap.attrition, attritionLevel,
-        canReplay: roundHistory.length > 0,
+        canReplay: roundHistory.length > 0, humanFaction,
       });
       if (action === 'replay') await reReplay();
     } while (action === 'replay');
@@ -1598,7 +1598,7 @@ async function _replayLastRoundInlineLocal() {
         action = await ui.showReplayWrapUp({
           titleHtml: wrap.title, combats: wrap.combats, discoveries: wrap.discoveries,
           loot: wrap.loot, attrition: wrap.attrition, attritionLevel: 0,
-          canReplay: true,
+          canReplay: true, humanFaction,
         });
         if (action === 'replay') { resetPlayback(); await playOnce(); resetPlayback(); }
       } while (action === 'replay');

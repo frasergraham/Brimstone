@@ -119,6 +119,23 @@ describe('resolveKeyAction — unit + plan controls', () => {
     // Shift+Enter outside planning does nothing — not even advance.
     assert.equal(resolveKeyAction(ev('Enter', { shiftKey: true }), { appMode: 'SUMMARY' }), null);
   });
+
+  test('P toggles replay auto-play only while a replay step bar is on screen', () => {
+    // replayActive covers BOTH the full-game replay (PLAYBACK) and the inline
+    // round-end resolution replay (RESOLVING) — the executor clicks the same
+    // #replay-playpause-btn for either.
+    for (const key of ['p', 'P']) {
+      assert.deepEqual(resolveKeyAction(ev(key), { appMode: 'PLAYBACK', replayActive: true }), { id: 'replay-playpause' });
+      assert.deepEqual(resolveKeyAction(ev(key), { appMode: 'RESOLVING', replayActive: true }), { id: 'replay-playpause' });
+    }
+    // Inert when no replay bar is up — must not hijack P during planning or the
+    // static round-summary review.
+    assert.equal(resolveKeyAction(ev('p'), { appMode: 'PLAYBACK', replayActive: false }), null);
+    assert.equal(resolveKeyAction(ev('p'), { appMode: 'PLANNING' }), null);
+    assert.equal(resolveKeyAction(ev('p'), { appMode: 'SUMMARY' }), null);
+    // Shift+P is not bound (leaves the chord free).
+    assert.equal(resolveKeyAction(ev('P', { shiftKey: true }), { appMode: 'PLAYBACK', replayActive: true }), null);
+  });
 });
 
 describe('executeConsoleCommand', () => {
