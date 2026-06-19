@@ -270,7 +270,7 @@ function equipmentGridHTML(weapons) {
     const count = (e && typeof e === 'object') ? (e.count ?? 0) : (e ?? 0);
     if (count < 1 || !isWeapon(id)) continue;
     const stat = weaponStatString(id);
-    slots.push(`<div class="cprog-slot is-weapon" draggable="true" data-from="pool" data-weapon="${id}" title="${weaponName(id)}${stat ? ' — ' + stat : ''}">`
+    slots.push(`<div class="cprog-slot is-weapon" data-from="pool" data-weapon="${id}" title="${weaponName(id)}${stat ? ' — ' + stat : ''}">`
       + `<span class="cprog-slot-glyph">${itemGlyph(id)}</span>`
       + `<span class="cprog-slot-info">`
       + `<span class="cprog-slot-name">${weaponName(id)}${count > 1 ? ` ×${count}` : ''}</span>`
@@ -313,7 +313,7 @@ function weaponSlotsHTML(unit, idx) {
       const [id, count, eq] = w;
       const stat = weaponStatString(id);
       const tip = `${weaponName(id)}${stat ? ' — ' + stat : ''}${eq ? ' · equipped' : ' · click to equip'}`;
-      slots.push(`<div class="cprog-wslot${eq ? ' is-equipped' : ''}" draggable="true" data-from="unit" data-idx="${idx}" data-weapon="${id}" title="${tip}">`
+      slots.push(`<div class="cprog-wslot${eq ? ' is-equipped' : ''}" data-from="unit" data-idx="${idx}" data-weapon="${id}" title="${tip}">`
         + `<span class="cprog-wslot-glyph">${itemGlyph(id)}</span>`
         + `<span class="cprog-wslot-info">`
         + `<span class="cprog-wslot-name">${weaponName(id)}${count > 1 ? ` ×${count}` : ''}`

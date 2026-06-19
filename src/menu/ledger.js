@@ -315,7 +315,7 @@ function _ensureInvTab(container) {
 function _wirePartyButtons(container, slot) {
   const apply = (kind, idx, weapon) => {
     const html = _data?.partyAction?.(kind, idx, weapon);
-    if (html != null) { container.innerHTML = html; _wirePartyButtons(container, slot); }
+    if (html != null) { container.innerHTML = html; _wirePartyButtons(container, slot); _ensureInvTab(container); }
   };
   const wire = (selector, kind) =>
     container.querySelectorAll(selector).forEach((btn) =>
@@ -323,57 +323,87 @@ function _wirePartyButtons(container, slot) {
   wire('.cprog-promote', 'promote');
   wire('.cprog-demote', 'demote');
   wire('.cprog-heal-btn', 'heal');
-
-  // Click a carried (non-equipped) weapon slot to make it the equipped weapon.
-  container.querySelectorAll('.cprog-wslot[data-weapon]:not(.is-equipped)').forEach((el) =>
-    el.addEventListener('click', () => apply('equip', el.dataset.idx, el.dataset.weapon)));
-
-  // Drag sources: every weapon slot (unit or pool) carrying a weapon id.
-  container.querySelectorAll('[draggable="true"][data-weapon]').forEach((el) => {
-    el.addEventListener('dragstart', (e) => {
-      e.dataTransfer.effectAllowed = 'move';
-      e.dataTransfer.setData('text/plain', JSON.stringify({
-        from: el.dataset.from, idx: el.dataset.idx ?? null, weapon: el.dataset.weapon,
-      }));
-      el.classList.add('is-dragging');
-      // Mobile: dragging a weapon out of the inventory drawer collapses it so the
-      // unit cards are reachable as drop targets.
-      if (el.dataset.from === 'pool') container.querySelector('.cprog-shared')?.classList.remove('is-open');
-    });
-    el.addEventListener('dragend', () => el.classList.remove('is-dragging'));
-  });
-
-  const allowDrop = (el) => {
-    el.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; el.classList.add('is-drop'); });
-    el.addEventListener('dragleave', () => el.classList.remove('is-drop'));
-  };
-  // Drop on a unit card → arm it from the pool (or hand off from another unit).
-  container.querySelectorAll('.cprog-card[data-drop="unit"]').forEach((card) => {
-    allowDrop(card);
-    card.addEventListener('drop', (e) => {
-      e.preventDefault(); card.classList.remove('is-drop');
-      const d = _parseDrag(e); if (!d) return;
-      const idx = card.dataset.idx;
-      if (d.from === 'pool') apply('carry', idx, d.weapon);
-      else if (d.from === 'unit' && String(d.idx) !== String(idx)) {
-        _data?.partyAction?.('stow', d.idx, d.weapon); // source → pool
-        apply('carry', idx, d.weapon);                 // pool → target
-      }
-    });
-  });
-  // Drop on the inventory grid → stow a unit's weapon back to the pool.
-  container.querySelectorAll('.cprog-inv-grid[data-drop="pool"]').forEach((grid) => {
-    allowDrop(grid);
-    grid.addEventListener('drop', (e) => {
-      e.preventDefault(); grid.classList.remove('is-drop');
-      const d = _parseDrag(e); if (!d) return;
-      if (d.from === 'unit') apply('stow', d.idx, d.weapon);
-    });
-  });
+  _wirePartyDrag(container, apply);
 }
 
-function _parseDrag(e) {
-  try { return JSON.parse(e.dataTransfer.getData('text/plain')); } catch { return null; }
+// ── Pointer-based weapon drag (works with mouse AND touch — HTML5 DnD never
+//    fires from touch). Tap a carried weapon = equip it; drag pool→unit = carry;
+//    drag unit→inventory = stow. On mobile, grabbing a weapon out of the drawer
+//    collapses it; dragging a unit's weapon over the Inventory tab opens it.
+let _pdrag = null;          // active drag: { src, from, idx, weapon, x0, y0, moved, ghost }
+let _pdragApply = null;     // latest party apply()
+let _pdragContainer = null; // latest .lg-party container
+let _pdragBound = false;
+
+function _wirePartyDrag(container, apply) {
+  _pdragApply = apply;
+  _pdragContainer = container;
+  if (!container._pdragDown) {
+    container._pdragDown = true;                  // delegate; survives innerHTML swaps
+    container.addEventListener('pointerdown', (e) => {
+      const src = e.target.closest('.cprog-wslot[data-weapon], .cprog-slot.is-weapon[data-weapon]');
+      if (!src || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      _pdrag = { src, from: src.dataset.from, idx: src.dataset.idx ?? null, weapon: src.dataset.weapon,
+                 x0: e.clientX, y0: e.clientY, moved: false, ghost: null };
+    });
+  }
+  if (!_pdragBound) {
+    _pdragBound = true;
+    window.addEventListener('pointermove', _onPdragMove, { passive: false });
+    window.addEventListener('pointerup', _onPdragUp);
+    window.addEventListener('pointercancel', _onPdragUp);
+  }
+}
+
+function _onPdragMove(e) {
+  const d = _pdrag;
+  if (!d) return;
+  const shared = _pdragContainer?.querySelector('.cprog-shared');
+  if (!d.moved) {
+    if (Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 6) return;   // below tap threshold
+    d.moved = true;
+    d.ghost = d.src.cloneNode(true);
+    d.ghost.className = 'lg-drag-ghost';
+    d.ghost.style.width = `${d.src.offsetWidth}px`;
+    document.body.appendChild(d.ghost);
+    d.src.classList.add('is-dragging');
+    if (d.from === 'pool') shared?.classList.remove('is-open');       // taking out → collapse drawer
+  }
+  e.preventDefault();
+  d.ghost.style.transform = `translate(${e.clientX + 12}px, ${e.clientY - 12}px)`;
+  const under = document.elementFromPoint(e.clientX, e.clientY);
+  // Stowing a unit's weapon: hovering the Inventory tab opens the drawer to drop into.
+  if (d.from === 'unit' && under?.closest('.lg-inv-tab')) shared?.classList.add('is-open');
+  _pdragContainer?.querySelectorAll('.is-drop').forEach((el) => el.classList.remove('is-drop'));
+  const tgt = _pdragTarget(under, d);
+  if (tgt) tgt.classList.add('is-drop');
+}
+
+function _onPdragUp(e) {
+  const d = _pdrag;
+  if (!d) return;
+  _pdrag = null;
+  d.ghost?.remove();
+  d.src.classList.remove('is-dragging');
+  _pdragContainer?.querySelectorAll('.is-drop').forEach((el) => el.classList.remove('is-drop'));
+  if (!d.moved) {                                  // a tap → equip a carried (non-equipped) weapon
+    if (d.from === 'unit' && !d.src.classList.contains('is-equipped')) _pdragApply?.('equip', d.idx, d.weapon);
+    return;
+  }
+  const under = document.elementFromPoint(e.clientX, e.clientY);
+  const card = under?.closest('.cprog-card[data-drop="unit"]');
+  const pool = under?.closest('[data-drop="pool"], .cprog-shared');
+  if (card && d.from === 'pool') _pdragApply?.('carry', card.dataset.idx, d.weapon);
+  else if (card && d.from === 'unit' && String(card.dataset.idx) !== String(d.idx)) {
+    _data?.partyAction?.('stow', d.idx, d.weapon);
+    _pdragApply?.('carry', card.dataset.idx, d.weapon);
+  } else if (pool && d.from === 'unit') _pdragApply?.('stow', d.idx, d.weapon);
+}
+
+function _pdragTarget(under, d) {
+  if (!under) return null;
+  if (d.from === 'pool') return under.closest('.cprog-card[data-drop="unit"]');
+  return under.closest('.cprog-card[data-drop="unit"], [data-drop="pool"], .cprog-shared');
 }
 
 /** Skirmish — pick a champion, set the night, start a game vs AI. */

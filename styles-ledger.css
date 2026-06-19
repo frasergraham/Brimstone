@@ -306,6 +306,11 @@
 .lg-party .cprog-slot-name { font-size:9px; color:var(--lg-faint); text-align:center; line-height:1.1; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .lg-party .cprog-slot-n { position:absolute; top:2px; right:4px; font-size:9px; color:var(--lg-ink-2); }
 .lg-party .cprog-card[data-drop].is-drop { outline:1px solid var(--lg-purple); outline-offset:1px; }
+.lg-party .cprog-inv-grid[data-drop].is-drop, .lg-party .cprog-shared.is-drop { outline:1px solid var(--lg-purple); outline-offset:-1px; }
+/* Pointer-drag: stop a touch-drag on a weapon from scrolling; floating ghost. */
+.lg-party .cprog-wslot[data-weapon], .lg-party .cprog-slot.is-weapon { touch-action:none; }
+.lg-drag-ghost { position:fixed; left:0; top:0; z-index:300; pointer-events:none; opacity:.92;
+  border:1px solid var(--lg-purple); border-radius:6px; background:#14121c; box-shadow:0 10px 26px rgba(0,0,0,.55); }
 /* Edge padding so drag-drop highlight outlines aren't clipped (left/bottom) and
    the inventory has footer breathing room. */
 .lg-party { padding:3px 8px 44px; }
