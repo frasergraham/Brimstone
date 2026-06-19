@@ -78,6 +78,7 @@ import {
   weaponName as _weaponName, weaponStatString as _weaponStatString,
   partyPaneHTML as _partyPaneHTML, missionListPaneHTML as _missionListPaneHTML,
   progressSquadCap as _progressSquadCap, fallenSectionHTML as _fallenSectionHTML,
+  rewardsSectionHTML as _rewardsSectionHTML,
   missionRows as _missionRows,
   departureMessage as _departureMessage, arrivalMessage as _arrivalMessage,
 } from './campaign/campaign-ui.js';
@@ -4965,6 +4966,10 @@ function _handleCampaignMissionEnd() {
   // Computed before the debrief render so the Fallen card can list this run's
   // casualties even before they exist in Campaign.fallen.
   let newlyFallen = [];
+  // What the mission GRANTED this run (survivor snapshots + resource deltas),
+  // captured from applyMissionResult so the debrief can SHOW the rewards. Empty
+  // on a loss (nothing is granted — the party is restored).
+  let rewardSummary = { survivors: [], resources: {} };
   if (won) {
     // Gather surviving survivors for roster (permadeath: dead ones are lost).
     // Roster members who were deployed and died are dropped; undeployed
@@ -4975,7 +4980,7 @@ function _handleCampaignMissionEnd() {
     // discovery pool. Only on a WIN; a loss restores the party (else-branch).
     newlyFallen = collectFallenAfterMission(state.entities, missionDef.id);
 
-    _activeCampaign.applyMissionResult(missionDef.id, {
+    const _missionResult = _activeCampaign.applyMissionResult(missionDef.id, {
       won,
       survivors,
       fallen: newlyFallen,
@@ -4994,6 +4999,7 @@ function _handleCampaignMissionEnd() {
       } : _activeCampaign.heroStats,
       flags: {},
     });
+    rewardSummary = _missionResult?.rewards ?? rewardSummary;
   } else {
     // Defeat: restore party to pre-mission state (no permadeath, no stat changes)
     survivors = _activeCampaign.roster;
@@ -5047,7 +5053,14 @@ function _handleCampaignMissionEnd() {
   // THIS mission so the loss lands. Empty → no section.
   const missionTitleResolver = (id) => _activeCampaign.getMissionDef(id)?.title ?? id;
   if (rosterEl) {
-    rosterEl.innerHTML = `<h3>${rosterHeading}</h3>` +
+    // ✦ Rewards — what this WON mission GRANTED (new ally cards + resource gains).
+    // Rendered BEFORE the surviving-roster list so the new ally reads as a fresh
+    // reward, not a returning party member; '' (no section) on a loss or when the
+    // mission granted nothing. The granted ally is NOT in `survivors` (granting
+    // runs after the roster reconcile), so it shows here and nowhere else.
+    rosterEl.innerHTML =
+      _rewardsSectionHTML(rewardSummary) +
+      `<h3>${rosterHeading}</h3>` +
       _campaignPartyHTML(heroSnap, survivors) +
       _fallenSectionHTML(newlyFallen, missionTitleResolver);
   }
