@@ -1,0 +1,426 @@
+/* ============================================================================
+   The Ledger — menu redesign (Direction B).
+   A single-frame master-detail menu: a candlelit left RAIL of destinations + a
+   right LEDGER pane that re-binds in place. Atmosphere over the static bg.png.
+   Self-hosted Garamonds (no CDN — offline Capacitor/Electron builds).
+   Built alongside the legacy #setup-screen; shown via the router / ?ledger.
+   ========================================================================== */
+@import url('assets/fonts/ledger-fonts.css');
+
+:root {
+  --lg-gold:      #f5c842;   /* wordmark / active / living */
+  --lg-gold-dim:  #d4a72c;   /* gold accents + borders */
+  --lg-purple:    #9b59b6;   /* the dead / Night / Witch */
+  --lg-purple-lt: #c08fd6;
+  --lg-night:     #7b4fbb;
+  --lg-green:     #4caf7d;
+  --lg-ink:       #f0e8d0;   /* bright parchment text */
+  --lg-ink-2:     #cfc6ad;
+  --lg-dim:       #9b9180;
+  --lg-label:     #8a7a5a;   /* uppercase section labels */
+  --lg-faint:     #7a7060;
+  --lg-serif:     'EB Garamond', 'Georgia', serif;
+  --lg-display:   'Cormorant Garamond', 'Georgia', serif;
+}
+
+#ledger-screen {
+  position: fixed; inset: 0; z-index: 50;
+  display: none;                 /* router / ?ledger toggles .is-active */
+  font-family: var(--lg-serif);
+  background: #06070b;
+  overflow: hidden;
+}
+#ledger-screen.is-active { display: block; }
+
+/* ── Backdrop: static bg.png + a left-dark gradient + an inset vignette ───── */
+.ledger-backdrop { position:absolute; inset:0; background:#06070b url('assets/bg.png') center/cover no-repeat; }
+.ledger-scrim    { position:absolute; inset:0; pointer-events:none;
+  background:linear-gradient(90deg, rgba(6,7,11,.92) 0%, rgba(6,7,11,.66) 46%, rgba(6,7,11,.32) 100%); }
+.ledger-vignette { position:absolute; inset:0; pointer-events:none; box-shadow:inset 0 0 220px 50px rgba(0,0,0,.8); }
+.ledger-frame    { position:relative; height:100%; display:flex; }
+
+/* ── RAIL ─────────────────────────────────────────────────────────────────── */
+.ledger-rail {
+  width:262px; flex:none; padding:32px 24px; display:flex; flex-direction:column;
+  background:linear-gradient(90deg, rgba(8,9,14,.86), rgba(8,9,14,.55));
+  border-right:1px solid rgba(212,167,44,.16);
+}
+.ledger-wordmark { font-family:var(--lg-display); font-weight:600; font-size:30px; letter-spacing:.1em;
+  line-height:.92; color:var(--lg-gold); text-shadow:0 0 26px rgba(245,200,66,.5); }
+.ledger-sub { font-family:var(--lg-display); font-size:10px; letter-spacing:.4em; color:var(--lg-label); margin:6px 0 32px; }
+.ledger-rail-items { display:flex; flex-direction:column; gap:3px; flex:1; }
+.ledger-rail-item {
+  display:flex; align-items:center; gap:13px; padding:11px 13px; border-radius:4px; cursor:pointer;
+  border-left:2px solid transparent; user-select:none;
+}
+.ledger-rail-item .ic { width:20px; text-align:center; font-size:15px; opacity:.55; }
+.ledger-rail-item .lb { font-family:var(--lg-display); font-size:19px; color:#b3a98f; transition:color .12s; }
+.ledger-rail-item.is-active { background:rgba(212,167,44,.13); border-left-color:var(--lg-gold); }
+.ledger-rail-item.is-active .ic { opacity:1; }
+.ledger-rail-item.is-active .lb { color:var(--lg-gold); }
+.ledger-rail-item:hover:not(.is-active) .lb { color:#d8cdb0; }
+.ledger-user { display:flex; align-items:center; gap:10px; border-top:1px solid rgba(255,255,255,.07); padding-top:14px; }
+.ledger-user img { width:30px; height:30px; border-radius:50%; object-fit:cover; }
+.ledger-user .nm { font-size:13px; color:var(--lg-ink-2); }
+.ledger-user .st { font-size:11px; color:#5a5446; }
+
+/* ── LEDGER PANE ──────────────────────────────────────────────────────────── */
+.ledger-pane {
+  flex:1; min-width:0; padding:36px 42px; display:flex; flex-direction:column; overflow:auto;
+  background:linear-gradient(90deg, rgba(8,9,13,.55), rgba(8,9,13,.2));
+}
+.ledger-pane-head { display:flex; align-items:baseline; gap:14px; }
+.ledger-pane-title { font-family:var(--lg-display); font-weight:600; font-size:40px; color:var(--lg-ink); line-height:1; }
+.ledger-pane-tag { font-size:13px; color:#9b8a6a; font-style:italic; }
+.ledger-rule { height:1px; background:linear-gradient(90deg, rgba(212,167,44,.5), transparent); margin:14px 0 22px; }
+.ledger-rule.is-purple { background:linear-gradient(90deg, rgba(155,89,182,.5), transparent); }
+.ledger-placeholder { color:var(--lg-dim); font-size:15px; font-style:italic; }
+
+/* shared section label */
+.lg-cap { font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--lg-label); }
+
+/* ── Panel content ────────────────────────────────────────────────────────── */
+.ledger-pane-body { flex:1; min-height:0; display:flex; flex-direction:column; }
+.lg-cap { margin:18px 0 9px; }
+.lg-cap:first-child { margin-top:0; }
+.lg-note { font-size:13px; color:var(--lg-faint); font-style:italic; margin-top:14px; }
+
+/* buttons */
+.lg-btn { font-family:var(--lg-serif); font-size:15px; padding:11px 24px; border-radius:4px; cursor:pointer; border:1px solid; }
+.lg-btn-sm { font-size:12px; padding:5px 14px; }
+.lg-btn-gold  { border-color:var(--lg-gold-dim); background:rgba(212,167,44,.18); color:var(--lg-gold); }
+.lg-btn-gold:hover  { background:rgba(212,167,44,.3); }
+.lg-btn-ghost { border-color:rgba(255,255,255,.16); background:rgba(255,255,255,.04); color:var(--lg-ink-2); }
+.lg-btn-ghost:hover { background:rgba(255,255,255,.09); }
+
+/* Continue — resume hero */
+.lg-resume { display:flex; gap:20px; background:rgba(40,32,18,.42); border:1px solid rgba(212,167,44,.34);
+  border-radius:6px; padding:16px; margin-bottom:20px; }
+.lg-resume-thumb { width:170px; height:108px; flex:none; border-radius:4px; display:flex; align-items:center; justify-content:center;
+  font-size:40px; color:rgba(245,200,66,.5); background:radial-gradient(circle at 50% 40%, rgba(40,32,18,.9), rgba(8,9,13,.95)); border:1px solid rgba(212,167,44,.2); }
+.lg-resume-body { flex:1; min-width:0; display:flex; flex-direction:column; }
+.lg-resume-kicker { font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--lg-gold-dim); margin-bottom:4px; }
+.lg-resume-title { font-family:var(--lg-display); font-weight:600; font-size:28px; color:var(--lg-ink); line-height:1.02; }
+.lg-resume-meta { font-size:14px; color:var(--lg-dim); margin:6px 0 2px; }
+.lg-resume-actions { margin-top:auto; display:flex; gap:10px; padding-top:10px; }
+
+/* feed rows (Continue "also waiting", Replays) */
+.lg-feed { display:flex; flex-direction:column; gap:9px; }
+.lg-feed-row { display:flex; align-items:center; gap:14px; background:rgba(16,18,26,.66); border:1px solid #232036;
+  border-radius:5px; padding:10px 14px; cursor:pointer; }
+.lg-feed-row:hover { border-color:#33304a; background:rgba(20,22,32,.8); }
+.lg-feed-row.is-action { border-color:rgba(76,175,125,.4); }
+.lg-feed-text { flex:1; min-width:0; }
+.lg-feed-text .t { font-size:15px; color:#d4c9b0; }
+.lg-feed-text .m { font-size:12px; color:var(--lg-faint); }
+.lg-feed-cta { font-size:13px; color:var(--lg-purple-lt); white-space:nowrap; }
+.lg-feed-row.is-action .lg-feed-cta { color:var(--lg-green); }
+.lg-feed-text .m2 { font-size:11px; color:var(--lg-gold-dim); margin-top:2px; }
+.lg-resume-meta.m2 { color:var(--lg-gold-dim); font-size:12px; margin-top:2px; }
+.lg-feed-actions { display:flex; align-items:center; gap:7px; flex-shrink:0; }
+.lg-feed-actions .lg-btn { font-size:12px; padding:6px 12px; }
+.lg-confirm-q { font-size:12px; color:#f0b0b0; white-space:nowrap; }
+
+/* Campaign — slots + chronicle */
+.lg-slots { display:flex; gap:12px; margin-bottom:4px; }
+.lg-slot { position:relative; flex:1; border:1px solid #232036; background:rgba(16,18,26,.6); border-radius:5px; padding:11px 13px; cursor:pointer; }
+.lg-slot:hover { border-color:rgba(212,167,44,.3); }
+.lg-slot.is-active { border-color:rgba(212,167,44,.5); background:rgba(40,32,18,.45); }
+.lg-slot.is-new { border-style:dashed; border-color:#33304a; background:rgba(16,18,26,.4); }
+.lg-slot.is-new .lg-slot-title { color:var(--lg-dim); }
+.lg-slot-tag { font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--lg-gold-dim); }
+.lg-slot.is-active .lg-slot-tag { color:var(--lg-gold-dim); }
+.lg-slot-title { font-family:var(--lg-display); font-size:19px; color:var(--lg-ink); line-height:1.1; }
+.lg-slot-sub { font-size:11px; color:var(--lg-faint); }
+.lg-slot-del { position:absolute; top:5px; right:6px; width:20px; height:20px; padding:0; line-height:1;
+  background:rgba(0,0,0,.25); border:1px solid rgba(255,255,255,.12); border-radius:4px; color:var(--lg-faint);
+  font-size:11px; cursor:pointer; opacity:0; transition:opacity .12s, color .12s, border-color .12s; }
+.lg-slot:hover .lg-slot-del { opacity:1; }
+.lg-slot-del:hover { color:#e88; border-color:rgba(200,80,80,.6); background:rgba(80,20,20,.4); }
+.lg-slot.is-confirm { border-color:rgba(200,80,80,.5); background:rgba(40,16,16,.5); cursor:default; }
+.lg-slot-confirm-q { font-size:12px; color:var(--lg-ink-2); margin:6px 0 9px; line-height:1.3; }
+.lg-slot-confirm { display:flex; gap:7px; }
+.lg-slot-confirm .lg-btn { flex:1; padding:5px 8px; font-size:12px; }
+.lg-btn-danger { border-color:rgba(200,80,80,.5); background:rgba(150,40,40,.25); color:#f0b0b0; }
+.lg-btn-danger:hover { background:rgba(180,50,50,.4); }
+.lg-chronicle { display:flex; flex-direction:column; overflow:auto; }
+.lg-mission { display:flex; align-items:center; gap:15px; padding:10px 14px 10px 8px; border-bottom:1px solid rgba(255,255,255,.05); border-radius:4px; }
+.lg-mission.is-current { background:rgba(212,167,44,.08); }
+.lg-mission.is-playable:hover { background:rgba(212,167,44,.12); }
+.lg-mission-n { font-size:17px; width:30px; flex:none; color:var(--lg-faint); }
+.lg-mission.is-done .lg-mission-n { color:var(--lg-green); }
+.lg-mission.is-current .lg-mission-n { color:var(--lg-gold); }
+.lg-mission-name { flex:1; font-size:16px; color:#e8dfc8; }
+.lg-mission.is-locked .lg-mission-name { color:#6a6356; }
+.lg-mission-mark { font-size:14px; color:var(--lg-faint); }
+.lg-mission.is-done .lg-mission-mark { color:var(--lg-green); }
+
+/* Account */
+.lg-account { display:flex; align-items:center; gap:14px; background:rgba(16,18,26,.66); border:1px solid #2a2540;
+  border-radius:7px; padding:14px 16px; }
+.lg-account img { width:48px; height:48px; border-radius:50%; object-fit:cover; border:1px solid rgba(212,167,44,.4); }
+.lg-account-id .nm { font-family:var(--lg-display); font-size:22px; color:var(--lg-ink); line-height:1; }
+.lg-account-id .sub { font-size:13px; color:var(--lg-faint); margin-top:3px; }
+
+/* Skirmish — champions + options */
+.lg-champions { display:grid; grid-template-columns:repeat(auto-fill, minmax(264px,1fr)); gap:10px; }
+.lg-champion { display:flex; align-items:center; gap:12px; border:1px solid #232036; background:rgba(16,18,26,.55); border-radius:6px; padding:10px 12px; text-align:left; cursor:pointer; }
+.lg-champion img { width:52px; height:52px; border-radius:50%; object-fit:cover; border:1px solid #444; flex-shrink:0; }
+.lg-champ-info { flex:1; min-width:0; }
+.lg-champ-top { display:flex; align-items:baseline; gap:8px; }
+.lg-champion .nm { font-size:15px; color:var(--lg-ink-2); }
+.lg-champion .sd { font-size:10px; letter-spacing:.1em; text-transform:uppercase; }
+.lg-champ-stats { font-size:12px; color:var(--lg-gold-dim); margin-top:2px; }
+.lg-champ-blurb { font-size:11.5px; color:var(--lg-faint); margin-top:3px; line-height:1.3; }
+.lg-champion.is-day .sd { color:var(--lg-gold-dim); }
+.lg-champion.is-night .sd { color:var(--lg-purple); }
+.lg-champion.is-night .lg-champ-stats { color:var(--lg-purple-lt); }
+.lg-champion.is-day img { border-color:rgba(212,167,44,.4); }
+.lg-champion.is-night img { border-color:rgba(155,89,182,.4); }
+.lg-champion:hover { border-color:#3a3550; }
+.lg-champion.is-selected.is-day { border-color:var(--lg-gold-dim); background:rgba(40,32,18,.5); box-shadow:0 0 18px rgba(212,167,44,.33); }
+.lg-champion.is-selected.is-night { border-color:var(--lg-purple); background:rgba(22,14,26,.5); box-shadow:0 0 18px rgba(155,89,182,.33); }
+.lg-champion.is-selected .nm { color:var(--lg-ink); }
+/* Skirmish: Day/Night rows + the champion's default weapon line. Richer cards
+   top-align the icon next to the stacked stats. */
+.lg-champ-side { margin-bottom:16px; }
+.lg-champ-side-label { font-family:var(--lg-display); font-size:18px; margin:8px 0; }
+.lg-champ-side.is-day .lg-champ-side-label { color:var(--lg-gold); }
+.lg-champ-side.is-night .lg-champ-side-label { color:var(--lg-purple-lt); }
+.lg-champion { align-items:flex-start; }
+.lg-champ-weapon { font-size:11px; color:var(--lg-ink-2); margin-top:7px; }
+.lg-champ-wstats { color:var(--lg-gold-dim); font-size:10px; }
+.lg-opts { display:flex; gap:9px; }
+.lg-opt { flex:1; display:flex; flex-direction:column; gap:5px; background:rgba(16,18,26,.6); border:1px solid #232036; border-radius:5px; padding:9px 12px; }
+.lg-opt-label { font-size:11px; color:var(--lg-faint); }
+
+/* Custom dropdown (aesthetic; per-option subtext) */
+.lg-dd { position:relative; }
+.lg-dd-cap { width:100%; display:flex; justify-content:space-between; align-items:center; gap:8px;
+  background:rgba(8,9,14,.6); border:1px solid #2a2540; border-radius:4px; color:var(--lg-ink);
+  font-family:var(--lg-serif); font-size:15px; padding:7px 10px; cursor:pointer; text-align:left; }
+.lg-dd-cap:hover { border-color:var(--lg-gold-dim); }
+.lg-dd-arrow { font-size:10px; color:var(--lg-faint); transition:transform .15s; }
+.lg-dd.is-open .lg-dd-arrow { transform:rotate(180deg); }
+.lg-dd-menu { position:absolute; top:calc(100% + 4px); left:0; right:0; z-index:40; display:none;
+  background:#14121c; border:1px solid #3a3052; border-radius:5px; overflow-y:auto; max-height:280px;
+  box-shadow:0 12px 30px rgba(0,0,0,.55); }
+.lg-dd.is-open .lg-dd-menu { display:block; }
+.lg-dd-item { width:100%; display:flex; flex-direction:column; gap:1px; align-items:flex-start;
+  background:none; border:0; border-bottom:1px solid rgba(255,255,255,.05); color:var(--lg-ink-2);
+  font-family:var(--lg-serif); padding:8px 11px; cursor:pointer; text-align:left; }
+.lg-dd-item:last-child { border-bottom:0; }
+.lg-dd-item:hover { background:rgba(212,167,44,.12); }
+.lg-dd-item.is-sel { background:rgba(212,167,44,.08); }
+.lg-dd-item-label { font-size:14px; color:var(--lg-ink); }
+.lg-dd-item.is-sel .lg-dd-item-label { color:var(--lg-gold); }
+.lg-dd-item-sub { font-size:11px; color:var(--lg-faint); }
+.lg-fac-dd { min-width:118px; }
+.lg-fac-dd .lg-dd-cap { font-size:13px; padding:4px 8px; }
+.lg-skirmish-start { display:flex; align-items:center; gap:14px; margin-top:18px; }
+.lg-skirmish-summary { font-size:13px; color:var(--lg-faint); font-style:italic; }
+
+/* Campaign Missions/Party tabs + party container */
+.lg-camp-tabs { display:flex; gap:10px; margin:10px 0 16px; }
+.lg-camp-tabs .lg-btn { flex:1; }
+/* Manage the Party: two columns — units flow with the page on the left, the
+   inventory is a fixed (sticky) right panel split Resources (top) / Equipment
+   (bottom). Kills the old nested 60vh scroll on the unit list. */
+.lg-party { display:flex; flex-direction:row; gap:16px; align-items:flex-start; }
+.lg-party .cprog-party-scroll { flex:1; min-width:0; max-height:none; overflow:visible; padding-right:0; }
+.lg-party .cprog-shared { position:sticky; top:4px; width:286px; flex-shrink:0; margin-top:0 !important;
+  max-height:calc(100vh - 84px); display:flex; flex-direction:column;
+  background:rgba(12,13,20,.62); border:1px solid #242236; border-radius:8px; padding:12px 12px 14px; }
+.lg-party .cprog-shared .cprog-section-label:first-child { margin-top:0; }
+/* 2-column panel: a weapon spans both columns (full width, no wasted space to
+   its right), so two resource squares line up to one weapon's width. */
+.lg-party .cprog-shared .cprog-inv-grid { grid-template-columns:repeat(2, 1fr); }
+.lg-party .cprog-shared .cprog-inv-grid.is-equipment { overflow-y:auto; flex:1; min-height:80px; align-content:start; }
+.lg-party .cprog-shared .cprog-slot.is-weapon { grid-column:span 2; }
+/* Mobile-only pull-out tab for the inventory drawer (hidden on desktop). */
+.lg-inv-tab { display:none; position:fixed; right:0; top:44%; z-index:121; writing-mode:vertical-rl;
+  background:var(--lg-purple); color:#fff; border:none; border-radius:7px 0 0 7px; padding:14px 7px;
+  font-size:12px; letter-spacing:.08em; cursor:pointer; box-shadow:-4px 0 12px rgba(0,0,0,.45); }
+
+/* Narrow unit cards: leader + active survivors share one row; reserve below. */
+.lg-party .cprog-grid { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:8px; }
+.lg-party .cprog-grid.reserve-grid { grid-template-columns:repeat(4, minmax(0,1fr)); }
+.lg-party .cprog-card { padding:8px 9px; }
+.lg-party .cprog-card.reserve { padding:7px 8px; }
+.lg-party .cprog-card-head { gap:7px; }
+.lg-party .cprog-portrait, .lg-party .cprog-glyph { width:38px; height:38px; }
+.lg-party .cprog-card.reserve .cprog-portrait, .lg-party .cprog-card.reserve .cprog-glyph { width:30px; height:30px; }
+.lg-party .cprog-name { font-size:.8rem; }
+
+/* In-game-style unit stats (ATK/DEF/RNG/AGI) + ability badges — shared by the
+   party cards and the Skirmish champion cards. */
+.ledger-pane-body .cprog-ustats { display:flex; flex-wrap:wrap; gap:7px; margin-top:6px; }
+.ledger-pane-body .cprog-ustat { font-size:10px; color:var(--lg-faint); letter-spacing:.03em; white-space:nowrap; }
+.ledger-pane-body .cprog-ustat b { color:var(--lg-ink-2); font-weight:600; }
+.ledger-pane-body .cprog-uabilities { display:flex; flex-wrap:wrap; gap:4px; margin-top:5px; }
+.ledger-pane-body .cprog-uability { font-size:9.5px; color:var(--lg-purple-lt); border:1px solid rgba(155,89,182,.3); border-radius:8px; padding:1px 7px; cursor:help; }
+.ledger-pane-body .cprog-uability:hover { border-color:var(--lg-purple); background:rgba(155,89,182,.12); }
+
+/* Game-styled hover tooltip (fixed-position so the scrolling pane never clips it). */
+.lg-tip { position:fixed; z-index:200; max-width:240px; background:#14121c; border:1px solid #3a3052; border-radius:5px;
+  padding:7px 11px; font-family:var(--lg-serif); font-size:12px; line-height:1.4; color:var(--lg-ink-2);
+  box-shadow:0 12px 30px rgba(0,0,0,.6); pointer-events:none; }
+
+/* Weapon slots on unit cards — full-width rows with name + stats (like the
+   inventory); draggable to/from the armory, click a carried one to equip. */
+.lg-party .cprog-wslots { display:flex; flex-direction:column; gap:5px; margin-top:7px; }
+.lg-party .cprog-wslot { display:flex; align-items:center; gap:7px; border:1px solid #2a2540; border-radius:5px;
+  background:rgba(8,9,14,.5); padding:5px 8px; cursor:grab; text-align:left; }
+.lg-party .cprog-wslot.is-empty { border-style:dashed; cursor:default; }
+.lg-party .cprog-wslot.is-equipped { border-color:var(--lg-gold-dim); background:rgba(40,32,18,.5); }
+.lg-party .cprog-wslot:not(.is-empty):not(.is-equipped):hover { border-color:var(--lg-purple); }
+.lg-party .cprog-wslot.is-dragging { opacity:.4; }
+.lg-party .cprog-wslot-glyph { font-size:17px; flex-shrink:0; line-height:1; }
+.lg-party .cprog-wslot.is-empty .cprog-wslot-glyph { color:var(--lg-faint); }
+.lg-party .cprog-wslot-info { display:flex; flex-direction:column; min-width:0; flex:1; gap:1px; }
+.lg-party .cprog-wslot-name { font-size:12px; color:var(--lg-ink-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.lg-party .cprog-wslot.is-empty .cprog-wslot-name { color:var(--lg-faint); font-style:italic; }
+.lg-party .cprog-wslot-stats { font-size:10px; color:var(--lg-gold-dim); }
+.lg-party .cprog-wslot-eq { color:var(--lg-gold); font-size:11px; }
+
+/* Carried non-weapon items — icon + name */
+.lg-party .cprog-inv { display:flex; flex-wrap:wrap; gap:5px; margin-top:6px; }
+.lg-party .cprog-item { display:inline-flex; align-items:center; gap:4px; font-size:11px; color:var(--lg-ink-2);
+  border:1px solid #2a2540; border-radius:10px; padding:2px 8px 2px 5px; background:rgba(8,9,14,.4); }
+.lg-party .cprog-item-glyph { font-size:13px; }
+
+/* Shared inventory as a slot grid */
+.lg-party .cprog-shared { margin-top:16px; }
+.lg-party .cprog-inv-hint { font-size:10px; font-weight:400; text-transform:none; letter-spacing:0; color:var(--lg-faint); margin-left:8px; }
+.lg-party .cprog-inv-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(76px,1fr)); grid-auto-rows:60px; gap:7px; margin-top:8px;
+  border:1px solid #232036; border-radius:6px; padding:9px; background:rgba(8,9,14,.3); transition:border-color .12s, background .12s; }
+.lg-party .cprog-inv-grid.is-drop { border-color:var(--lg-purple); background:rgba(155,89,182,.08); }
+.lg-party .cprog-slot { position:relative; border:1px solid #2a2540; border-radius:5px;
+  background:rgba(16,18,26,.6); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; padding:3px; }
+/* Weapons are two boxes wide so their name + stats fit beside the icon. */
+.lg-party .cprog-slot.is-weapon { grid-column:span 2; flex-direction:row; align-items:center; justify-content:flex-start; gap:8px; padding:6px 10px; cursor:grab; text-align:left; }
+.lg-party .cprog-slot.is-weapon:hover { border-color:var(--lg-purple); }
+.lg-party .cprog-slot-info { display:flex; flex-direction:column; min-width:0; flex:1; gap:1px; }
+.lg-party .cprog-slot.is-weapon .cprog-slot-glyph { flex-shrink:0; }
+.lg-party .cprog-slot.is-weapon .cprog-slot-name { font-size:12px; color:var(--lg-ink-2); text-align:left; }
+.lg-party .cprog-slot-stats { font-size:10px; color:var(--lg-gold-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.lg-party .cprog-slot.is-empty { border-style:dashed; border-color:#241f38; background:transparent; }
+.lg-party .cprog-slot.is-dragging { opacity:.4; }
+.lg-party .cprog-slot-glyph { font-size:20px; line-height:1; }
+.lg-party .cprog-slot-name { font-size:9px; color:var(--lg-faint); text-align:center; line-height:1.1; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.lg-party .cprog-slot-n { position:absolute; top:2px; right:4px; font-size:9px; color:var(--lg-ink-2); }
+.lg-party .cprog-card[data-drop].is-drop { outline:1px solid var(--lg-purple); outline-offset:1px; }
+.lg-party .cprog-inv-grid[data-drop].is-drop, .lg-party .cprog-shared.is-drop { outline:1px solid var(--lg-purple); outline-offset:-1px; }
+/* Pointer-drag: stop a touch-drag on a weapon from scrolling; floating ghost. */
+.lg-party .cprog-wslot[data-weapon], .lg-party .cprog-slot.is-weapon { touch-action:none; }
+.lg-drag-ghost { position:fixed; left:0; top:0; z-index:300; pointer-events:none; opacity:.92;
+  border:1px solid var(--lg-purple); border-radius:6px; background:#14121c; box-shadow:0 10px 26px rgba(0,0,0,.55); }
+/* Edge padding so drag-drop highlight outlines aren't clipped (left/bottom) and
+   the inventory has footer breathing room. */
+.lg-party { padding:3px 8px 44px; }
+/* More opaque card backgrounds so the text reads clearly over the backdrop. */
+.lg-party .cprog-card { background:rgba(14,16,22,.92); border-color:#2c2a42; }
+.lg-party .cprog-card.hero { background:rgba(36,30,16,.92); border-color:rgba(212,167,44,.45); }
+.lg-party .cprog-card.reserve { background:rgba(12,13,20,.88); }
+/* Bigger, centered section titles (Active Squad / Reserve / Resources / Equipment). */
+.lg-party .cprog-section-label { font-size:15px; text-align:center; letter-spacing:.05em; margin:16px 0 9px; color:var(--lg-ink-2); }
+.lg-party .cprog-section-label .cprog-count { font-size:.72em; }
+.lg-party .cprog-inv-hint { display:block; margin:3px auto 0; }
+
+/* Mission briefing */
+.lg-brief-head { margin-bottom:4px; }
+.lg-brief-kicker { font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--lg-label); }
+.lg-brief-title { font-family:var(--lg-display); font-size:30px; color:var(--lg-ink); margin-top:2px; }
+.lg-brief-text { font-size:15px; line-height:1.6; color:var(--lg-ink-2); margin-top:14px; max-width:62ch; }
+
+/* Play Online — rhythms + battle */
+.lg-rhythms { display:grid; grid-template-columns:1fr; gap:12px; margin-bottom:16px; }
+.lg-rhythm { border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.045); border-radius:5px; padding:14px 16px; cursor:pointer; }
+.lg-rhythm:hover { border-color:rgba(155,89,182,.45); background:rgba(155,89,182,.1); }
+.lg-rhythm-top { display:flex; justify-content:space-between; align-items:center; }
+.lg-rhythm-top .t { font-size:17px; color:var(--lg-ink); }
+.lg-rhythm-top .time { font-size:11px; color:var(--lg-dim); }
+.lg-rhythm .d { font-size:12px; color:#8a8270; margin-top:3px; }
+.lg-battle { background:rgba(22,14,26,.6); border:1px solid rgba(155,89,182,.4); border-radius:6px; padding:14px 18px; margin-bottom:16px; cursor:pointer; }
+.lg-battle:hover { border-color:var(--lg-purple); }
+.lg-battle-head { display:flex; justify-content:space-between; align-items:center; }
+.lg-battle-head .gthc { font-family:var(--lg-display); font-size:22px; color:#e6cdf2; }
+.lg-battle-live { font-size:12px; color:var(--lg-green); }
+.lg-battle-cta { font-size:13px; color:var(--lg-purple-lt); }
+.lg-battle-sub { font-size:12px; color:#8a8270; margin-top:6px; }
+.lg-battle-time { color:var(--lg-gold-dim); margin-top:3px; }
+.lg-btn-purple { border-color:var(--lg-purple); background:rgba(155,89,182,.2); color:#e6cdf2; }
+.lg-btn-purple:hover { background:rgba(155,89,182,.32); }
+
+/* Find a Game + native lobby */
+.lg-opts { flex-wrap:wrap; }
+.lg-opt { min-width:100px; }
+.lg-edit-status { font-size:12px; color:var(--lg-dim); margin-top:6px; display:inline-block; }
+.lg-edit-status.ok { color:var(--lg-green); }
+.lg-battle-scorebar { display:flex; align-items:center; gap:12px; font-size:14px; margin:10px 0 4px; }
+.lg-battle-scorebar .d { color:var(--lg-gold); white-space:nowrap; }
+.lg-battle-scorebar .n { color:var(--lg-purple-lt); white-space:nowrap; }
+.lg-battle-scorebar .track { flex:1; height:7px; border-radius:4px; background:var(--lg-night); overflow:hidden; }
+.lg-battle-scorebar .fill { height:100%; background:var(--lg-gold); }
+.lg-invite-row { margin-bottom:14px; }
+.lg-unassigned { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
+.lg-unassigned .lbl { font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--lg-label); }
+.lg-unassigned .chip { font-size:13px; padding:4px 11px; border:1px solid #2a2540; border-radius:12px; color:var(--lg-ink-2); }
+.lg-unassigned .chip.you { border-color:rgba(212,167,44,.5); color:var(--lg-gold); }
+.lg-back { font-size:13px; color:var(--lg-purple-lt); cursor:pointer; margin-bottom:12px; }
+.lg-back:hover { color:#dcb6ee; }
+.lg-find-actions { display:flex; gap:10px; margin-bottom:6px; }
+.lg-join-row { display:flex; gap:8px; align-items:center; }
+.lg-code-input { flex:1; background:rgba(8,9,14,.7); border:1px solid #2a2540; border-radius:4px; color:var(--lg-ink);
+  font-family:var(--lg-serif); font-size:15px; letter-spacing:.2em; text-transform:uppercase; padding:9px 12px; }
+.lg-lobby-head { display:flex; justify-content:space-between; align-items:flex-start; }
+.lg-lobby-title { font-family:var(--lg-display); font-size:30px; color:var(--lg-ink); }
+.lg-lobby-sub { font-size:13px; color:#9b8a6a; }
+.lg-lobby-code { text-align:right; }
+.lg-lobby-code .lbl { font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--lg-faint); }
+.lg-lobby-code .code { font-size:22px; letter-spacing:.2em; color:var(--lg-gold); }
+.lg-seats { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:4px; }
+.lg-seat-col { display:flex; flex-direction:column; gap:9px; }
+.lg-seat-label { font-family:var(--lg-display); font-size:20px; }
+.lg-seat-col.is-day .lg-seat-label { color:var(--lg-gold); }
+.lg-seat-col.is-night .lg-seat-label { color:var(--lg-purple-lt); }
+.lg-seat { display:flex; align-items:center; gap:10px; background:rgba(16,18,26,.62); border:1px solid #2a2540; border-radius:6px; padding:11px 13px; }
+.lg-seat.is-human { background:rgba(40,32,18,.4); border-color:rgba(212,167,44,.35); }
+.lg-seat .nm { flex:1; font-size:15px; color:var(--lg-ink); }
+.lg-seat .nm.open { color:var(--lg-faint); font-style:italic; }
+.lg-seat .fac { font-size:12px; color:var(--lg-dim); }
+.lg-seat-acts { display:flex; gap:6px; }
+.lg-seat-x { padding:5px 10px !important; }
+.lg-lobby-footer { display:flex; align-items:center; gap:12px; margin-top:18px; padding-top:14px; border-top:1px solid rgba(255,255,255,.08); }
+.lg-btn:disabled { opacity:.45; cursor:not-allowed; }
+.lg-seat-acts .lg-btn { font-size:12px; padding:6px 12px; }
+
+/* ── MOBILE: rail → bottom bar ────────────────────────────────────────────── */
+@media (max-width:720px) {
+  .ledger-frame { flex-direction:column; }
+  .ledger-rail {
+    width:auto; flex-direction:row; order:2; padding:8px 6px; overflow-x:auto;
+    border-right:none; border-top:1px solid rgba(212,167,44,.16);
+    padding-bottom:calc(8px + env(safe-area-inset-bottom));
+  }
+  .ledger-wordmark, .ledger-sub, .ledger-user { display:none; }
+  .ledger-rail-items { flex-direction:row; gap:2px; }
+  .ledger-rail-item { flex-direction:column; gap:2px; padding:6px 10px; border-left:none; border-bottom:2px solid transparent; }
+  .ledger-rail-item.is-active { border-left:none; border-bottom-color:var(--lg-gold); }
+  .ledger-rail-item .lb { font-size:11px; }
+  .ledger-pane { order:1; padding:calc(40px + env(safe-area-inset-top)) 18px 18px; }
+  .ledger-pane-title { font-size:30px; }
+  /* Party Manager: 4-up cards squish on narrow displays — cap at 2 per row. */
+  .lg-party .cprog-grid,
+  .lg-party .cprog-grid.reserve-grid { grid-template-columns:repeat(2, minmax(0,1fr)); }
+  /* Inventory becomes a right-edge pull-out drawer (the tab opens it; dragging a
+     weapon out collapses it so you can drop on a unit). */
+  .lg-party { flex-direction:column; }
+  .lg-party .cprog-party-scroll { width:100%; }
+  .lg-party .cprog-shared { position:fixed; top:0; right:0; bottom:0; width:min(82vw,320px); max-height:none;
+    z-index:120; transform:translateX(100%); transition:transform .22s ease; border-radius:0;
+    border-left:1px solid #2c2a42; box-shadow:-12px 0 30px rgba(0,0,0,.5); overflow-y:auto;
+    padding-top:calc(14px + env(safe-area-inset-top)); }
+  .lg-party .cprog-shared.is-open { transform:translateX(0); }
+  .lg-inv-tab { display:block; }
+}

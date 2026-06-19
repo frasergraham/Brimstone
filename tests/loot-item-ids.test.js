@@ -53,6 +53,7 @@ describe('executeExplore carries lootItemIds index-aligned with lootItems', () =
     spot.tile.exploreOverride = { kind: 'resource', id: 'wood', amount: 2 };
     const surv = createSurvivor(spot.col, spot.row, null);
     surv.owner = 'hero';
+    surv.abilities = []; // deterministic — drop any random Herbalist (herb-on-explore)
     state.entities.push(surv);
 
     const res = executeExplore(state, surv);
@@ -69,6 +70,7 @@ describe('executeExplore carries lootItemIds index-aligned with lootItems', () =
     spot.tile.exploreOverride = { kind: 'weapon', id: 'sword' };
     const surv = createSurvivor(spot.col, spot.row, null);
     surv.owner = 'hero';
+    surv.abilities = []; // deterministic — drop any random Herbalist (herb-on-explore)
     state.entities.push(surv);
 
     const res = executeExplore(state, surv);
@@ -89,6 +91,7 @@ describe('executeExplore carries lootItemIds index-aligned with lootItems', () =
     spot.tile.exploreOverride = { kind: 'nothing' };
     const surv = createSurvivor(spot.col, spot.row, null);
     surv.owner = 'hero';
+    surv.abilities = []; // deterministic — drop any random Herbalist (herb-on-explore)
     state.entities.push(surv);
 
     const res = executeExplore(state, surv);

@@ -97,6 +97,11 @@ export function legacyCampaignSaveSlot(campaignId) {
  * effects are deliberately dropped: they belong to a single deployment and
  * shouldn't shape the next mission's starting roster.
  */
+// Max weapons a single unit may carry into a mission (one equipped, the rest
+// swappable mid-mission). The party screen enforces this when handing weapons
+// out of the shared armory.
+export const WEAPON_CARRY_CAP = 2;
+
 export function snapshotSurvivor(entity) {
   const permanentEffects = Array.isArray(entity.effects)
     ? entity.effects.filter(e => e.duration === 'permanent').map(e => ({ ...e }))
@@ -112,6 +117,7 @@ export function snapshotSurvivor(entity) {
     maxHp:        entity.maxHp,
     attack:       entity.attack,
     defense:      entity.defense,
+    agility:      entity.agility,
     // Campaign veterancy — carry level + accumulated XP between missions. Before
     // this, static levels evaporated and survivors reset to L1 each mission.
     level:        entity.level || 1,
@@ -1215,6 +1221,34 @@ export class Campaign {
     this.weapons = pool;
     this.save();
     return weaponId;
+  }
+
+  /**
+   * Carry an extra weapon from the shared armory into a unit's backpack WITHOUT
+   * displacing the current one — a unit may hold up to {@link WEAPON_CARRY_CAP}
+   * weapons and switch between them mid-mission. Auto-equips when it's the unit's
+   * first weapon. No-op when the unit is already at capacity, the id isn't a
+   * weapon, or it isn't in the shared pool.
+   * @param {number|'leader'} rosterIndex  roster index, or 'leader' for the hero.
+   * @param {string} weaponId  weapon id present in the shared pool.
+   * @returns {{success:boolean, weaponId?:string, reason?:string}}
+   */
+  carryFromInventory(rosterIndex, weaponId) {
+    const unit = rosterIndex === 'leader' ? this.heroStats : this.roster[rosterIndex];
+    if (!unit) return { success: false };
+    if (ITEMS[weaponId]?.kind !== 'weapon') return { success: false };
+    const items = unit.items ?? (unit.items = {});
+    const carried = Object.entries(items).reduce((sum, [id, e]) =>
+      sum + (ITEMS[id]?.kind === 'weapon' ? (e?.count ?? 0) : 0), 0);
+    if (carried >= WEAPON_CARRY_CAP) return { success: false, reason: 'full' };
+    const pool = normalizeItems(this.weapons);
+    if (getItemCountOf(pool, weaponId) < 1) return { success: false };
+    removeItemInItems(pool, weaponId, 1);
+    addItemInItems(items, weaponId, 1);
+    if (!getEquippedWeaponIdOf(items)) equipWeaponInItems(items, weaponId);
+    this.weapons = pool;
+    this.save();
+    return { success: true, weaponId };
   }
 
   /**

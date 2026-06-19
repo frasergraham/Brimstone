@@ -53,7 +53,12 @@ const ALLOWLIST = Object.freeze({
   // adjacent min/max balancing filter's established `owner === 'hero' && type
   // === SURVIVOR` style (campaign is hero-only single-player, so it's a genuine
   // player-faction count). Ratchet down if a Faction.side helper is adopted here.
-  'src/main.js':                 47,
+  // src/main.js bumped 47 → 50 (2026-06-18, Ledger menu): _collectReplayRows
+  // (the ledger's completed-games feed) duplicates the winner/faction labelling
+  // already in _renderReplaysList (the 3 `g.winner === 'hero'` / `faction ===
+  // 'hero'` checks). Temporary duplication — at cutover _renderReplaysList
+  // delegates to _collectReplayRows and this ratchets back to 47.
+  'src/main.js':                 50,
   'src/ui.js':                   25,
 
   // Pre-existing core modules — generalized in Finding 1, residual checks
