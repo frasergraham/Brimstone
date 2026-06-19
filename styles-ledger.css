@@ -211,6 +211,13 @@
 .lg-mission-n { font-size:17px; width:30px; flex:none; color:var(--lg-faint); }
 .lg-mission.is-done .lg-mission-n { color:var(--lg-green); }
 .lg-mission.is-current .lg-mission-n { color:var(--lg-gold); }
+/* Per-mission map image (fixed pre-generated board, or the live saved thumbnail
+   when in progress). Mirrors the feed-thumb look so campaign + skirmish cards
+   read alike. Locked missions dim theirs so the row still reads "locked". */
+.lg-mission-thumb { width:64px; height:48px; flex:none; border-radius:4px; background-size:cover; background-position:center;
+  background-color:rgba(0,0,0,.32); border:1px solid rgba(255,255,255,.08); }
+.lg-mission.is-current .lg-mission-thumb { border-color:rgba(212,167,44,.34); }
+.lg-mission.is-locked .lg-mission-thumb { filter:grayscale(.7) brightness(.55); }
 .lg-mission-name { flex:1; font-size:16px; color:#e8dfc8; }
 .lg-mission.is-locked .lg-mission-name { color:#6a6356; }
 .lg-mission-mark { font-size:14px; color:var(--lg-faint); }

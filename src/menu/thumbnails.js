@@ -6,6 +6,8 @@
 // same id the menu lists use). The ledger shows it wherever a saved game appears.
 // Fully client-side — no server dependency.
 
+import { fixedMissionImage } from '../campaign/mission-catalog.js';
+
 const PREFIX       = 'brimstone-thumb-';
 const STATS_PREFIX = 'brimstone-stats-';      // tiny round-end stats snapshot (online + local)
 const INDEX_KEY    = 'brimstone-thumb-index';   // MRU-ordered ids, for pruning
@@ -67,4 +69,22 @@ export function saveStats(id, stats) {
 export function loadStats(id) {
   if (!id) return null;
   try { return JSON.parse(localStorage.getItem(STATS_PREFIX + id) || 'null'); } catch { return null; }
+}
+
+/**
+ * Resolve the map image to show on a campaign mission card. An in-progress
+ * mission has a live saved thumbnail (captured at round-end, keyed by its row id
+ * `<campaignId>/slot<N>/<missionId>`) — show that, exactly like a skirmish. A
+ * not-yet-started (or never-played) mission has no saved thumbnail, so fall back
+ * to the mission's fixed pre-generated map image (a committed static asset). An
+ * unknown mission still resolves to a deterministic `assets/mission-maps/<id>.png`
+ * path (the browser <img>/CSS background simply renders nothing if it 404s) — the
+ * caller never gets null, so a card always has an image source.
+ *
+ * @param {string} missionId — mission id (resolves the fixed image).
+ * @param {string} rowId     — the campaign row id used to key the live thumbnail.
+ * @returns {string} a data-URL (saved thumb) or an asset path (fixed image).
+ */
+export function missionThumb(missionId, rowId) {
+  return loadThumb(rowId) ?? fixedMissionImage(missionId);
 }
