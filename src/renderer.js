@@ -150,7 +150,10 @@ export function planRiverTileBranches(cx, cy, neighbourCenters, apothem) {
     edgeMids.push({ x: cx + ux * apothem, y: cy + uy * apothem });
   }
   const n = edgeMids.length;
-  if (n === 0) return { edgeMids, through: null, spokes: [], endpoint: null };
+  // Lone river hex (no water neighbours): no through-channel to draw, but we
+  // still flag it as a `pool` so `_drawRiverLayer` renders a fallback water
+  // disc/puddle centred on the hex instead of skipping it (an invisible tile).
+  if (n === 0) return { edgeMids, through: null, spokes: [], endpoint: null, pool: true };
   if (n === 1) {
     // Endpoint tile: extend off-tile in the opposite direction so the river
     // fades past the hex border instead of stopping dead at the centre.
@@ -2164,6 +2167,16 @@ export class Renderer {
         const plan = planRiverTileBranches(
           x, y, riverNbrs.map(n => this._toCanvas(n.col, n.row)), apothem,
         );
+        if (plan.pool) {
+          // Lone river hex with no water neighbours: draw a fallback pool/puddle
+          // — a filled water disc centred on the hex — so the tile stays visible
+          // (in-game and in the editor) instead of rendering nothing.
+          ctx.fillStyle = TILE_COLOR[TileType.RIVER];
+          ctx.beginPath();
+          ctx.arc(x, y, apothem * 0.6, 0, Math.PI * 2);
+          ctx.fill();
+          continue;
+        }
         if (!plan.through) continue; // isolated water tile — skip
 
         const { edgeMids } = plan;

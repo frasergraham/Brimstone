@@ -12,6 +12,8 @@ import {
   riverExtensionRibbon,
   hexToWorld,
   RIVER_RIBBON_WIDTH,
+  networkStrokesForTile,
+  buildRiverNetworkStrokes,
 } from '../src/renderer-3d.js';
 
 // Real layered Tile so the isRiver/isBridge predicates resolve from the path
@@ -112,6 +114,51 @@ describe('riverExitPoints', () => {
     assert.deepEqual(riverExitPoints(undefined), []);
     assert.deepEqual(riverExitPoints({}), []);
     assert.deepEqual(riverExitPoints(new Map()), []);
+  });
+});
+
+describe('lone river hex → pool fallback', () => {
+  test('networkStrokesForTile with 0 neighbours returns a closed pool ring', () => {
+    const tile = mkTile(5, 5, TileType.RIVER);
+    const strokes = networkStrokesForTile(tile, []);
+    assert.equal(strokes.length, 1, 'one pool stroke for the lone hex');
+    const pool = strokes[0];
+    assert.equal(pool.isPool, true, 'pool stroke flagged isPool');
+    assert.ok(pool.length >= 3, 'pool ring needs ≥3 samples to read as a disc');
+    // Every ring point is the same radius from the hex centre (a circle).
+    const here = hexToWorld(tile.col, tile.row);
+    const r0 = Math.hypot(pool[0].x - here.x, pool[0].z - here.z);
+    assert.ok(r0 > 0, 'pool radius must be positive');
+    for (const pt of pool) {
+      const r = Math.hypot(pt.x - here.x, pt.z - here.z);
+      assert.ok(Math.abs(r - r0) < 1e-9, `ring point radius ${r} should equal ${r0}`);
+    }
+  });
+
+  test('networkStrokesForTile with neighbours never returns a pool', () => {
+    const tile = mkTile(5, 5, TileType.RIVER);
+    const strokes = networkStrokesForTile(tile, [{ col: 6, row: 5 }]);
+    assert.ok(strokes.every(s => !s.isPool), 'connected tile has no pool stroke');
+  });
+
+  test('buildRiverNetworkStrokes builds a pool stroke for an isolated river hex', () => {
+    const tiles = new Map();
+    tiles.set(hexKey(5, 5), mkTile(5, 5, TileType.RIVER));
+    const segs = buildRiverNetworkStrokes(tiles);
+    assert.equal(segs.length, 1, 'the lone river hex must still produce a segment');
+    assert.equal(segs[0].tile.col, 5);
+    assert.equal(segs[0].tile.row, 5);
+    assert.ok(segs[0].strokes.some(s => s.isPool), 'segment carries a pool stroke');
+  });
+
+  test('a connected river still builds non-pool strokes (regression)', () => {
+    const tiles = new Map();
+    for (let c = 0; c < 4; c++) tiles.set(hexKey(c, 2), mkTile(c, 2, TileType.RIVER));
+    const segs = buildRiverNetworkStrokes(tiles);
+    assert.equal(segs.length, 4);
+    const allStrokes = segs.flatMap(s => s.strokes);
+    assert.ok(allStrokes.length > 0);
+    assert.ok(allStrokes.every(s => !s.isPool), 'no pools in a connected river');
   });
 });
 
