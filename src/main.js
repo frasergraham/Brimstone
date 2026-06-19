@@ -8602,7 +8602,7 @@ function _onlineError(msg, raw) {
 /** Cached Game Center credentials for use by _ensureAuthed. */
 let _gcCredentials = null;
 
-function _ensureAuthed(cb) {
+function _ensureAuthed(cb, usernameOverride = null) {
   const session   = loadSession();
   const wsUrl     = _serverWsUrl();
 
@@ -8633,12 +8633,14 @@ function _ensureAuthed(cb) {
       displayName: _gcCredentials.displayName,
     });
   } else {
-    const nameInput = document.getElementById('auth-username');
-    const username = nameInput.value.trim();
+    // username comes from the caller (the ledger's native sign-in) or, as a
+    // fallback, the legacy auth input — so this no longer depends on that DOM.
+    const username = (usernameOverride != null
+      ? String(usernameOverride)
+      : (document.getElementById('auth-username')?.value ?? '')).trim();
     if (username.length < 2) {
       const errorEl = document.getElementById('auth-error');
-      errorEl.textContent = 'Enter a username (2+ characters).';
-      errorEl.style.display = '';
+      if (errorEl) { errorEl.textContent = 'Enter a username (2+ characters).'; errorEl.style.display = ''; }
       return;
     }
     mp.auth({ username });
@@ -10029,11 +10031,7 @@ function _buildLedgerData() {
     abandonable:      (row) => _ledgerRowAbandonable(row),
     // Native passwordless sign-in: feed the name into the (hidden) auth input and
     // run the shared auth core — no old dialog ever shows.
-    signInWithName:   (name, cb) => {
-      const el = document.getElementById('auth-username');
-      if (el) el.value = name;
-      _ensureAuthed(() => cb?.());
-    },
+    signInWithName:   (name, cb) => _ensureAuthed(() => cb?.(), name),
     // Battle: live status + join (native panel; no legacy screen).
     battleStatus:     () => _ledgerBattleStatus(),
     joinBattle:       () => _ensureAuthed(() => mp.joinBattle()),
