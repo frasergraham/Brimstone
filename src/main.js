@@ -82,8 +82,8 @@ import {
 import { requestNotificationPermission, notifyRoundReady, notifyWaitingOnYou, notifyDeadlineApproaching, notifyGameOver } from './notifications.js';
 import { mmSortRows, mmFormatRow, mmDedupeCampaignRows } from './main-menu-games.js';
 
-// Stamp version into badge
-document.getElementById('version-badge').textContent = `v${BUILD_VERSION}`;
+// Stamp version into the legacy badge if present (the live menu is the ledger).
+{ const _vb = document.getElementById('version-badge'); if (_vb) _vb.textContent = `v${BUILD_VERSION}`; }
 
 // ── Game mode config (env-var driven) ────────────────────────────────────────
 // Fetches /api/config to determine which game modes are enabled/disabled/hidden.
@@ -3468,6 +3468,14 @@ const stepAsyncJoin    = document.getElementById('setup-step-async-join');
 let _mmColumn = 'menus';
 
 function showStep(step) {
+  // The legacy menu steps were removed at cutover — the ledger is the live menu.
+  // Any retained caller reveals the (empty) #setup-screen stub so the ledger's
+  // observer restores the rail (on Continue); never touch the null step elements.
+  if (!stepMode) {
+    const ss = document.getElementById('setup-screen');
+    if (ss) ss.style.display = '';
+    return;
+  }
   // Refresh or tear down the main-menu games list depending on whether we're
   // entering or leaving the mode card.
   if (step === 'mode') {
@@ -3553,10 +3561,10 @@ document.getElementById('btn-ng-campaign')?.addEventListener('click', () => {
 document.getElementById('btn-ng-vsai')    ?.addEventListener('click', () => _showSinglePlayerScreen());
 document.getElementById('btn-ng-online')  ?.addEventListener('click', () => _showOnlineScreen());
 
-document.getElementById('setup-session-name').addEventListener('click', () => { _initAccountPage(); showStep('account'); });
-document.getElementById('btn-account-back') .addEventListener('click', () => showStep('mode'));
-document.getElementById('btn-changelog-back').addEventListener('click', () => showStep('mode'));
-document.getElementById('reconnect-back').addEventListener('click', () => location.reload());
+document.getElementById('setup-session-name')?.addEventListener('click', () => { _initAccountPage(); showStep('account'); });
+document.getElementById('btn-account-back') ?.addEventListener('click', () => showStep('mode'));
+document.getElementById('btn-changelog-back')?.addEventListener('click', () => showStep('mode'));
+document.getElementById('reconnect-back')?.addEventListener('click', () => location.reload());
 
 // Initialize persistent session bar on page load
 _updateSessionBar();
@@ -3629,7 +3637,7 @@ if (isNativeMobile) {
 }
 
 // Version badge opens revision history
-document.getElementById('version-badge').addEventListener('click', (e) => {
+document.getElementById('version-badge')?.addEventListener('click', (e) => {
   e.preventDefault();
   _openChangelog();
 });
@@ -3760,7 +3768,7 @@ function _showSinglePlayerScreen() {
   _renderSpSaves();
 }
 
-document.getElementById('btn-singleplayer-back').addEventListener('click', () => {
+document.getElementById('btn-singleplayer-back')?.addEventListener('click', () => {
   if (ui) ui.destroy();
   renderer = null; ui = null; state = null;
   showStep('mode');
@@ -5142,15 +5150,15 @@ function _handleCampaignMissionEnd() {
 }
 
 // Campaign event listeners
-document.getElementById('btn-campaign-select-back').addEventListener('click', () => showStep('mode'));
+document.getElementById('btn-campaign-select-back')?.addEventListener('click', () => showStep('mode'));
 // The slot picker is now the campaign entry point (the chapter screen is skipped),
 // so backing out of it returns to the main menu.
 document.getElementById('btn-campaign-slot-back')  ?.addEventListener('click', () => showStep('mode'));
-document.getElementById('btn-campaign-back')   .addEventListener('click', () => {
+document.getElementById('btn-campaign-back')   ?.addEventListener('click', () => {
   if (_activeCampaign) _showCampaignSlotScreen(_activeCampaign.campaignDef);
   else showStep('mode');
 });
-document.getElementById('btn-briefing-back')   .addEventListener('click', () => {
+document.getElementById('btn-briefing-back')   ?.addEventListener('click', () => {
   // Return to the Progress landing (preserving the squad just chosen) — but if
   // we arrived here via a single-mission campaign there's no landing to show.
   if (_activeCampaign && _activeCampaign.campaignDef.missions.length > 1) {
@@ -5208,35 +5216,35 @@ function _setMmColumn(col) {
 document.querySelectorAll('.mm-col-arrow, .mm-col-dot').forEach(el => {
   el.addEventListener('click', () => _setMmColumn(el.dataset.col));
 });
-document.getElementById('btn-delete-campaign')  .addEventListener('click', () => {
+document.getElementById('btn-delete-campaign')  ?.addEventListener('click', () => {
   if (confirm('Start over? All campaign progress, roster survivors, and resources will be lost. This cannot be undone.')) {
     const def = _activeCampaign.campaignDef;
     _activeCampaign.delete();
     _showCampaignSlotScreen(def);
   }
 });
-document.getElementById('btn-start-mission')   .addEventListener('click', () => {
+document.getElementById('btn-start-mission')   ?.addEventListener('click', () => {
   if (!_campaignSelectedMission) return;
   const missionDef = _activeCampaign.getMissionDef(_campaignSelectedMission);
   if (missionDef) _initCampaignMission(missionDef);
 });
-document.getElementById('btn-resume-mission')  .addEventListener('click', () => {
+document.getElementById('btn-resume-mission')  ?.addEventListener('click', () => {
   if (!_campaignSelectedMission) return;
   _resumeCampaignMission(_campaignSelectedMission);
 });
-document.getElementById('btn-restart-mission') .addEventListener('click', () => {
+document.getElementById('btn-restart-mission') ?.addEventListener('click', () => {
   if (!_campaignSelectedMission) return;
   deleteCampaignMissionSave(_activeCampaign.campaignDef.id, _campaignSelectedMission, _activeCampaign.slotIndex);
   const missionDef = _activeCampaign.getMissionDef(_campaignSelectedMission);
   if (missionDef) _initCampaignMission(missionDef);
 });
-document.getElementById('btn-admin-unlock')    .addEventListener('click', () => {
+document.getElementById('btn-admin-unlock')    ?.addEventListener('click', () => {
   _campaignUnlocked = !_campaignUnlocked;
   const btn = document.getElementById('btn-admin-unlock');
   btn.textContent = _campaignUnlocked ? '🔒 Lock' : '🔓 Unlock All';
   _renderCampaignScreen();
 });
-document.getElementById('btn-debrief-continue').addEventListener('click', () => {
+document.getElementById('btn-debrief-continue')?.addEventListener('click', () => {
   _showCampaignScreen();
 });
 
@@ -5274,7 +5282,7 @@ for (const btn of _qpFactionTiles) {
 // the human-controlled faction; the AI plays the side default on the
 // opposing side. Stubs are passed through to GameState.swapLeaderToFaction
 // so the human's leader gets stub stats.
-document.getElementById('btn-start-qp').addEventListener('click', () => {
+document.getElementById('btn-start-qp')?.addEventListener('click', () => {
   const def     = getFaction(_qpFactionId);
   const isDay   = def.side === 'day';
   init(/*witchIsAI*/ isDay, /*heroIsAI*/ !isDay, /*autoplay*/ false, /*humanFactionId*/ _qpFactionId);
@@ -7384,7 +7392,7 @@ document.getElementById('btn-battle-spectate')?.addEventListener('click', functi
   initSpectator(roomId);
 });
 
-document.getElementById('btn-online-back').addEventListener('click', () => {
+document.getElementById('btn-online-back')?.addEventListener('click', () => {
   if (mp) { mp.disconnect(); mp = null; }
   if (ui) ui.destroy();
   renderer = null; ui = null; state = null;
@@ -7401,7 +7409,7 @@ document.getElementById('btn-async-refresh')?.addEventListener('click', () => {
 
 // ── Online flow ───────────────────────────────────────────────────────────────
 
-document.getElementById('btn-cancel-wait').addEventListener('click', () => {
+document.getElementById('btn-cancel-wait')?.addEventListener('click', () => {
   _showOnlineScreen();
 });
 
@@ -7439,15 +7447,15 @@ _populateNodeCountSelect('cg-node-count', 'cg-map-size');
 
 // ── Create Game flow ──────────────────────────────────────────────────────────
 
-document.getElementById('btn-create-game').addEventListener('click', () => {
+document.getElementById('btn-create-game')?.addEventListener('click', () => {
   _ensureAuthed(() => showStep('create-game'));
 });
 
-document.getElementById('btn-create-game-back').addEventListener('click', () => {
+document.getElementById('btn-create-game-back')?.addEventListener('click', () => {
   showStep('online');
 });
 
-document.getElementById('btn-create-game-confirm').addEventListener('click', () => {
+document.getElementById('btn-create-game-confirm')?.addEventListener('click', () => {
   _ensureAuthed(() => {
     const isAsync = document.querySelector('input[name="cg-mode"]:checked')?.value === 'async';
     const timeoutEl = isAsync
@@ -7483,18 +7491,18 @@ for (const radio of document.querySelectorAll('input[name="cg-mode"]')) {
 
 // ── Join Game flow ────────────────────────────────────────────────────────────
 
-document.getElementById('btn-join-game').addEventListener('click', () => {
+document.getElementById('btn-join-game')?.addEventListener('click', () => {
   _ensureAuthed(() => {
     showStep('join-game');
     _loadPublicLobbies();
   });
 });
 
-document.getElementById('btn-join-game-back').addEventListener('click', () => {
+document.getElementById('btn-join-game-back')?.addEventListener('click', () => {
   showStep('online');
 });
 
-document.getElementById('btn-join-private').addEventListener('click', () => {
+document.getElementById('btn-join-private')?.addEventListener('click', () => {
   const code = document.getElementById('join-code-input').value.trim().toUpperCase();
   const err  = document.getElementById('join-game-error');
   if (code.length !== 6) {
@@ -8215,15 +8223,15 @@ async function _loadFriendsIntoPopup(popup, lobby) {
   }
 }
 
-document.getElementById('btn-lobby-populate-ai').addEventListener('click', () => {
+document.getElementById('btn-lobby-populate-ai')?.addEventListener('click', () => {
   if (_currentLobby) mp.fillAllWithAI(_currentLobby.id, 'random');
 });
 
-document.getElementById('btn-lobby-start').addEventListener('click', () => {
+document.getElementById('btn-lobby-start')?.addEventListener('click', () => {
   if (_currentLobby) mp.startGame(_currentLobby.id);
 });
 
-document.getElementById('btn-lobby-leave').addEventListener('click', () => {
+document.getElementById('btn-lobby-leave')?.addEventListener('click', () => {
   if (_currentLobby) {
     mp.leaveLobby(_currentLobby.id);
     _currentLobby = null;
@@ -8394,9 +8402,9 @@ function _hideAuthDialog() {
   _authDialogCallback = null;
 }
 
-document.getElementById('btn-auth-cancel').addEventListener('click', () => _hideAuthDialog());
+document.getElementById('btn-auth-cancel')?.addEventListener('click', () => _hideAuthDialog());
 
-document.getElementById('btn-auth-signin').addEventListener('click', () => {
+document.getElementById('btn-auth-signin')?.addEventListener('click', () => {
   const errorEl = document.getElementById('auth-error');
   errorEl.style.display = 'none';
 
@@ -8407,7 +8415,7 @@ document.getElementById('btn-auth-signin').addEventListener('click', () => {
   });
 });
 
-document.getElementById('btn-auth-email-login').addEventListener('click', async () => {
+document.getElementById('btn-auth-email-login')?.addEventListener('click', async () => {
   const email = document.getElementById('auth-email-input').value.trim();
   if (!email) return;
 
@@ -8427,23 +8435,23 @@ document.getElementById('btn-auth-email-login').addEventListener('click', async 
 });
 
 // Account: sign in via dialog
-document.getElementById('btn-acct-signin').addEventListener('click', () => {
+document.getElementById('btn-acct-signin')?.addEventListener('click', () => {
   _showAuthDialog(() => _initAccountPage());
 });
 
 // Account: edit username
-document.getElementById('btn-acct-edit-name').addEventListener('click', () => {
+document.getElementById('btn-acct-edit-name')?.addEventListener('click', () => {
   const session = loadSession();
   document.getElementById('acct-name-input').value = session?.username || '';
   document.getElementById('acct-name-edit').style.display = '';
   document.getElementById('acct-name-error').style.display = 'none';
 });
 
-document.getElementById('btn-acct-cancel-name').addEventListener('click', () => {
+document.getElementById('btn-acct-cancel-name')?.addEventListener('click', () => {
   document.getElementById('acct-name-edit').style.display = 'none';
 });
 
-document.getElementById('btn-acct-save-name').addEventListener('click', async () => {
+document.getElementById('btn-acct-save-name')?.addEventListener('click', async () => {
   const session = loadSession();
   if (!session) return;
 
@@ -8478,12 +8486,12 @@ document.getElementById('btn-acct-save-name').addEventListener('click', async ()
 });
 
 // Account: link email
-document.getElementById('btn-acct-link-email').addEventListener('click', () => {
+document.getElementById('btn-acct-link-email')?.addEventListener('click', () => {
   const form = document.getElementById('acct-email-form');
   form.style.display = form.style.display === 'none' ? '' : 'none';
 });
 
-document.getElementById('btn-acct-send-link').addEventListener('click', async () => {
+document.getElementById('btn-acct-send-link')?.addEventListener('click', async () => {
   const session = loadSession();
   if (!session) return;
 
@@ -8505,7 +8513,7 @@ document.getElementById('btn-acct-send-link').addEventListener('click', async ()
   }
 });
 
-document.getElementById('btn-mp-signin').addEventListener('click', () => {
+document.getElementById('btn-mp-signin')?.addEventListener('click', () => {
   _showAuthDialog(() => {
     _initMpStep();
     _fetchActiveSaves();
@@ -8521,9 +8529,12 @@ function _signOut() {
 }
 
 function _updateSessionBar() {
+  // Legacy footer session bar — absent now that the ledger is the menu; no-op
+  // when its elements aren't present (the ledger shows account state itself).
   const session = loadSession();
   const nameEl  = document.getElementById('setup-session-name');
   const btn     = document.getElementById('btn-setup-signout');
+  if (!nameEl || !btn) return;
   if (session) {
     nameEl.textContent = session.username;
     btn.textContent    = 'Sign Out';
@@ -8535,7 +8546,7 @@ function _updateSessionBar() {
 
 // ── Persistent sign-out (footer bar) ────────────────────────────────────────
 
-document.getElementById('btn-setup-signout').addEventListener('click', async () => {
+document.getElementById('btn-setup-signout')?.addEventListener('click', async () => {
   // If not logged in, the button reads "Sign In" — navigate to account page
   if (!loadSession()) { _initAccountPage(); showStep('account'); return; }
   // Warn if the account has no recovery method (no email, no Game Center)
