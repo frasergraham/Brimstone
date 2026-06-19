@@ -10042,41 +10042,45 @@ function _buildLedgerData() {
   };
 }
 
-// Dev preview for the new "Ledger" menu (WIP): `?ledger` shows the rail+ledger
-// frame over the legacy menu so it can be built + browser-verified before the
-// single cutover. At cutover this becomes the live menu (legacy toggle removed).
-if (new URLSearchParams(location.search).get('ledger') != null) {
-  import('./menu/ledger.js').then(({ initLedger }) => {
+// The Ledger is the live menu. It's skipped only for special URL modes that take
+// over the screen directly (scenario render, auto-replay, spectate) — those
+// drive #setup-screen / #game-screen themselves. The legacy #setup-screen is
+// hidden synchronously (no flash); the observers keep it hidden across the
+// menu↔game transitions, since the legacy menu DOM still backs a few shared
+// bits (the auth input) even though it's never shown.
+{
+  const _q = new URLSearchParams(location.search);
+  const _special = _q.get('scenario') != null || _q.get('replayGame') != null ||
+                   _q.get('spectate') != null || _q.get('room') != null;
+  if (!_special) {
     const ss = document.getElementById('setup-screen');
     ss?.style.setProperty('display', 'none');
-    const session = loadSession();
-    const api = initLedger({ playerName: session?.username || 'Wanderer', data: _buildLedgerData() });
-    api?.show();
-    // Sticky: in ?ledger mode the legacy menu must NEVER reappear. If anything
-    // (e.g. game-over → back to menu) shows #setup-screen while we're not in a
-    // game, hide it and re-show the ledger on Continue (with fresh saves).
-    if (ss && api) {
-      new MutationObserver(() => {
-        const inGame = getComputedStyle(document.getElementById('game-screen')).display !== 'none';
-        if (!inGame && getComputedStyle(ss).display !== 'none') {
-          ss.style.setProperty('display', 'none');
-          api.show();
-          api.select('continue');
-        }
-      }).observe(ss, { attributes: true, attributeFilter: ['style'] });
-    }
-    // A starting game shows #game-screen. Online games begin via the native
-    // lobby (which never touches #setup-screen, so the campaign/skirmish path of
-    // hiding the ledger before launch doesn't run) — get the ledger out of the
-    // way whenever the viewport appears. The setup-screen guard re-shows it when
-    // the game ends.
-    const gs = document.getElementById('game-screen');
-    if (gs && api) {
-      new MutationObserver(() => {
-        if (getComputedStyle(gs).display !== 'none') api.hide();
-      }).observe(gs, { attributes: true, attributeFilter: ['style'] });
-    }
-  }).catch((e) => console.error('Ledger preview load failed:', e));
+    import('./menu/ledger.js').then(({ initLedger }) => {
+      const session = loadSession();
+      const api = initLedger({ playerName: session?.username || 'Wanderer', data: _buildLedgerData() });
+      api?.show();
+      // Re-show the ledger if anything reveals the legacy #setup-screen (e.g.
+      // game-over → back to menu) while we're not in a game.
+      if (ss && api) {
+        new MutationObserver(() => {
+          const inGame = getComputedStyle(document.getElementById('game-screen')).display !== 'none';
+          if (!inGame && getComputedStyle(ss).display !== 'none') {
+            ss.style.setProperty('display', 'none');
+            api.show();
+            api.select('continue');
+          }
+        }).observe(ss, { attributes: true, attributeFilter: ['style'] });
+      }
+      // A starting game shows #game-screen — get the ledger out of the viewport
+      // (online games begin via the native lobby, which never touches #setup-screen).
+      const gs = document.getElementById('game-screen');
+      if (gs && api) {
+        new MutationObserver(() => {
+          if (getComputedStyle(gs).display !== 'none') api.hide();
+        }).observe(gs, { attributes: true, attributeFilter: ['style'] });
+      }
+    }).catch((e) => console.error('Ledger load failed:', e));
+  }
 }
 
 // Auto-start admin replay when ?replayGame=<gameId>[&source=sp] is in the URL.
