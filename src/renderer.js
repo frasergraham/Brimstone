@@ -606,6 +606,16 @@ export class Renderer {
     this._startAnimLoop();
   }
 
+  /** Play a unit's death visual + fade. The 2D renderer (editor-only) has no
+   *  skeletal death clip, so this keeps the legacy death-ring burst + sprite
+   *  fade — matching the 3D renderer's method name so main.js stays
+   *  renderer-agnostic. `col`/`row`/`color` are looked up from the entity by
+   *  the caller and passed through; here we only need the id + position. */
+  playDeathAnimAndFade(entityId, col = null, row = null, color = '#ff4444') {
+    if (col != null && row != null) this.addDeathAnim(col, row, color);
+    this.addFadeOutAnim(entityId, 600);
+  }
+
   /** Returns current opacity for an entity (1.0 if not fading, 0.0 when fully faded). */
   getFadeOutOpacity(entityId) {
     const anim = this._fadeOutAnims.get(entityId);

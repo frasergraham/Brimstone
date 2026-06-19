@@ -342,6 +342,10 @@ export const PUNCH_MODEL_FILE   = 'punch.glb';
 // reaction fires.
 export const HIT_MODEL_FILE     = 'hit.glb';
 export const BLOCK_MODEL_FILE   = 'block.glb';
+// Death clip — animation-only Mixamo export. Loaded lazily like punch/hit/block,
+// cloned per-standee, and played ONCE on a dying unit's own clone as it falls.
+// The standee then fades out (see getFadeOutOpacity's staged death fade).
+export const DEATH_MODEL_FILE   = 'death.glb';
 
 // Crossfade rate between idle and walking, in 1/seconds. 5.0 = full transition
 // in 200ms. Slow enough to read as a deliberate state change, fast enough that
@@ -445,6 +449,39 @@ export function computePunchSpeedRatio(natCycleSec, targetMs, fallback = 2.0) {
   if (!(targetMs > 0)) return fallback;
   const ratio = natCycleSec / (targetMs / 1000);
   return Math.max(0.5, Math.min(8.0, ratio));
+}
+
+/** Staged opacity ramp for a dying unit's fade-out (pure; exported for tests).
+ *
+ *  The fade is in TWO linear phases keyed off the actual death-clip length so
+ *  the boundary lands exactly when the fall animation ends:
+ *    • Phase A — while the Death clip plays (`0 → clipMs`): opacity 1.0 → 0.5.
+ *      So at clip-end (`elapsed === clipMs`) opacity is EXACTLY 0.5.
+ *    • Phase B — after the clip ends, unit lying stationary on the ground
+ *      (`clipMs → clipMs + groundMs`): opacity 0.5 → 0.
+ *
+ *  `elapsedMs` is time since the fade (and the clip) started. `clipMs` is the
+ *  measured Death-clip duration in ms (NOT a guess — the renderer passes
+ *  `deathDurationSec * 1000`). `groundMs` is how long the corpse lingers fading
+ *  on the ground after the clip. The result is monotonically non-increasing and
+ *  clamped to [0, 1]. When `clipMs <= 0` (clip length unknown), the whole fade
+ *  collapses to a single 1 → 0 ramp over `groundMs` so the unit still dissolves.
+ */
+export function stagedDeathOpacity(elapsedMs, clipMs, groundMs) {
+  const t = Math.max(0, elapsedMs || 0);
+  const clip = Math.max(0, clipMs || 0);
+  const ground = Math.max(1, groundMs || 0);
+  if (clip <= 0) {
+    // No measured clip — degrade to a plain 1 → 0 fade over the ground window.
+    return Math.max(0, Math.min(1, 1 - t / ground));
+  }
+  if (t <= clip) {
+    // Phase A: 1.0 → 0.5 across the clip. Exactly 0.5 at t === clip.
+    return 1 - 0.5 * (t / clip);
+  }
+  // Phase B: 0.5 → 0 across the ground window after the clip ends.
+  const after = t - clip;
+  return Math.max(0, 0.5 * (1 - after / ground));
 }
 
 /** Zero out the root-bone's translation keyframes so the animation drives
@@ -628,6 +665,9 @@ export const ANIMATION_BANK = Object.freeze({
   punch:   'punch.glb',
   hit:     'hit.glb',
   block:   'block.glb',
+  // Death clip (Mixamo, animation-only). Played once on a dying unit's own
+  // per-unit clone as it falls; the standee then fades out (see getFadeOutOpacity).
+  death:   'death.glb',
 });
 
 /** Renderer-side bank of available unit rigs. Each entry pairs a model
@@ -648,6 +688,7 @@ export const UNIT_RIG_BANK = Object.freeze({
       punch:   ANIMATION_BANK.punch,
       hit:     ANIMATION_BANK.hit,
       block:   ANIMATION_BANK.block,
+      death:   ANIMATION_BANK.death,
     }),
   }),
   // Future:
@@ -4147,6 +4188,76 @@ export class Renderer3D {
     });
   }
 
+  /** Play the Death (fall) clip ONCE on a dying unit's OWN clone, then start its
+   *  staged fade-out. Called from the resolution loop (main.js) the moment a
+   *  kill resolves — the replacement for the old `addDeathAnim + addFadeOutAnim`
+   *  pair.
+   *
+   *  Per-unit, like punch/hit/block: the clip plays on THIS entity's clone +
+   *  skeleton only, so siblings keep idling — never on the shared rig. The fade
+   *  starts in the SAME tick the clip starts, and its phase boundary is keyed
+   *  off the clip's REAL played length (`DEATH_TARGET_MS`, accounting for the
+   *  playback-speed multiplier) so opacity is exactly 0.5 when the fall ends,
+   *  then 0.5 → 0 over `DEATH_GROUND_FADE_MS` while the corpse lies still.
+   *
+   *  Degrades gracefully: if the clip hasn't cloned onto this unit yet (or the
+   *  unit has no rig — e.g. a cone-token), it kicks the idempotent load and
+   *  falls back to a plain timed fade so the kill still dissolves. */
+  playDeathAnimAndFade(entityId, _col = null, _row = null, _color = null) {
+    if (entityId == null) return;
+    const speedMul = this._playbackSpeedMul ?? 1.0;
+    // Played clip length in real time (the fade boundary keys off THIS, so it's
+    // exactly when the fall animation ends). Slowed by the playback multiplier
+    // so a sped-up/slowed-down replay keeps clip and fade in lockstep.
+    const clipMs = DEATH_TARGET_MS * speedMul;
+    const groundMs = DEATH_GROUND_FADE_MS * speedMul;
+
+    const standee = this._entityStandees?.get(entityId);
+    const clone = standee && standee.paladinClone;
+    const ent = this.state?.entities
+      ? this.state.entities.find(e => e && e.id === entityId) : null;
+    const src = ent ? this._loadedFallbackRigFor(ent) : null;
+    const group = clone && clone.groups && clone.groups.death;
+
+    if (!clone || !group) {
+      // Clip not cloned onto this unit yet (or no rig at all) — kick the
+      // idempotent load so it's ready next time, and fall back to a plain fade.
+      if (src) this._ensureRigDeath(src);
+      this.addFadeOutAnim(entityId, Math.max(1, clipMs + groundMs),
+        { isDeath: true, clipMs, groundMs });
+      return;
+    }
+
+    // Hand the skeleton to death: silence this unit's idle/walk/run/punch so
+    // none fight the fall. oneShotPlaying locks the locomotion toggle out.
+    for (const k of ['idle', 'walk', 'run', 'punch', 'hit', 'block']) clone.groups[k]?.stop?.();
+    clone.oneShotPlaying = true;
+    clone.activeGroup = 'death';
+
+    // Compress the source clip to play across clipMs of real time.
+    const dur = Number.isFinite(clone.deathDurationSec) ? clone.deathDurationSec : undefined;
+    const ratio = computePunchSpeedRatio(dur, clipMs, /*fallback*/ 1.0);
+
+    // Leave the rig in its final (collapsed) pose when the clip ends rather than
+    // snapping back to frame 0 — the corpse should stay down while it fades.
+    const onEnd = () => {
+      clone.oneShotPlaying = false;
+      // Do NOT clear activeGroup back to idle/null: keep the fallen pose held.
+      // The standee fades to 0 and is swapped out at the step boundary.
+      if (typeof group.pause === 'function') group.pause();
+    };
+    const obs = group.onAnimationGroupEndObservable;
+    if (obs && typeof obs.addOnce === 'function') obs.addOnce(onEnd);
+    else if (obs && typeof obs.add === 'function') obs.add(onEnd);
+
+    if (typeof group.stop === 'function') group.stop();
+    if (typeof group.start === 'function') group.start(false, Math.max(0.25, ratio));
+
+    // Start the staged fade in the SAME tick the clip starts.
+    this.addFadeOutAnim(entityId, Math.max(1, clipMs + groundMs),
+      { isDeath: true, clipMs, groundMs });
+  }
+
 
   /** Force-stop any in-flight punch and release the skeleton back to the
    *  idle/walk toggle. Used when a lunge is hard-cleared (round snap) so the
@@ -5054,6 +5165,7 @@ export class Renderer3D {
       { slot: 'punch', group: src.punchGroup, loop: false, speed: 1.0,                        oneShot: true, durKey: 'punchDurationSec' },
       { slot: 'hit',   group: src.hitGroup,   loop: false, speed: 1.0,                        oneShot: true, durKey: 'hitGroupDurationSec' },
       { slot: 'block', group: src.blockGroup, loop: false, speed: 1.0,                        oneShot: true, durKey: 'blockGroupDurationSec' },
+      { slot: 'death', group: src.deathGroup, loop: false, speed: 1.0,                        oneShot: true, durKey: 'deathDurationSec' },
     ];
   }
 
@@ -5295,6 +5407,49 @@ export class Renderer3D {
     return src.punchGroup;
   }
 
+  /** Lazily import death.glb and retarget it onto a fallback rig (idempotent
+   *  per rig). Pre-warmed when the rig loads so the first kill plays the fall
+   *  pose rather than snapping to a fade. Mirrors `_ensureRigPunch`. */
+  _ensureRigDeath(src, basePath = this._assetsBasePath || 'assets') {
+    if (!src || src.deathGroup || src._deathLoadPromise) return;
+    src._deathLoadPromise = Promise.resolve()
+      .then(() => this._loadDeathForRig(src, basePath))
+      .catch(err => { console.warn('[Renderer3D] rig death load failed.', err); return null; });
+  }
+
+  /** Import death.glb and retarget its clip onto `src`'s skeleton by bone name
+   *  (mirrors _loadPunchForRig). One-shot, non-looping, rest at frame 0 (stop)
+   *  until played. Stashes the source clip length on `src.deathDurationSec` so
+   *  the staged fade can place opacity at exactly 0.5 on clip-end. */
+  async _loadDeathForRig(src, basePath = this._assetsBasePath || 'assets') {
+    if (!this._babylon || !this._scene || !src || src.deathGroup) return src?.deathGroup || null;
+    const BABYLON = this._babylon;
+    if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') return null;
+    let result;
+    try {
+      result = await BABYLON.SceneLoader.ImportMeshAsync(
+        null, `${basePath}/${PALADIN_MODEL_DIR}`, DEATH_MODEL_FILE, this._scene,
+        this._glbProgressHandler('rig'));
+    } catch (err) {
+      console.warn(`[Renderer3D] death.glb import for ${src.cloneTag} failed`, err);
+      return null;
+    }
+    const native = (result.animationGroups || []).find(g => g) || null;
+    if (!native) { this._disposeWalkingImport(result); return null; }
+
+    // One-shot fall: loop=false, rest at frame 0 (stop) until played.
+    const clone = this._retargetNativeClipOntoRig(
+      native, src, `${src.cloneTag}DeathRetargeted`,
+      { keepY: !src.hipCentered, loop: false, rest: 'stop' });
+    if (clone) {
+      src.deathDurationSec = animDurationSeconds(native);
+      src.deathGroup = clone;
+      this._propagateClipToUnits(src, 'death');
+    }
+    this._disposeWalkingImport(result);
+    return src.deathGroup;
+  }
+
   /** Play one standee `clone`'s OWN punch clip for a single strike: silence its
    *  idle/walk/run so none fight its skeleton, mark `oneShotPlaying` so the
    *  locomotion toggle yields, and re-resolve idle/walk when the one-shot ends.
@@ -5480,6 +5635,9 @@ export class Renderer3D {
       // Pre-warm the strike clip so the first combat lunge punches rather than
       // sliding in silently.
       this._ensureRigPunch(src);
+      // Pre-warm the death clip so the first kill plays the fall pose rather
+      // than snapping straight to a fade.
+      this._ensureRigDeath(src);
       return src;
     })();
     this._rigLoadPromises.set(file, promise);
@@ -5935,18 +6093,33 @@ export class Renderer3D {
    *  a battle/splash kill resolves, so the unit dissolves at the end of the
    *  action that killed it rather than snapping out at the step boundary.
    *  Babylon owns a continuous render loop, so the next frame's _pumpFadeOuts
-   *  picks this up — no anim loop to kick. */
-  addFadeOutAnim(entityId, duration = 600) {
+   *  picks this up — no anim loop to kick.
+   *
+   *  Staged DEATH fade: pass `{ isDeath: true, clipMs, groundMs }` to ramp
+   *  1.0 → 0.5 across the death clip (opacity exactly 0.5 at clip-end), then
+   *  0.5 → 0 over `groundMs` while the corpse lies on the ground. Plain calls
+   *  (no opts / `isDeath` false) keep the legacy single 1 → 0 linear ramp. */
+  addFadeOutAnim(entityId, duration = 600, opts = null) {
     if (entityId == null || !this._fadeOutAnims) return;
-    this._fadeOutAnims.set(entityId, { startTime: Date.now(), duration: Math.max(1, duration) });
+    const entry = { startTime: Date.now(), duration: Math.max(1, duration) };
+    if (opts && opts.isDeath) {
+      entry.isDeath = true;
+      entry.clipMs = Math.max(0, opts.clipMs || 0);
+      entry.groundMs = Math.max(1, opts.groundMs || 0);
+    }
+    this._fadeOutAnims.set(entityId, entry);
   }
 
   /** Current opacity for an entity (1 when not fading, 0 when fully faded).
-   *  Same linear ramp as the 2D renderer so UI math is renderer-agnostic. */
+   *  Plain fades use the same linear ramp as the 2D renderer; death fades use
+   *  the staged 1 → 0.5 (clip) → 0 (ground) ramp via `stagedDeathOpacity` so
+   *  opacity is exactly 0.5 the instant the fall animation ends. */
   getFadeOutOpacity(entityId) {
     const anim = this._fadeOutAnims?.get(entityId);
     if (!anim) return 1;
-    const t = (Date.now() - anim.startTime) / anim.duration;
+    const elapsedMs = Date.now() - anim.startTime;
+    if (anim.isDeath) return stagedDeathOpacity(elapsedMs, anim.clipMs, anim.groundMs);
+    const t = elapsedMs / anim.duration;
     return Math.max(0, 1 - t);
   }
   getEntityScreenPositions(_col, _row, _entities, _rect)                     { return []; }
@@ -18127,6 +18300,20 @@ export { FACE_TURN_MS, FACING_EPSILON };
  *  the lunge) and the follow-through carries into the return slide, reading
  *  as a strike rather than slow-mo. Operator-tunable in one place. */
 export const PUNCH_TARGET_MS = 500;
+
+/** Real-time the death (fall) clip is compressed to play across (ms). The
+ *  Mixamo death clip is ~3s at source; ~1100ms reads as a decisive collapse
+ *  without overstaying the ~6s combat-sequence budget. The unit's opacity
+ *  ramps 1.0 → 0.5 across exactly this window (the fade boundary is keyed off
+ *  the clip's measured length, not this constant — see playDeathAnimAndFade).
+ *  Operator-tunable in one place. */
+export const DEATH_TARGET_MS = 1100;
+
+/** Real-time the corpse lingers fading 0.5 → 0 on the ground AFTER the fall
+ *  clip ends. Long enough to read as "lying dead then dissolving", short
+ *  enough that the resolution loop's step boundary swaps the entity out before
+ *  this lapses. Operator-tunable. */
+export const DEATH_GROUND_FADE_MS = 700;
 
 /** Fraction through the punch clip's frame range at which the strike "lands"
  *  (the mid/impact pose). The 3D cinematic battle arm freezes the punch here
