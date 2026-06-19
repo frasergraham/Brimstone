@@ -1031,9 +1031,12 @@ function _detailStatsHTML(d) {
     const max = d.score.threshold || 4;
     const pips = (side, n) => Array.from({ length: max }, (_, i) =>
       `<span class="score-pip ${side}${i < n ? ' filled' : ''}"></span>`).join('');
+    const dots = (d.nodes || []).map((n) =>
+      `<span class="node-dot ${esc(n.controller)}" style="border-color:${esc(n.color)}"></span>`).join('');
     out.push(`<div class="lg-detail-stat lg-detail-score"><span>Node score</span>` +
       `<span class="lg-detail-tracks">` +
         `<span class="score-track hero-track">${pips('hero', d.score.hero)}</span>` +
+        (dots ? `<span class="node-dots-group">${dots}</span>` : '') +
         `<span class="score-track witch-track">${pips('witch', d.score.witch)}</span>` +
       `</span><i>first to ${max}</i></div>`);
   }

@@ -5130,7 +5130,18 @@ function _gameDetail(row) {
       : null,
     kills: { hero: st.heroKills ?? 0, witch: st.witchKills ?? 0 },
     participants: _participantsFromEntities(st.entities),
+    nodes: _nodeOwnership(st),
   };
+}
+
+/** Per-power-node controller for the detail's node-dots (same nodeController the
+ *  in-game node status uses). The snapshot omits `alive` (an Entity getter), so
+ *  derive it from hp before handing the raw entities to nodeController. */
+function _nodeOwnership(st) {
+  const objs = st.witchObjectives;
+  if (!Array.isArray(objs) || !objs.length) return null;
+  const ents = (st.entities || []).map((e) => ({ ...e, alive: (e.hp ?? 0) > 0 }));
+  return objs.map((obj) => ({ controller: nodeController(obj, ents), color: obj.color ?? '#888' }));
 }
 
 /** Render the in-progress saves list on the vs. AI screen using mm-row style. */
