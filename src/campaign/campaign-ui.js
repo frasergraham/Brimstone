@@ -315,11 +315,15 @@ function weaponSlotsHTML(unit, idx) {
       const tip = `${weaponName(id)}${stat ? ' — ' + stat : ''}${eq ? ' · equipped' : ' · click to equip'}`;
       slots.push(`<div class="cprog-wslot${eq ? ' is-equipped' : ''}" draggable="true" data-from="unit" data-idx="${idx}" data-weapon="${id}" title="${tip}">`
         + `<span class="cprog-wslot-glyph">${itemGlyph(id)}</span>`
-        + (count > 1 ? `<span class="cprog-wslot-n">×${count}</span>` : '')
-        + (eq ? '<span class="cprog-wslot-eq" title="Equipped">✓</span>' : '')
-        + `</div>`);
+        + `<span class="cprog-wslot-info">`
+        + `<span class="cprog-wslot-name">${weaponName(id)}${count > 1 ? ` ×${count}` : ''}`
+        + (eq ? ' <span class="cprog-wslot-eq" title="Equipped">✓</span>' : '') + `</span>`
+        + (stat ? `<span class="cprog-wslot-stats">${stat}</span>` : '')
+        + `</span></div>`);
     } else {
-      slots.push('<div class="cprog-wslot is-empty" title="Drag a weapon here"><span class="cprog-wslot-plus">+</span></div>');
+      slots.push('<div class="cprog-wslot is-empty" title="Drag a weapon here">'
+        + '<span class="cprog-wslot-glyph">+</span>'
+        + '<span class="cprog-wslot-info"><span class="cprog-wslot-name">Empty slot</span></span></div>');
     }
   }
   return `<div class="cprog-wslots">${slots.join('')}</div>`;

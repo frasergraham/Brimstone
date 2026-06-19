@@ -228,17 +228,22 @@
 .lg-party .cprog-uabilities { display:flex; flex-wrap:wrap; gap:4px; margin-top:5px; }
 .lg-party .cprog-uability { font-size:9.5px; color:var(--lg-purple-lt); border:1px solid rgba(155,89,182,.3); border-radius:8px; padding:1px 6px; }
 
-/* Weapon slots on unit cards (drag to/from the inventory; click to equip) */
-.lg-party .cprog-wslots { display:flex; gap:5px; margin-top:7px; }
-.lg-party .cprog-wslot { position:relative; width:34px; height:34px; border:1px solid #2a2540; border-radius:5px;
-  background:rgba(8,9,14,.5); display:flex; align-items:center; justify-content:center; font-size:17px; cursor:grab; }
-.lg-party .cprog-wslot.is-empty { border-style:dashed; color:var(--lg-faint); cursor:default; font-size:14px; }
+/* Weapon slots on unit cards — full-width rows with name + stats (like the
+   inventory); draggable to/from the armory, click a carried one to equip. */
+.lg-party .cprog-wslots { display:flex; flex-direction:column; gap:5px; margin-top:7px; }
+.lg-party .cprog-wslot { display:flex; align-items:center; gap:7px; border:1px solid #2a2540; border-radius:5px;
+  background:rgba(8,9,14,.5); padding:5px 8px; cursor:grab; text-align:left; }
+.lg-party .cprog-wslot.is-empty { border-style:dashed; cursor:default; }
 .lg-party .cprog-wslot.is-equipped { border-color:var(--lg-gold-dim); background:rgba(40,32,18,.5); }
 .lg-party .cprog-wslot:not(.is-empty):not(.is-equipped):hover { border-color:var(--lg-purple); }
 .lg-party .cprog-wslot.is-dragging { opacity:.4; }
-.lg-party .cprog-wslot-eq { position:absolute; bottom:-3px; right:-3px; font-size:9px; color:var(--lg-gold); background:#14121c; border-radius:50%; padding:0 1px; }
-.lg-party .cprog-wslot-n { position:absolute; bottom:0; left:2px; font-size:8px; color:var(--lg-faint); }
-.lg-party .cprog-wslot-plus { color:var(--lg-faint); }
+.lg-party .cprog-wslot-glyph { font-size:17px; flex-shrink:0; line-height:1; }
+.lg-party .cprog-wslot.is-empty .cprog-wslot-glyph { color:var(--lg-faint); }
+.lg-party .cprog-wslot-info { display:flex; flex-direction:column; min-width:0; flex:1; gap:1px; }
+.lg-party .cprog-wslot-name { font-size:12px; color:var(--lg-ink-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.lg-party .cprog-wslot.is-empty .cprog-wslot-name { color:var(--lg-faint); font-style:italic; }
+.lg-party .cprog-wslot-stats { font-size:10px; color:var(--lg-gold-dim); }
+.lg-party .cprog-wslot-eq { color:var(--lg-gold); font-size:11px; }
 
 /* Carried non-weapon items — icon + name */
 .lg-party .cprog-inv { display:flex; flex-wrap:wrap; gap:5px; margin-top:6px; }
