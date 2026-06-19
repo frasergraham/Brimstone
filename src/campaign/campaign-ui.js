@@ -512,16 +512,7 @@ export function partyPaneHTML(heroStats, roster, activeIndices, maxActive, opts 
   const reserve = roster.map((_, i) => i).filter(i => !active.includes(i));
   const canAddMore = active.length < maxActive;
 
-  const heroUnit = {
-    name: 'Ishmael Charger', title: null, assetId: 'paladin',
-    color: ENTITY_COLOR[EntityType.PALADIN],
-    hp: heroStats.hp, maxHp: heroStats.maxHp,
-    attack: heroStats.attack, defense: heroStats.defense,
-    agility: heroStats.agility ?? 6,    // paladin base agility (UNIT_TYPES.paladin)
-    abilities: heroStats.abilities || [],
-    level: heroStats.level, xp: heroStats.xp,
-    items: heroStats.items,
-  };
+  const heroUnit = heroStatsToUnit(heroStats);
 
   let html = '<div class="cprog-party-scroll">';
 
@@ -535,7 +526,7 @@ export function partyPaneHTML(heroStats, roster, activeIndices, maxActive, opts 
   });
   for (const i of active) {
     const s = roster[i];
-    html += progressUnitCardHTML(_survivorUnit(s), {
+    html += progressUnitCardHTML(survivorToUnit(s), {
       idx: i,
       canHeal: herbs > 0 && s.hp < s.maxHp,
       control: { cls: 'cprog-demote', label: '−', title: 'Move to reserve' },
@@ -554,7 +545,7 @@ export function partyPaneHTML(heroStats, roster, activeIndices, maxActive, opts 
     html += '<div class="cprog-grid reserve-grid">';
     for (const i of reserve) {
       const s = roster[i];
-      html += progressUnitCardHTML(_survivorUnit(s), {
+      html += progressUnitCardHTML(survivorToUnit(s), {
         idx: i, reserve: true,
         canHeal: herbs > 0 && s.hp < s.maxHp,
         control: canAddMore ? { cls: 'cprog-promote', label: '+', title: 'Move to active' } : null,
@@ -580,7 +571,7 @@ export function partyPaneHTML(heroStats, roster, activeIndices, maxActive, opts 
 }
 
 /** Map a roster snapshot into the unit shape progressUnitCardHTML expects. */
-function _survivorUnit(s) {
+export function survivorToUnit(s) {
   return {
     name: s.name, title: s.title,
     assetId: Renderer.survivorAssetId(s.title) || 'survivor_innkeeper',
@@ -590,6 +581,84 @@ function _survivorUnit(s) {
     abilities: s.abilities || [],
     level: s.level, xp: s.xp, items: s.items,
   };
+}
+
+/** Map the fixed campaign hero's stats into the party-pane unit shape. */
+export function heroStatsToUnit(heroStats) {
+  return {
+    name: 'Ishmael Charger', title: null, assetId: 'paladin',
+    color: ENTITY_COLOR[EntityType.PALADIN],
+    hp: heroStats.hp, maxHp: heroStats.maxHp,
+    attack: heroStats.attack, defense: heroStats.defense,
+    agility: heroStats.agility ?? 6,    // paladin base agility (UNIT_TYPES.paladin)
+    abilities: heroStats.abilities || [],
+    level: heroStats.level, xp: heroStats.xp,
+    items: heroStats.items,
+  };
+}
+
+// ── Debrief party + rewards (party-management card UX) ──────────────────────
+//
+// The post-mission debrief renders its surviving roster and its reward survivors
+// with the EXACT same per-unit card the Party Management screen uses
+// (progressUnitCardHTML — the rich card: portrait, level/XP, HP bar, ATK/DEF,
+// abilities, weapon slots). debriefPartyHTML / debriefRewardsSectionHTML are the
+// debrief-side wrappers; the cards are byte-identical to the party pane so the
+// two screens match. The debrief is read-only — no idx/heal/promote controls are
+// passed (the cards are static), keeping the surface free of dangling buttons.
+
+/**
+ * The debrief's surviving-roster body — the fixed campaign hero card followed by
+ * one card per surviving survivor, each rendered through the party-management
+ * card builder (progressUnitCardHTML). Read-only: no heal/promote/demote controls.
+ * @param {object} heroStats  hero snapshot ({ hp, maxHp, attack, defense, level?, xp?, items? })
+ * @param {object[]} survivors  roster snapshots (snapshotSurvivor / reconciled)
+ * @returns {string} debrief roster HTML
+ */
+export function debriefPartyHTML(heroStats, survivors) {
+  const cards = [
+    progressUnitCardHTML(heroStatsToUnit(heroStats), { idx: 'leader', isHero: true }),
+    ...survivors.map((s, i) => progressUnitCardHTML(survivorToUnit(s), { idx: i })),
+  ].join('');
+  return `<div class="cprog-grid debrief-party-grid">${cards}</div>`;
+}
+
+/**
+ * The debrief's ✦ Rewards section, rendered with the party-management card UX.
+ * Granted survivors use progressUnitCardHTML (same rich card as the surviving
+ * roster + the party screen), each wrapped so a NEW badge hangs over the corner.
+ * Resource gains keep the "✦ +N <resource>" chip line. Returns '' when there is
+ * nothing granted (a loss, or a win that granted nothing).
+ *
+ * @param {{survivors?:object[], resources?:Object<string,number>}} rewards
+ * @returns {string} rewards HTML, or '' when there's nothing granted.
+ */
+export function debriefRewardsSectionHTML(rewards) {
+  const survivors = Array.isArray(rewards?.survivors) ? rewards.survivors : [];
+  const resources = rewards?.resources && typeof rewards.resources === 'object'
+    ? rewards.resources : {};
+  const resEntries = Object.entries(resources).filter(([, v]) => v > 0);
+  if (survivors.length === 0 && resEntries.length === 0) return '';
+
+  let body = '';
+  if (survivors.length) {
+    // Reuse the party-management unit card verbatim, wrapped so a NEW badge can
+    // sit over the corner — consistent style with the surviving-roster cards.
+    const cards = survivors.map((s, i) =>
+      `<div class="reward-survivor"><span class="reward-new-badge">NEW</span>${progressUnitCardHTML(survivorToUnit(s), { idx: `reward-${i}` })}</div>`
+    ).join('');
+    body += `<div class="reward-survivors cprog-grid debrief-party-grid">${cards}</div>`;
+  }
+  if (resEntries.length) {
+    const chips = resEntries.map(([k, v]) =>
+      `<span class="reward-resource"><span class="reward-res-icon">${RESOURCE_ICONS[k] || '🎒'}</span>+${v} ${k}</span>`
+    ).join('');
+    body += `<div class="reward-resources">✦ ${chips}</div>`;
+  }
+  return `<div class="reward-section">
+    <h3 class="reward-heading">✦ Rewards</h3>
+    ${body}
+  </div>`;
 }
 
 /**

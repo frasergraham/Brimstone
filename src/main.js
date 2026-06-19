@@ -74,11 +74,11 @@ import {
   RESOURCE_ICONS as _RESOURCE_ICONS, hpColor as _hpColor,
   loadCampaignPortraits as _loadCampaignPortraits, getCampaignPortrait as _getCampaignPortrait,
   campaignCardHTML as _campaignCardHTML, survivorCardHTML as _survivorCardHTML,
-  campaignPartyHTML as _campaignPartyHTML, buildDebriefHeader, objectiveDescription as _objectiveDescription,
+  buildDebriefHeader, objectiveDescription as _objectiveDescription,
   weaponName as _weaponName, weaponStatString as _weaponStatString,
   partyPaneHTML as _partyPaneHTML, missionListPaneHTML as _missionListPaneHTML,
   progressSquadCap as _progressSquadCap, fallenSectionHTML as _fallenSectionHTML,
-  rewardsSectionHTML as _rewardsSectionHTML,
+  debriefPartyHTML as _debriefPartyHTML, debriefRewardsSectionHTML as _debriefRewardsSectionHTML,
   missionRows as _missionRows,
   departureMessage as _departureMessage, arrivalMessage as _arrivalMessage,
 } from './campaign/campaign-ui.js';
@@ -5042,9 +5042,16 @@ function _handleCampaignMissionEnd() {
 
   // Roster status — rich party cards + this-run fallen memorial.
   const rosterEl = document.getElementById('debrief-roster');
+  // Rich party-management card needs level/XP/abilities/agility too — carry them
+  // straight off the live hero on a win (matching the snapshot stored into
+  // Campaign.heroStats above) so the debrief card reads identically to the Party
+  // Management screen. A loss falls back to the persisted heroStats.
   const heroSnap = won && state.hero ? {
     hp: state.hero.hp, maxHp: state.hero.maxHp,
     attack: state.hero.attack, defense: state.hero.defense,
+    agility: state.hero.agility,
+    abilities: state.hero.abilities || [],
+    level: state.hero.level, xp: state.hero.xp,
     items: normalizeItems(state.hero.items),
   } : _activeCampaign.heroStats;
   const rosterHeading = won ? 'Surviving Roster' : 'Party Restored';
@@ -5058,10 +5065,13 @@ function _handleCampaignMissionEnd() {
     // reward, not a returning party member; '' (no section) on a loss or when the
     // mission granted nothing. The granted ally is NOT in `survivors` (granting
     // runs after the roster reconcile), so it shows here and nowhere else.
+    // Surviving roster + reward survivors both render with the SAME
+    // party-management unit card (progressUnitCardHTML) so the debrief matches
+    // the Ledger "Manage the Party" screen exactly.
     rosterEl.innerHTML =
-      _rewardsSectionHTML(rewardSummary) +
+      _debriefRewardsSectionHTML(rewardSummary) +
       `<h3>${rosterHeading}</h3>` +
-      _campaignPartyHTML(heroSnap, survivors) +
+      _debriefPartyHTML(heroSnap, survivors) +
       _fallenSectionHTML(newlyFallen, missionTitleResolver);
   }
 
@@ -9686,6 +9696,11 @@ function _buildLedgerData() {
       // back into the Campaign panel (api.show() + api.select('campaign')) without
       // tripping the setup-screen observer below.
       _ledgerApi = api;
+      // Verification hook: launch a campaign mission directly (skipping the
+      // Ledger's campaign → briefing → Begin click path) so the browser harness
+      // can reach a specific mission's debrief. Inert in normal play.
+      window.__startCampaignMission = (missionId, slot = 1, resume = false) =>
+        _ledgerStartCampaignMission(slot, missionId, resume);
       api?.show();
       // Re-show the ledger if anything reveals the legacy #setup-screen (e.g.
       // game-over → back to menu) while we're not in a game.
