@@ -56,20 +56,22 @@ describe('Renderer3D attack arrow — Y placement layers above move plan', () =>
 
 // ── Rendering-group z-order ─────────────────────────────────────────────────
 //
-// Planning-mode attack visuals (arrow tubes + ×N badges) must always draw on
-// top of unit standees and the floating unit-icon billboard. Babylon
-// `renderingGroupId` groups bypass the depth buffer and render in ascending
-// order, so we pin a constant strictly above the known group ids used
-// elsewhere in the renderer.
+// Planning-mode attack visuals (arrow tubes + ×N badges) must draw ABOVE the
+// board but BELOW the unit-icon billboards — the icons (and the hit/crush %%
+// painted into their badge texture) draw LAST so an arrow can never cover
+// them. Babylon `renderingGroupId` groups render in ascending order; the
+// overlay groups (1, 2) get a cleared depth slate so they sit on top of the
+// world without depth-testing against it (see `setRenderingAutoClear-
+// DepthStencil` in `_initBabylon`).
 //
 //   group 0  world geometry — terrain, ribbons, buildings, standees, hex
-//            outlines, plan ghosts. Depth buffer handles z-order here so
-//            buildings can occlude units they sit in front of.
-//   group 2  unit-icon billboard (owned by task t-40ab45b0)
-//   group 3  attack overlay (this task)
+//            outlines, move arrows, plan ghosts. Depth buffer handles z-order
+//            here so buildings can occlude units they sit in front of.
+//   group 1  attack overlay (arrow tubes + ×N badge)
+//   group 2  unit-icon billboard (+ floaters / speech bubbles) — drawn last,
+//            on top of the attack overlay.
 //
-// Babylon's default MaxRenderingGroupId is 4, so group 3 is the highest legal
-// value without touching scene config.
+// Babylon's default MaxRenderingGroupId is 4 (valid range 0..3).
 
 describe('Renderer3D attack overlay — renderingGroupId z-order', () => {
   test('ATTACK_OVERLAY_GROUP is strictly above world geometry (group 0)', () => {
@@ -77,9 +79,10 @@ describe('Renderer3D attack overlay — renderingGroupId z-order', () => {
       `ATTACK_OVERLAY_GROUP ${ATTACK_OVERLAY_GROUP} must beat world geometry (group 0)`);
   });
 
-  test('ATTACK_OVERLAY_GROUP is strictly above the unit-icon billboard group (2)', () => {
-    assert.ok(ATTACK_OVERLAY_GROUP > 2,
-      `ATTACK_OVERLAY_GROUP ${ATTACK_OVERLAY_GROUP} must beat the icon billboard (group 2, t-40ab45b0)`);
+  test('ATTACK_OVERLAY_GROUP is strictly BELOW the unit-icon billboard group (2)', () => {
+    assert.ok(ATTACK_OVERLAY_GROUP < 2,
+      `ATTACK_OVERLAY_GROUP ${ATTACK_OVERLAY_GROUP} must sit under the icon ` +
+      `billboard (group 2) so arrows never cover the icons + hit/crush %%`);
   });
 
   test('ATTACK_OVERLAY_GROUP fits within Babylon\'s default MaxRenderingGroupId (≤ 3)', () => {

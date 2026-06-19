@@ -42,12 +42,13 @@ describe('Renderer3D — rendering group policy constants', () => {
     assert.equal(XRAY_GHOST_GROUP, WORLD_GROUP);
   });
 
-  test('UI groups stack strictly above world geometry: world < icon < attack overlay', () => {
-    assert.ok(UNIT_ICON_GROUP > WORLD_GROUP,
-      'icon billboards / floaters must beat world geometry');
-    assert.ok(ATTACK_OVERLAY_GROUP > UNIT_ICON_GROUP,
-      'attack overlays must beat icon billboards');
-    assert.ok(ATTACK_OVERLAY_GROUP <= 3,
+  test('UI groups stack above world geometry: world < attack overlay < icon', () => {
+    assert.ok(ATTACK_OVERLAY_GROUP > WORLD_GROUP,
+      'attack arrows must beat world geometry (board, move arrows, ghosts)');
+    assert.ok(UNIT_ICON_GROUP > ATTACK_OVERLAY_GROUP,
+      'unit icons + the hit/crush %% painted into their badge texture must ' +
+      'draw LAST, on top of every attack arrow — arrows must NOT cover them');
+    assert.ok(UNIT_ICON_GROUP <= 3,
       'Babylon supports groups 0..3 by default');
   });
 });
@@ -199,6 +200,50 @@ describe('Renderer3D — _buildPlanBattleArrows assigns ATTACK_OVERLAY_GROUP', (
     }
     assert.equal(badgeEntry.badge.renderingGroupId, ATTACK_OVERLAY_GROUP,
       'the ×N badge shares the overlay group');
+  });
+});
+
+// ─── Overlay depth isolation (depth-buffer glitch fix) ──────────────────────
+//
+// The OPAQUE attack-arrow tubes write depth. Without per-group depth clears,
+// Babylon shares one depth buffer across all rendering groups for the whole
+// frame, so the overlay group's depth writes leak back into the world group's
+// depth-dependent passes (shadow receive + foliage depth-prepass) — the
+// "flat trees + orphan shadows" glitch. `_isolateOverlayDepthGroups` clears
+// each overlay group's depth (NOT stencil — the world-group x-ray stencil must
+// survive) so overlays sit on top without polluting world depth.
+
+describe('Renderer3D — _isolateOverlayDepthGroups clears overlay depth only', () => {
+  test('both overlay groups clear DEPTH but not STENCIL; world group untouched', () => {
+    const inst = Object.create(Renderer3D.prototype);
+    const calls = [];
+    const scene = {
+      setRenderingAutoClearDepthStencil(group, autoClear, depth, stencil) {
+        calls.push({ group, autoClear, depth, stencil });
+      },
+    };
+
+    inst._isolateOverlayDepthGroups(scene);
+
+    const byGroup = new Map(calls.map(c => [c.group, c]));
+    // World group must NOT be reconfigured — it keeps the scene-level
+    // frame-start depth clear and its own depth sorting.
+    assert.equal(byGroup.has(WORLD_GROUP), false,
+      'the world group must not get a per-group depth clear');
+
+    for (const g of [ATTACK_OVERLAY_GROUP, UNIT_ICON_GROUP]) {
+      const c = byGroup.get(g);
+      assert.ok(c, `group ${g} must be configured`);
+      assert.equal(c.autoClear, true, `group ${g} must auto-clear`);
+      assert.equal(c.depth, true,    `group ${g} must clear depth (isolation)`);
+      assert.equal(c.stencil, false, `group ${g} must NOT clear stencil (x-ray stencil lives in the world group)`);
+    }
+  });
+
+  test('is a safe no-op when the scene lacks the API (node-test stub / null)', () => {
+    const inst = Object.create(Renderer3D.prototype);
+    assert.doesNotThrow(() => inst._isolateOverlayDepthGroups(null));
+    assert.doesNotThrow(() => inst._isolateOverlayDepthGroups({}));
   });
 });
 
