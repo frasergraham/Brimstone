@@ -9,7 +9,7 @@
 
 import { ENTITY_COLOR, normalizeDamage, isLeaderType } from './entities.js';
 import { makeOverlay } from './overlays.js';
-import { ITEMS, getWeaponDamage } from './items.js';
+import { ITEMS, getWeaponDamage, lootDisplayLabel } from './items.js';
 import { pickBlockWord } from './combat-words.js';
 
 // Format a weapon damage spec for the breakdown popup: "2D6", "1D12+1", or a
@@ -670,16 +670,21 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
         target = unitRef({ type: a.summonType });
       }
 
-      // Explore reports the loot gained as the actual resource icons (🌿 🪵 ⚙
-      // …), not a generic "+1 RESOURCE". Empty roll ⇒ "EXPLORED". The extra
-      // `loot` kind bumps the emoji size on the card — at the outcome cell's
-      // text size the icons are too small to read.
+      // Explore reports the loot gained with its full name + stats when the id
+      // is known (e.g. "⚔ Sword (+2 ATK)", "🪵 Wood"), falling back to the bare
+      // emoji floaters for older/online events that predate `lootItemIds`. Empty
+      // roll ⇒ "EXPLORED". The `loot` kind bumps the card text size.
       let note = null;
       if (a.type === PA.EXPLORE) {
-        const icons = lootIcons(ev.result);
-        note = icons.length
-          ? { text: icons.join(' '), kind: 'gain loot' }
-          : { text: 'EXPLORED', kind: 'info' };
+        const labels = (ev.result?.lootItemIds ?? []).map(lootDisplayLabel).filter(Boolean);
+        if (labels.length) {
+          note = { text: labels.join(' · '), kind: 'gain loot' };
+        } else {
+          const icons = lootIcons(ev.result);
+          note = icons.length
+            ? { text: icons.join(' '), kind: 'gain loot' }
+            : { text: 'EXPLORED', kind: 'info' };
+        }
       }
 
       // Discovered survivor(s)/zombie(s) — a move / explore / horn can surface

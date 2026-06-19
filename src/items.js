@@ -211,6 +211,28 @@ export function getItem(id) {
   return ITEMS[id];
 }
 
+// Discovered loot that isn't a registered ITEM (horse mount + raw resources)
+// still wants a readable, stat-bearing label in the action card / round summary.
+const NON_ITEM_LOOT_LABELS = Object.freeze({
+  horse:     '🐴 Horse (+1 move)',
+  herbs:     '🌿 Herbs',
+  wood:      '🪵 Wood',
+  metal:     '⚙ Metal',
+  food:      '🍞 Food',
+  silver:    '🥈 Silver',
+  scripture: '📜 Scripture',
+});
+
+/**
+ * Human-readable label for a discovered loot id, including its emoji and any
+ * stat summary. Weapons/key items reuse their authored `label` (already in the
+ * "⚔ Sword (+2 ATK)" form); horse + resources use a small fallback table.
+ * Falls back to the raw id so an unknown loot id never renders blank.
+ */
+export function lootDisplayLabel(id) {
+  return ITEMS[id]?.label ?? NON_ITEM_LOOT_LABELS[id] ?? String(id ?? '');
+}
+
 /**
  * The per-hit damage spec for an equipped weapon id. Unarmed units (null /
  * unknown weapon) fall back to DEFAULT_ATTACK_DAMAGE (2D6). Pair with

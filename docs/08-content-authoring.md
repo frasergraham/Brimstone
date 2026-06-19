@@ -103,6 +103,34 @@ Campaign missions are **data-driven JSON** under `src/campaign/missions/*.json` 
 
 **Schema & loader:** see `src/campaign/missions/Ch1M6.json` for the canonical example, `docs/design/campaign-mission-editor.md` for the full spec, and `docs/07-data-persistence.md` → "JSON Mission Format". The `map` sub-object (`mode: "handmade"` | `"procedural"`) is built by `buildMissionMap` (`src/campaign/mission-map.js`); everything else mirrors the runtime mission shape verbatim.
 
+### Procedural "vs AI" missions (no authored map)
+
+A mission can be a **plain skirmish vs the witch AI** — no painted tiles, no logic graph — defined purely by a seeded procedural map plus the standard victory. The map sub-object carries `mode: "procedural"` with `seed` (fixed for a reproducible map, or omit for random), `mapSize`, and `nodeCount`; `buildMissionMap` calls `generateMap(seed, mapSize, nodeCount)` and the GameState spins up exactly like a Human-vs-AI game. Wire the standard victory through the delegate and set the points goal with `nodeScoreThreshold`:
+
+```json
+{
+  "schema": 1, "id": "village_marsh_end", "hasWitch": true,
+  "aiPersonality": "balanced", "nodeScoreThreshold": 3,
+  "map": { "mode": "procedural", "seed": 31001, "mapSize": "skirmish", "nodeCount": 2 },
+  "objectives": {
+    "win":  [ { "type": "slay_witch" }, { "type": "control_nodes" } ],
+    "lose": [ { "type": "hero_killed" }, { "type": "witch_score_threshold", "points": 3 } ]
+  }
+}
+```
+
+`control_nodes` returns the `DEFERRED` sentinel from the delegate, so the built-in node-score victory (first to `nodeScoreThreshold`) and leader-death win run normally — the objectives just make "slay the witch OR win on points" explicit. Keep scoring **on** (`disableScoring` omitted/false). The five Chapter-1 villages (`Ch1V1`–`Ch1V5`) are the worked examples; pick seeds whose Power-node clusters are triangles (the `tests/campaign-missions-567.test.js` invariant) — some seeds place a linear cluster near a border.
+
+### Dynamic witch difficulty (`aiBudgetBonus`)
+
+`aiBudgetBonus` (extra witch actions/turn) is normally a static integer, but it may instead be a rule that scales with campaign progress, resolved at mission launch by `effectiveAiBudgetBonus(missionDef, campaign)` (`src/campaign/campaign.js`):
+
+```json
+"aiBudgetBonus": { "type": "missing_wins", "of": ["village_marsh_end", "..."], "target": 5 }
+```
+
+→ bonus = `max(0, target − (wins among "of"))`. The Long Watch (`Ch1M6`) uses this: it unlocks on a `{ "unlock": { "anyOf": { "count": 3, "of": [villages] } } }` gate (win any 3 of the 5 — `completedMissions` tracks **wins only**), and the witch's bonus eases the more villages were cleared (3 won → +2, 4 → +1, 5 → +0). `unlock` is AND-ed with the legacy `requires`; see `src/campaign/unlock.js` for the full criteria grammar.
+
 **Enemy unit levels (difficulty ramp):** any `enemyUnits[]` or `waves[].units[]`
 spec accepts an optional `"level": N` (integer ≥1). At spawn, `applyLevel` scales
 the unit's HP/ATK/DEF by the Standard curve (HP ×(1+0.5·(L−1)), +1 ATK/level,

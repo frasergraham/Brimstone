@@ -1398,6 +1398,7 @@ export function _serializeEvents(events) {
         breakdown:         ev.result.breakdown        ?? null,
         path:              ev.result.path             ?? [],
         lootItems:         ev.result.lootItems        ?? [],
+        lootItemIds:       ev.result.lootItemIds      ?? [],
       };
       // SENT_TO surfaces extra fields on its result so BOTH cards
       // (sender + recipient) can render with proper names. Keep purely

@@ -7,7 +7,7 @@ import { GameState, Phase, phaseForRound, getCycleLength, DEFAULT_CYCLE_PHASES }
 import { EntityType, createMinion, createZombie, createWoodGolem, createSurvivor, markRosterUsedByName, resetRoster, SURVIVOR_ROSTER, getEquippedWeaponIdOf } from '../src/entities.js';
 import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import {
-  Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves,
+  Campaign, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves,
   reconcileRosterAfterMission, applyCarriedHeroLoadout,
 } from '../src/campaign/campaign.js';
 import { getFaction } from '../src/factions.js';
@@ -158,8 +158,8 @@ describe('Mission definitions', () => {
     }
   });
 
-  test('Chapter 1 has 8 missions total (tutorial + 7 story missions)', () => {
-    assert.equal(hollowDef.missions.length, 8);
+  test('Chapter 1 has 13 missions total (tutorial + 7 story + 5 villages)', () => {
+    assert.equal(hollowDef.missions.length, 13);
   });
 
   test('the folded-in tutorial is the first mission', () => {
@@ -650,7 +650,7 @@ describe('Campaign class', () => {
   test('campaign stores campaignDef reference', () => {
     const c = new Campaign(hollowDef);
     assert.equal(c.campaignDef.id, 'calebs_hollow_prologue');
-    assert.equal(c.campaignDef.missions.length, 8);
+    assert.equal(c.campaignDef.missions.length, 13);
   });
 
   test('save slot defaults to slot 1', () => {
@@ -763,15 +763,13 @@ describe('Campaign class', () => {
   test('getMissionList returns correct statuses', () => {
     const c = new Campaign(hollowDef);
     const list = c.getMissionList();
-    assert.equal(list.length, 8);
+    assert.equal(list.length, 13);     // tutorial + 7 story + 5 villages
+    // On a fresh save only the two prereq-free openers are playable.
     assert.ok(list[0].available);      // tutorial — no prereqs
     assert.ok(list[1].available);      // prologue (The Awakening) — no prereqs either
-    assert.ok(!list[2].available);     // gathering_survivors — needs prologue
-    assert.ok(!list[3].available);     // first_night — needs gathering_survivors
-    assert.ok(!list[4].available);     // river_crossing — needs first_night
-    assert.ok(!list[5].available);     // dark_ritual — needs river_crossing
-    assert.ok(!list[6].available);     // long_watch — needs dark_ritual
-    assert.ok(!list[7].available);     // witchs_trail — needs long_watch
+    for (let i = 2; i < list.length; i++) {
+      assert.ok(!list[i].available, `${list[i].id} should be locked on a fresh save`);
+    }
   });
 
   test('getMissionList visibility shows only completed + playable + immediate-next', () => {
@@ -1552,9 +1550,11 @@ describe('disableScoring on missions', () => {
       // The conductor-driven tutorial teaches scoring live, so its flag is
       // incidental — skip it here.
       if (m.isTutorial) continue;
-      // witchs_trail uses multiplayer-style scoring as its loss condition,
-      // so it's the lone exception that opts INTO scoring.
-      const expected = m.id === 'witchs_trail' ? false : true;
+      // Scoring-driven battles opt INTO node scoring: witchs_trail uses it as a
+      // loss condition, and the optional "battle for the nodes" villages win/lose
+      // on the score threshold. Every other (node-less) story mission disables it.
+      const scoringBattle = m.id === 'witchs_trail' || m.id.startsWith('village_');
+      const expected = scoringBattle ? false : true;
       assert.equal(m.disableScoring, expected,
         `${m.id} disableScoring should be ${expected}`);
     }
@@ -1691,11 +1691,14 @@ describe('mission story triggers and loot overrides', () => {
     assert.ok(lose.some(l => l.type === 'witch_holds_node'));
   });
 
-  test('mission progression chain is valid (tutorial + 7 story missions)', () => {
+  test('mission progression chain is valid (tutorial + 7 story + 5 villages)', () => {
     const ids = hollowDef.missions.map(m => m.id);
     assert.deepEqual(ids, [
       'tutorial', 'prologue', 'gathering_survivors', 'first_night',
-      'river_crossing', 'dark_ritual', 'long_watch', 'witchs_trail',
+      'river_crossing', 'dark_ritual',
+      'village_marsh_end', 'village_thornwick', 'village_gallows_ferry',
+      'village_ashford_mill', 'village_blackfen',
+      'long_watch', 'witchs_trail',
     ]);
   });
 
@@ -1879,10 +1882,16 @@ describe('Campaign mid-mission save/resume', () => {
 // ── Campaign AI budget bonus ──────────────────────────────────────────────
 
 describe('Campaign AI budget bonus', () => {
-  test('all prologue missions have aiBudgetBonus defined', () => {
+  test('every prologue mission resolves to a sane witch budget bonus', () => {
+    // aiBudgetBonus may be a static integer, omitted (→ 0, e.g. the optional
+    // "normal vs AI" villages), or a dynamic { type:"missing_wins", … } object
+    // (the Long Watch). In every case it must resolve to a finite bonus ≥ 0.
+    const fullyCleared = new Campaign({ id: 'calebs_hollow_prologue', missions: hollowDef.missions, mapBuilders: {} });
+    fullyCleared.completedMissions = new Set(hollowDef.missions.map(m => m.id));
     for (const m of hollowDef.missions) {
-      assert.ok(typeof m.aiBudgetBonus === 'number', `${m.id} missing aiBudgetBonus`);
-      assert.ok(m.aiBudgetBonus >= 0, `${m.id} aiBudgetBonus should be at least 0`);
+      const bonus = effectiveAiBudgetBonus(m, fullyCleared);
+      assert.ok(Number.isFinite(bonus), `${m.id} aiBudgetBonus must resolve to a number`);
+      assert.ok(bonus >= 0, `${m.id} aiBudgetBonus should be at least 0`);
     }
   });
 

@@ -97,6 +97,11 @@ export function legacyCampaignSaveSlot(campaignId) {
  * effects are deliberately dropped: they belong to a single deployment and
  * shouldn't shape the next mission's starting roster.
  */
+// Max weapons a single unit may carry into a mission (one equipped, the rest
+// swappable mid-mission). The party screen enforces this when handing weapons
+// out of the shared armory.
+export const WEAPON_CARRY_CAP = 2;
+
 export function snapshotSurvivor(entity) {
   const permanentEffects = Array.isArray(entity.effects)
     ? entity.effects.filter(e => e.duration === 'permanent').map(e => ({ ...e }))
@@ -112,6 +117,7 @@ export function snapshotSurvivor(entity) {
     maxHp:        entity.maxHp,
     attack:       entity.attack,
     defense:      entity.defense,
+    agility:      entity.agility,
     // Campaign veterancy — carry level + accumulated XP between missions. Before
     // this, static levels evaporated and survivors reset to L1 each mission.
     level:        entity.level || 1,
@@ -220,6 +226,31 @@ export function buildVictoryDelegate(objectives) {
     }
     return null; // no victory yet
   };
+}
+
+/**
+ * Resolve a mission's effective witch AI budget bonus. `aiBudgetBonus` is
+ * normally a static integer, but a mission may instead declare a DYNAMIC bonus
+ * that scales with campaign progress:
+ *
+ *   "aiBudgetBonus": { "type": "missing_wins", "of": [ids…], "target": N }
+ *
+ * → bonus = max(0, target − (how many of `of` are already won)). This drives the
+ * Long Watch (M6) difficulty: the more neighbouring villages the hero cleared,
+ * the fewer extra actions the witch gets — with target 5, 3 villages won ⇒ +2,
+ * 4 ⇒ +1, 5 ⇒ +0. Returns 0 for an absent/zero bonus or a null campaign.
+ */
+export function effectiveAiBudgetBonus(missionDef, campaign) {
+  const b = missionDef?.aiBudgetBonus;
+  if (b == null) return 0;
+  if (typeof b === 'number') return b;
+  if (typeof b === 'object' && b.type === 'missing_wins') {
+    const of = Array.isArray(b.of) ? b.of : [];
+    const target = Number.isFinite(b.target) ? b.target : of.length;
+    const won = of.reduce((n, id) => n + (campaign?.completedMissions?.has(id) ? 1 : 0), 0);
+    return Math.max(0, target - won);
+  }
+  return 0;
 }
 
 // Sentinel returned by a win condition that should defer to external systems
@@ -1190,6 +1221,34 @@ export class Campaign {
     this.weapons = pool;
     this.save();
     return weaponId;
+  }
+
+  /**
+   * Carry an extra weapon from the shared armory into a unit's backpack WITHOUT
+   * displacing the current one — a unit may hold up to {@link WEAPON_CARRY_CAP}
+   * weapons and switch between them mid-mission. Auto-equips when it's the unit's
+   * first weapon. No-op when the unit is already at capacity, the id isn't a
+   * weapon, or it isn't in the shared pool.
+   * @param {number|'leader'} rosterIndex  roster index, or 'leader' for the hero.
+   * @param {string} weaponId  weapon id present in the shared pool.
+   * @returns {{success:boolean, weaponId?:string, reason?:string}}
+   */
+  carryFromInventory(rosterIndex, weaponId) {
+    const unit = rosterIndex === 'leader' ? this.heroStats : this.roster[rosterIndex];
+    if (!unit) return { success: false };
+    if (ITEMS[weaponId]?.kind !== 'weapon') return { success: false };
+    const items = unit.items ?? (unit.items = {});
+    const carried = Object.entries(items).reduce((sum, [id, e]) =>
+      sum + (ITEMS[id]?.kind === 'weapon' ? (e?.count ?? 0) : 0), 0);
+    if (carried >= WEAPON_CARRY_CAP) return { success: false, reason: 'full' };
+    const pool = normalizeItems(this.weapons);
+    if (getItemCountOf(pool, weaponId) < 1) return { success: false };
+    removeItemInItems(pool, weaponId, 1);
+    addItemInItems(items, weaponId, 1);
+    if (!getEquippedWeaponIdOf(items)) equipWeaponInItems(items, weaponId);
+    this.weapons = pool;
+    this.save();
+    return { success: true, weaponId };
   }
 
   /**

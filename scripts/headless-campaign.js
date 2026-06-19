@@ -25,7 +25,7 @@ import { WitchAIEngine } from '../src/ai-engine.js';
 import { WITCH_PERSONALITIES, HERO_PERSONALITIES } from '../src/ai.js';
 import { resolvePlansMP } from '../server/resolver.js';
 import { getCampaignById } from '../src/campaign/campaign-registry.js';
-import { buildVictoryDelegate, processWaves } from '../src/campaign/campaign.js';
+import { buildVictoryDelegate, processWaves, effectiveAiBudgetBonus } from '../src/campaign/campaign.js';
 import { processStoryTriggers } from '../src/campaign/missions.js';
 import { MissionLogicEngine } from '../src/mission-logic/engine.js';
 import { createGameContext } from '../src/mission-logic/game-context.js';
@@ -94,7 +94,17 @@ function buildMissionState(missionDef) {
     state.phase = phaseForRound(1, state.cycleConfig);
   }
 
-  if (missionDef.aiBudgetBonus) state.campaignAIBudgetBonus = missionDef.aiBudgetBonus;
+  // Witch budget bonus. For a DYNAMIC (missing_wins) bonus there's no live
+  // campaign here, so synthesise progress from HC_VILLAGES_WON (default 3 = the
+  // unlock minimum / hardest realistic case) to gauge M6 at each difficulty.
+  let hcCampaign = null;
+  const _abb = missionDef.aiBudgetBonus;
+  if (_abb && typeof _abb === 'object' && Array.isArray(_abb.of)) {
+    const won = Number(process.env.HC_VILLAGES_WON ?? 3);
+    hcCampaign = { completedMissions: new Set(_abb.of.slice(0, won)) };
+  }
+  const hcBudget = effectiveAiBudgetBonus(missionDef, hcCampaign);
+  if (hcBudget) state.campaignAIBudgetBonus = hcBudget;
   if (missionDef.lootOverrides) state.lootOverrides = missionDef.lootOverrides;
   if (missionDef.startingResources) {
     // startingResources is authored as a flat `{ id: N }` map; the live faction

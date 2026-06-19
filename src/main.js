@@ -37,6 +37,7 @@ import { planCombatFrames } from './combat-presentation.js';
 import { MAX_FORTIFY_LEVEL, MAX_FORTIFY_HP, FORTIFY_HP_PER_LEVEL, FORT_IMPASSABLE_THRESHOLD, deriveBlockedSlots } from './tiles.js';
 import { sightRange, computeLineOfSight, hasLineOfSight, assignSlotOnTile } from './actions.js';
 import { ITEMS } from './items.js';
+import { ABILITIES } from './abilities.js';
 import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
 import { compileTurnBattleSummary, compileTurnBattlePairs, collectTurnFinds, deferredMoveEntityIds } from './battle-utils.js';
 import { collectWrapUpAttrition } from './post-round-effects.js';
@@ -52,7 +53,7 @@ import { nodeController } from './game.js';
 import { MissionConductor, areHintsSuppressed, markHintsSeen, resetAllHintsForCampaign } from './mission-conductor.js';
 import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel, getEquippedWeaponIdOf, normalizeItems, flattenItemCounts } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
-import { Campaign, CAMPAIGN_SLOT_COUNT, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
+import { Campaign, CAMPAIGN_SLOT_COUNT, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
 import { processStoryTriggers } from './campaign/missions.js';
 import { MissionLogicEngine } from './mission-logic/engine.js';
@@ -72,6 +73,7 @@ import {
   loadCampaignPortraits as _loadCampaignPortraits, getCampaignPortrait as _getCampaignPortrait,
   campaignCardHTML as _campaignCardHTML, survivorCardHTML as _survivorCardHTML,
   campaignPartyHTML as _campaignPartyHTML, objectiveDescription as _objectiveDescription,
+  weaponName as _weaponName, weaponStatString as _weaponStatString,
   partyPaneHTML as _partyPaneHTML, missionListPaneHTML as _missionListPaneHTML,
   progressSquadCap as _progressSquadCap, fallenSectionHTML as _fallenSectionHTML,
   missionRows as _missionRows,
@@ -386,7 +388,7 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
   if (localHeroAI)  localHeroAI.onBattleResult  = battleCallback;
 }
 
-function init(witchIsAI, heroIsAI, autoplay = false, humanFactionId = null) {
+function init(witchIsAI, heroIsAI, autoplay = false, humanFactionId = null, opts = null) {
   _autoplay = autoplay;
   _gameStartTime = Date.now();
   _missionConductor?.destroy(); // clear any lingering tutorial/hint overlays
@@ -399,14 +401,18 @@ function init(witchIsAI, heroIsAI, autoplay = false, humanFactionId = null) {
   document.getElementById('setup-screen').style.display  = 'none';
   document.getElementById('game-screen').style.display   = 'flex';
 
-  const mapSize   = document.getElementById('select-map-size')?.value ?? 'standard';
-  const nodeCount = parseInt(document.getElementById('select-node-count')?.value ?? '3', 10);
+  // Options come from `opts` (the Ledger passes them explicitly) or fall back to
+  // the legacy setup-screen selects.
+  const mapSize   = opts?.mapSize ?? document.getElementById('select-map-size')?.value ?? 'standard';
+  const nodeCount = opts?.nodeCount != null
+    ? opts.nodeCount
+    : parseInt(document.getElementById('select-node-count')?.value ?? '3', 10);
   state    = new GameState(witchIsAI, heroIsAI, mapSize, nodeCount);
 
   // Difficulty applies to human-vs-AI only — AI-vs-AI (autoplay/balance) and
   // two-human games always run at the tuned 'normal' baseline.
   if ((witchIsAI || heroIsAI) && !(witchIsAI && heroIsAI)) {
-    state.aiDifficulty = document.getElementById('select-ai-difficulty')?.value ?? 'normal';
+    state.aiDifficulty = opts?.aiDifficulty ?? document.getElementById('select-ai-difficulty')?.value ?? 'normal';
   }
 
   // Apply the player's faction pick by swapping the side's default
@@ -416,6 +422,13 @@ function init(witchIsAI, heroIsAI, autoplay = false, humanFactionId = null) {
   if (humanFactionId) {
     const def = getFaction(humanFactionId);
     state.swapLeaderToFaction(def.side, humanFactionId);
+  }
+  // Skirmish: swap the AI side's default leader to the randomized opponent.
+  if (opts?.enemyFactionId) {
+    const edef = getFaction(opts.enemyFactionId);
+    if (edef && edef.side !== getFaction(humanFactionId ?? '')?.side) {
+      state.swapLeaderToFaction(edef.side, opts.enemyFactionId);
+    }
   }
   // Fog of war is always on for human-vs-AI (GameState defaults it to 'partial'
   // when any side is AI, 'none' for two-human games). The AI-debug toggle below
@@ -3843,7 +3856,10 @@ function _resumeCampaignMission(missionId) {
   if (missionDef.logic) _attachMissionLogic(existingState, missionDef);
   existingState.fogOfWar = existingState.fogOfWar || 'partial';
   if (missionDef.lootOverrides) existingState.lootOverrides = missionDef.lootOverrides;
-  if (missionDef.aiBudgetBonus) existingState.campaignAIBudgetBonus = missionDef.aiBudgetBonus;
+  // Re-resolve the (possibly dynamic) witch budget bonus. completedMissions is
+  // stable across a mission, so this matches the value baked in at mission start.
+  const budgetBonus = effectiveAiBudgetBonus(missionDef, _activeCampaign);
+  if (budgetBonus) existingState.campaignAIBudgetBonus = budgetBonus;
 
   // Hide setup, show game
   document.getElementById('setup-screen').style.display = 'none';
@@ -4041,7 +4057,11 @@ async function _showCampaignScreen(campaignDef, autoMissionId, slotIndex = 1) {
  * (_showMissionBriefing / _renderDeployRoster), not on this screen.
  */
 function _progressMaxActive() {
-  return _progressSquadCap(_activeCampaign?.roster);
+  // The active squad mirrors the START-only deployment cap (PARTY_CAP survivors
+  // alongside the always-deployed leader); everyone else sits in reserve. The
+  // per-mission limit (maxSurvivorsFromRoster) is still applied, later, at the
+  // mission start dialog — so a tighter mission can still trim the squad there.
+  return Math.min(_progressSquadCap(_activeCampaign?.roster), PARTY_CAP);
 }
 
 /** Front-fill the active squad to the cap (called on fresh entry, not re-renders). */
@@ -4707,10 +4727,11 @@ function _initCampaignMission(missionDef) {
     state.phase = phaseForRound(1, state.cycleConfig);
   }
 
-  // Campaign AI budget bonus for harder waves
-  if (missionDef.aiBudgetBonus) {
-    state.campaignAIBudgetBonus = missionDef.aiBudgetBonus;
-  }
+  // Campaign AI budget bonus (extra witch actions/turn). May be a static int or
+  // a dynamic "missing_wins" rule resolved against campaign progress — e.g. the
+  // Long Watch eases as more neighbouring villages were cleared.
+  const budgetBonus = effectiveAiBudgetBonus(missionDef, _activeCampaign);
+  if (budgetBonus) state.campaignAIBudgetBonus = budgetBonus;
 
   // Apply per-mission loot table overrides
   if (missionDef.lootOverrides) {
@@ -8945,14 +8966,19 @@ function _createMpClient() {
     },
 
     onLobbyJoined(lobby) {
+      _currentLobby = lobby;
+      if (_ledgerLobbyCb) { _ledgerLobbyCb(lobby); return; }   // ledger is driving
       _renderLobby(lobby);
     },
 
     onLobbyUpdate(lobby) {
+      _currentLobby = lobby;
+      if (_ledgerLobbyCb) { _ledgerLobbyCb(lobby); return; }
       _renderLobby(lobby);
     },
 
     onLobbyList(rooms) {
+      if (_ledgerLobbyListCb) { _ledgerLobbyListCb(rooms); return; }
       _renderPublicLobbies(rooms);
     },
 
@@ -9657,6 +9683,405 @@ const _scenarioParam = new URLSearchParams(location.search).get('scenario');
 if (_scenarioParam) {
   try { initScenario(JSON.parse(_scenarioParam)); }
   catch (e) { console.error('Bad ?scenario= JSON:', e); }
+}
+
+// ── Ledger menu data layer (Direction B redesign) ───────────────────────────
+// The Ledger is DOM/render-only; main.js owns the data + actions and injects
+// them. Everything here REUSES the existing menu plumbing (the unified games
+// feed, campaign saves, replays, row activation, auth) — see docs + the impl
+// plan. These helpers + the ?ledger hook relocate into the live boot at cutover.
+
+// Replay rows (completed SP + MP), row-shape identical to _renderReplaysList's.
+// (That function still builds its own for the legacy menu; at cutover it should
+// delegate here. Duplicated for now so the live menu is untouched.)
+async function _collectReplayRows() {
+  const rows = [];
+  try {
+    _pruneCompletedSpGames();
+    const modeLabels = { hero: '⚔ vs AI', witch: '✦ vs AI', 'two-players': '👥 Two Players' };
+    for (const g of _loadCompletedSpIndex()) {
+      const winnerLabel = g.winner === 'hero' ? 'Hero wins' : 'Witch wins';
+      rows.push({ kind: 'completed-sp', room_id: g.id, win_reason: g.winReason,
+        title: `${modeLabels[g.mode] ?? g.mode} — ${winnerLabel}${g.pinned ? ' 📌' : ''}`,
+        total_rounds: g.totalRounds, action_needed: false, turn_deadline: null,
+        updated_at: g.createdAt ?? 0, is_local: true, _completedMeta: g });
+    }
+  } catch {}
+  const session = loadSession();
+  if (session) {
+    try {
+      const base = window.BRIMSTONE_SERVER || '';
+      const res = await fetch(`${base}/api/completed-games?token=${encodeURIComponent(session.token)}`);
+      if (res.ok) for (const g of await res.json()) {
+        let players = []; try { players = JSON.parse(g.players_json || '[]'); } catch {}
+        const pps = players.length ? players.filter(p => p.faction === 'hero').length : 1;
+        const myFaction = players.length
+          ? (players.find(p => p.playerId === session?.id)?.faction ?? 'hero')
+          : (g.hero_player_id === session?.id ? 'hero' : 'witch');
+        const resultLabel = g.winner === myFaction ? 'Victory' : 'Defeat';
+        const icon = g.winner === 'hero' ? '⚔' : '✦';
+        rows.push({ kind: 'completed-mp', room_id: g.game_id, win_reason: g.win_reason,
+          title: (pps > 1 ? `${icon} ${pps}v${pps} — ${resultLabel}` : `${icon} ${g.hero_name} vs ${g.witch_name} — ${resultLabel}`) + (g.pinned ? ' 📌' : ''),
+          total_rounds: g.total_rounds, action_needed: false, turn_deadline: null,
+          updated_at: g.created_at ?? 0, _replayMeta: g });
+      }
+    } catch {}
+  }
+  return rows;
+}
+
+// Per-slot campaign chronicle for the Ledger's Campaign destination. Every slot
+// (started or fresh) carries its mission list so the Ledger can show + launch
+// missions; a fresh slot's list shows mission 1 available, the rest locked.
+function _ledgerCampaignData() {
+  const camp = CAMPAIGNS.find(c => !c.disabled) || CAMPAIGNS[0];
+  if (!camp) return null;
+  const slots = [];
+  for (let slot = 1; slot <= CAMPAIGN_SLOT_COUNT; slot++) {
+    const c = new Campaign(camp, slot);
+    const started = c.load();
+    const nextId = c.getNextMission?.() ?? null;
+    const resumeMissionId = (nextId && loadCampaignMissionSave(camp.id, nextId, slot)) ? nextId : null;
+    slots.push({
+      slot, started,
+      completedCount: c.completedMissions?.size ?? 0,
+      updatedAt: c.updatedAt ?? 0,
+      isComplete: c.isComplete?.() ?? false,
+      nextMissionId: nextId,
+      resumeMissionId,
+      missions: (c.getMissionList?.() ?? []).map(m => ({
+        id: m.id, title: m.title, completed: !!m.completed, available: !!m.available,
+        briefing: c.getMissionDef?.(m.id)?.briefing ?? '',
+      })),
+    });
+  }
+  const active = slots.filter(s => s.started).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0] || slots[0];
+  return { campaignId: camp.id, title: camp.title, slots, activeSlotIndex: active?.slot ?? 1 };
+}
+
+// Launch (or resume) a campaign mission from the Ledger — sets the active
+// campaign on the chosen slot and hands off to the game (the game screen takes
+// over; the ledger overlay steps aside). Starting a mission on a fresh slot
+// begins that playthrough.
+async function _ledgerStartCampaignMission(slotIndex, missionId, resume = false) {
+  const camp = CAMPAIGNS.find(c => !c.disabled) || CAMPAIGNS[0];
+  if (!camp) return;
+  _activeCampaign = new Campaign(camp, slotIndex);
+  _activeCampaign.load();
+  const id = missionId || _activeCampaign.getNextMission?.();
+  const missionDef = id && _activeCampaign.getMissionDef?.(id);
+  if (!missionDef) return;
+  document.getElementById('ledger-screen')?.classList.remove('is-active'); // hand off to the game
+  await _loadCampaignPortraits?.();
+  if (resume) _resumeCampaignMission(id);
+  else _initCampaignMission(missionDef);
+}
+
+// The six selectable Skirmish champions, with portraits. The Day default
+// leader id is 'hero' (a Paladin); the rest are their own faction ids.
+function _ledgerSkirmishFactions() {
+  // A one-line role per champion; the rest of the stats come from the actual
+  // leader entity (with its default weapon equipped) so they match in-game.
+  const BLURB = {
+    hero:        'Sturdy frontline — balanced, hard to topple.',
+    rogue:       'Swift skirmisher — hits hard, but fragile.',
+    captain:     'Stalwart commander — defensive, rallies allies.',
+    witch:       'Dark summoner — conjures the restless dead.',
+    necromancer: 'Raises the dead — deadly with a horde at hand.',
+    brute:       'Towering bruiser — immense HP, crushing blows.',
+  };
+  const ROWS = [
+    { id: 'hero',        name: 'Paladin',     side: 'day',   img: 'assets/char-paladin.png' },
+    { id: 'rogue',       name: 'Rogue',       side: 'day',   img: 'assets/char-rogue.png' },
+    { id: 'captain',     name: 'Captain',     side: 'day',   img: 'assets/char-captain.png' },
+    { id: 'witch',       name: 'Witch',       side: 'night', img: 'assets/char-witch.png' },
+    { id: 'necromancer', name: 'Necromancer', side: 'night', img: 'assets/char-necromancer.png' },
+    { id: 'brute',       name: 'Brute',       side: 'night', img: 'assets/char-brute.png' },
+  ];
+  const out = [];
+  for (const f of ROWS) {
+    const def = getFaction(f.id);
+    if (!def) continue;
+    let stats = {}, weapon = null, abilities = [];
+    try {
+      const L = def.createLeader(0, 0, 'preview');         // default weapon equipped
+      stats = { hp: L.maxHp, atk: L.getAttack(), def: L.getDefense(), rng: L.getRange(), agi: L.getAgility() };
+      const eq = getEquippedWeaponIdOf(L.items || {});
+      if (eq) weapon = { id: eq, name: _weaponName(eq), stats: _weaponStatString(eq) };
+      abilities = (L.abilities || []).map((a) => ({ label: ABILITIES[a]?.label || a, description: ABILITIES[a]?.description || '' }));
+    } catch { /* fall back to name-only card */ }
+    out.push({ ...f, ...stats, weapon, abilities, blurb: BLURB[f.id] });
+  }
+  return out;
+}
+
+// Launch a Skirmish vs AI from the Ledger. Picking a Day champion ⇒ the witch
+// is AI; a Night champion ⇒ the hero is AI. Options pass straight to init().
+function _ledgerStartSkirmish(factionId, opts = {}) {
+  const def = getFaction(factionId);
+  if (!def) return;
+  const isDay = def.side === 'day';
+  // Opponent: a random champion drawn from the OTHER side's roster — pick a Day
+  // troop and you face a random Night leader, and vice-versa.
+  const enemies = getFactionsForSide(isDay ? 'night' : 'day').map(f => f.id);
+  const enemyFactionId = enemies.length ? enemies[Math.floor(Math.random() * enemies.length)] : null;
+  document.getElementById('ledger-screen')?.classList.remove('is-active');
+  init(/*witchIsAI*/ isDay, /*heroIsAI*/ !isDay, /*autoplay*/ false, factionId, { ...opts, enemyFactionId });
+}
+
+// Online snapshot for Play With Others: signed-in flag, live games, and the
+// active Battle row (if any). Derived from the same unified feed as Continue.
+async function _ledgerOnline() {
+  const { rows, signedIn } = await _fetchAllGames();
+  return {
+    signedIn,
+    games: rows.filter(r => r.kind === 'game'),
+    // The Battle for the Play Online landing card — joined ('battle') OR available
+    // to join ('battle-invite'). It still stays OUT of the Continue resumable feed
+    // (activeGames filters 'battle-invite') so it's only "resumable" once joined.
+    battle: rows.find(r => r.kind === 'battle' || r.kind === 'battle-invite') || null,
+  };
+}
+
+// Warband (Party) for a campaign slot. Loads the slot, seeds the active squad,
+// and reuses the existing party-pane renderer — returns its HTML for the ledger
+// to drop in. partyAction performs a mutation (deploy/bench/heal/equip/stow)
+// and returns the refreshed HTML so the ledger re-renders in place.
+function _ledgerPartyHTML() {
+  if (!_activeCampaign) return '';
+  const maxActive = _progressMaxActive();
+  _activeRosterIndices = _activeRosterIndices
+    .filter(i => i >= 0 && i < _activeCampaign.roster.length).slice(0, maxActive);
+  const resolver = (id) => _activeCampaign.getMissionDef(id)?.title ?? id;
+  return _partyPaneHTML(
+    _activeCampaign.heroStats, _activeCampaign.roster, _activeRosterIndices, maxActive,
+    { resources: _activeCampaign.resources, weapons: _activeCampaign.weapons },
+  ) + _fallenSectionHTML(_activeCampaign.fallen, resolver);
+}
+
+function _ledgerCampaignParty(slot) {
+  const camp = CAMPAIGNS.find(c => !c.disabled) || CAMPAIGNS[0];
+  if (!camp) return { started: false, html: '' };
+  _activeCampaign = new Campaign(camp, slot);
+  const started = _activeCampaign.load();
+  _seedActiveRosterForProgress();
+  return { started, title: camp.title, html: _ledgerPartyHTML() };
+}
+
+function _ledgerPartyAction(kind, target, weapon) {
+  if (!_activeCampaign) return '';
+  const maxActive = _progressMaxActive();
+  const idx = target === 'leader' ? 'leader' : parseInt(target, 10);
+  switch (kind) {
+    case 'promote':
+      if (_activeRosterIndices.length < maxActive && !_activeRosterIndices.includes(idx)) _activeRosterIndices.push(idx);
+      break;
+    case 'demote':     _activeRosterIndices = _activeRosterIndices.filter(i => i !== idx); break;
+    case 'heal':       _activeCampaign.healUnitWithHerb(idx); break;
+    case 'equip':      _activeCampaign.equipWeaponForUnit(idx, weapon); break;
+    case 'return':     _activeCampaign.returnWeaponToInventory(idx, weapon); break;
+    case 'unequip':    _activeCampaign.unequipToInventory(idx); break;
+    case 'pool-equip': _activeCampaign.equipFromInventory(idx, weapon); break;
+    case 'carry':      _activeCampaign.carryFromInventory(idx, weapon); break;
+    // Stow a unit's weapon back to the pool: a spare returns directly; the lone
+    // equipped weapon is unequipped instead (returnWeaponToInventory won't touch it).
+    case 'stow':       if (_activeCampaign.returnWeaponToInventory(idx, weapon) == null) _activeCampaign.unequipToInventory(idx); break;
+  }
+  return _ledgerPartyHTML();
+}
+
+// The Battle status for the native ledger Battle panel. Resolves the player's
+// SIDE ('day'/'night') here so the ledger never compares faction string ids.
+async function _ledgerBattleStatus() {
+  const session = loadSession();
+  if (!session) return null;
+  try {
+    const base = window.BRIMSTONE_SERVER || '';
+    const res = await fetch(`${base}/api/battle-status?token=${encodeURIComponent(session.token)}`);
+    const st = res.ok ? await res.json() : null;
+    if (st) {
+      const f = st.myFaction || st.myBattle?.myFaction || mp?.myFaction;
+      st.mySide = f ? (getFaction(f)?.side ?? null) : null;
+    }
+    return st;
+  } catch { return null; }
+}
+
+// Rename the signed-in player (native Account edit).
+async function _ledgerSetUsername(name) {
+  const session = loadSession();
+  if (!session) return { ok: false, error: 'Not signed in.' };
+  try {
+    const res = await fetch(`${window.BRIMSTONE_SERVER || ''}/api/account/username`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: session.token, username: name }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      session.username = data.player.username;
+      localStorage.setItem('brimstone_session', JSON.stringify(session));
+      _updateSessionBar();
+      return { ok: true, username: data.player.username };
+    }
+    return { ok: false, error: data.error || 'Could not change name.' };
+  } catch { return { ok: false, error: 'Network error.' }; }
+}
+
+// Send a magic-link to link an email (native Account edit).
+async function _ledgerLinkEmail(email) {
+  const session = loadSession();
+  if (!session) return { ok: false, error: 'Not signed in.' };
+  return requestLinkEmail(session.token, email);
+}
+
+// True for in-progress games the player can jump back into AND abandon (a
+// completed game / replay or a "next mission" prompt has nothing to abandon).
+function _ledgerRowAbandonable(row) {
+  switch (row?.kind) {
+    case 'local-campaign': return !!row._missionDef;   // an in-progress mission save
+    case 'local-sp':
+    case 'game':
+    case 'battle':         return !!row.room_id;
+    default:               return false;
+  }
+}
+
+// Abandon a resumable game: delete the local save, or resign the online game.
+function _ledgerAbandonRow(row) {
+  switch (row?.kind) {
+    case 'local-sp':
+      _deleteSpSave(row.room_id);
+      break;
+    case 'local-campaign':
+      if (row._campaignDef && row._missionDef) {
+        deleteCampaignMissionSave(row._campaignDef.id, row._missionDef.id, row._slotIndex ?? 1);
+      }
+      break;
+    case 'game':
+    case 'battle':
+      if (row.room_id) _ensureAuthed(() => mp.resignGame(row.room_id));
+      break;
+  }
+}
+
+// When set, lobby pushes (onLobbyJoined/Update/List) route to the ledger
+// instead of the legacy _renderLobby/_renderPublicLobbies. The ledger registers
+// these via the DI onLobby/onLobbyList while its lobby view is mounted.
+let _ledgerLobbyCb = null;
+let _ledgerLobbyListCb = null;
+
+// The injected data/action surface the Ledger renders against.
+function _buildLedgerData() {
+  return {
+    session:          () => loadSession(),
+    // Resumable games for Continue. Drop 'battle-invite' (a Battle exists but the
+    // player hasn't joined) — the persistent Battle should only appear as a
+    // resumable game once you're actually in it (kind 'battle' / myBattle).
+    activeGames:      async () => (await _fetchAllGames()).rows.filter(r => r.kind !== 'battle-invite'),
+    // Native online lobby (verified vs the dev server). `mp` is the connected
+    // multiplayer client (present once signed in). Seat indices are absolute
+    // (server-side); the ledger passes lobby.slots indices straight through.
+    lobby: {
+      // create/join/browse may be the first online action this session, so route
+      // them through _ensureAuthed — it lazily creates + connects + authenticates
+      // the mp client (a no-op when already connected). Without this, an
+      // already-signed-in player whose mp client was never spun up would click
+      // Create Game and nothing would happen.
+      create:       (config) => _ensureAuthed(() => mp.createLobby(config)),
+      join:         (codeOrId) => _ensureAuthed(() => mp.joinLobby(codeOrId)),
+      browse:       () => _ensureAuthed(() => mp.browseLobby()),
+      claimSlot:    (idx) => _currentLobby && mp?.claimSlot(_currentLobby.id, idx),
+      setFaction:   (factionId) => _currentLobby && mp?.setFaction(_currentLobby.id, factionId),
+      setSlotAI:    (seatIdx, personality) => _currentLobby && mp?.setSlotAI(_currentLobby.id, seatIdx, personality),
+      removeSlotAI: (seatIdx) => _currentLobby && mp?.removeSlotAI(_currentLobby.id, seatIdx),
+      fillAll:      (personality = 'random') => _currentLobby && mp?.fillAllWithAI(_currentLobby.id, personality),
+      start:        () => _currentLobby && mp?.startGame(_currentLobby.id),
+      leave:        () => { if (_currentLobby) mp?.leaveLobby(_currentLobby.id); _currentLobby = null; },
+      invite:       (seatIdx, email) => _currentLobby && mp?.sendSlotInvite(_currentLobby.id, seatIdx, email),
+    },
+    onLobby:          (cb) => { _ledgerLobbyCb = cb; },
+    onLobbyList:      (cb) => { _ledgerLobbyListCb = cb; },
+    myPlayerId:       () => mp?.player?.id ?? loadSession()?.id ?? null,
+    factionsForSide:  (side) => getFactionsForSide(side).map((f) => ({ id: f.id, name: f.name ?? f.label ?? f.id })),
+    inviteLink:       () => {
+      if (!_currentLobby) return null;
+      const key = (_currentLobby.isPrivate && _currentLobby.code) ? _currentLobby.code : _currentLobby.id;
+      return new URL(`/join?code=${encodeURIComponent(key)}`, _linkOrigin()).href;
+    },
+    replays:          () => _collectReplayRows(),
+    campaign:         () => _ledgerCampaignData(),
+    startMission:     (slot, missionId, resume) => _ledgerStartCampaignMission(slot, missionId, resume),
+    campaignParty:    (slot) => _ledgerCampaignParty(slot),
+    deleteCampaignSlot: (slot) => {
+      const camp = CAMPAIGNS.find(c => !c.disabled) || CAMPAIGNS[0];
+      if (!camp) return;
+      new Campaign(camp, slot).delete();
+      for (const m of camp.missions || []) deleteCampaignMissionSave(camp.id, m.id, slot);
+    },
+    preloadPortraits: () => _loadCampaignPortraits?.(),
+    partyAction:      (kind, target, weapon) => _ledgerPartyAction(kind, target, weapon),
+    skirmishFactions: () => _ledgerSkirmishFactions(),
+    startSkirmish:    (factionId, opts) => _ledgerStartSkirmish(factionId, opts),
+    online:           () => _ledgerOnline(),
+    signOut:          () => _signOut(),
+    activate:         (row) => _mmDefaultRowClick(row),   // resume / open / replay
+    abandon:          (row) => _ledgerAbandonRow(row),
+    abandonable:      (row) => _ledgerRowAbandonable(row),
+    // Native passwordless sign-in: feed the name into the (hidden) auth input and
+    // run the shared auth core — no old dialog ever shows.
+    signInWithName:   (name, cb) => {
+      const el = document.getElementById('auth-username');
+      if (el) el.value = name;
+      _ensureAuthed(() => cb?.());
+    },
+    // Battle: live status + join (native panel; no legacy screen).
+    battleStatus:     () => _ledgerBattleStatus(),
+    joinBattle:       () => _ensureAuthed(() => mp.joinBattle()),
+    // Account edits (native): rename + email link via the server.
+    setUsername:      (name) => _ledgerSetUsername(name),
+    linkEmail:        (email) => _ledgerLinkEmail(email),
+  };
+}
+
+// The Ledger is the live menu. It's skipped only for special URL modes that take
+// over the screen directly (scenario render, auto-replay, spectate) — those
+// drive #setup-screen / #game-screen themselves. The legacy #setup-screen is
+// hidden synchronously (no flash); the observers keep it hidden across the
+// menu↔game transitions, since the legacy menu DOM still backs a few shared
+// bits (the auth input) even though it's never shown.
+{
+  const _q = new URLSearchParams(location.search);
+  const _special = _q.get('scenario') != null || _q.get('replayGame') != null ||
+                   _q.get('spectate') != null || _q.get('room') != null;
+  if (!_special) {
+    const ss = document.getElementById('setup-screen');
+    ss?.style.setProperty('display', 'none');
+    import('./menu/ledger.js').then(({ initLedger }) => {
+      const session = loadSession();
+      const api = initLedger({ playerName: session?.username || 'Wanderer', data: _buildLedgerData() });
+      api?.show();
+      // Re-show the ledger if anything reveals the legacy #setup-screen (e.g.
+      // game-over → back to menu) while we're not in a game.
+      if (ss && api) {
+        new MutationObserver(() => {
+          const inGame = getComputedStyle(document.getElementById('game-screen')).display !== 'none';
+          if (!inGame && getComputedStyle(ss).display !== 'none') {
+            ss.style.setProperty('display', 'none');
+            api.show();
+            api.select('continue');
+          }
+        }).observe(ss, { attributes: true, attributeFilter: ['style'] });
+      }
+      // A starting game shows #game-screen — get the ledger out of the viewport
+      // (online games begin via the native lobby, which never touches #setup-screen).
+      const gs = document.getElementById('game-screen');
+      if (gs && api) {
+        new MutationObserver(() => {
+          if (getComputedStyle(gs).display !== 'none') api.hide();
+        }).observe(gs, { attributes: true, attributeFilter: ['style'] });
+      }
+    }).catch((e) => console.error('Ledger load failed:', e));
+  }
 }
 
 // Auto-start admin replay when ?replayGame=<gameId>[&source=sp] is in the URL.

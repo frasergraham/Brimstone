@@ -9,6 +9,7 @@
   <meta name="apple-mobile-web-app-title" content="Caleb's Hollow">
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.svg">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles-ledger.css">
 </head>
 <body>
 
@@ -713,6 +714,27 @@
     background:var(--accent,#c9a227);color:#000;text-align:center;padding:6px 12px;font-size:0.85rem;cursor:pointer">
     <span id="electron-update-msg">A new version is available.</span>
     <b style="margin-left:8px">Click to restart and update.</b>
+  </div>
+
+  <!-- ── The Ledger (new menu) ─────────────────────────────────────────
+       Single-frame rail + ledger. Built alongside #setup-screen; shown by the
+       router or the ?ledger dev preview. Panels are rendered by src/menu/ledger.js. -->
+  <div id="ledger-screen">
+    <div class="ledger-backdrop"></div>
+    <div class="ledger-scrim"></div>
+    <div class="ledger-vignette"></div>
+    <div class="ledger-frame">
+      <nav class="ledger-rail">
+        <div class="ledger-wordmark">CALEB'S<br>HOLLOW</div>
+        <div class="ledger-sub"></div>
+        <div class="ledger-rail-items" id="ledger-rail-items"></div>
+        <div class="ledger-user" id="ledger-user">
+          <img src="assets/char-paladin.png" alt="">
+          <div><div class="nm" id="ledger-user-name">Wanderer</div><div class="st">signed in</div></div>
+        </div>
+      </nav>
+      <section class="ledger-pane" id="ledger-pane"></section>
+    </div>
   </div>
 
   <!-- ── Game screen ───────────────────────────────────────────────── -->

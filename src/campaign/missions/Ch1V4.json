@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "campaignId": "calebs_hollow_prologue",
+  "id": "village_ashford_mill",
+  "title": "Ashford Mill",
+  "chapter": 1,
+  "briefing": "The wheels of Ashford Mill turn to a darker grind. Four power nodes ring the millpond, and the witch's golems stalk the wheat. Hold the nodes and silence her work at the mill.",
+  "victoryText": "Ashford's wheels turn honest grain again. The mill is freed.",
+  "defeatText": "Ashford Mill grinds on for her alone. Its nodes are hers.",
+  "mapSize": "standard",
+  "hasWitch": true,
+  "aiPersonality": "aggressive",
+  "nodeScoreThreshold": 4,
+  "disableScoring": false,
+  "healBonus": 25,
+  "requires": ["dark_ritual"],
+  "rewards": { "wood": 3, "herbs": 1 },
+  "map": { "mode": "procedural", "seed": 31004, "mapSize": "standard", "nodeCount": 4 },
+  "objectives": {
+    "win": [
+      { "type": "slay_witch" },
+      { "type": "control_nodes" }
+    ],
+    "lose": [
+      { "type": "hero_killed" },
+      { "type": "witch_score_threshold", "points": 4 }
+    ]
+  }
+}
