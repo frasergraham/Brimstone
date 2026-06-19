@@ -382,4 +382,7 @@
   .ledger-rail-item .lb { font-size:11px; }
   .ledger-pane { order:1; padding:calc(40px + env(safe-area-inset-top)) 18px 18px; }
   .ledger-pane-title { font-size:30px; }
+  /* Party Manager: 4-up cards squish on narrow displays — cap at 2 per row. */
+  .lg-party .cprog-grid,
+  .lg-party .cprog-grid.reserve-grid { grid-template-columns:repeat(2, minmax(0,1fr)); }
 }
