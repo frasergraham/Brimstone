@@ -689,15 +689,15 @@ describe('Campaign class', () => {
   test('new campaign starts with an empty fallen memorial', () => {
     const c = new Campaign(hollowDef);
     assert.deepEqual(c.fallen, []);
-    assert.equal(c.version, 7); // SAVE_VERSION bumped 6 → 7
+    assert.equal(c.version, 8); // SAVE_VERSION bumped 7 → 8 (persisted active party)
   });
 
-  test('fallen round-trips through save/load (v7)', () => {
+  test('fallen round-trips through save/load (v8)', () => {
     const c = new Campaign(hollowDef);
     c.recordFallen([{ name: 'Abigail', title: 'Scout', level: 3, diedInMission: 'first_night' }]);
     c.save();
     const raw = JSON.parse(localStorage.getItem(`brimstone-campaign-calebs_hollow_prologue-slot1`));
-    assert.equal(raw.version, 7);
+    assert.equal(raw.version, 8);
     assert.equal(raw.fallen.length, 1);
 
     const c2 = new Campaign(hollowDef);
@@ -708,8 +708,9 @@ describe('Campaign class', () => {
     assert.equal(c2.fallen[0].level, 3);
   });
 
-  test('a v6 save migrates to v7 with fallen backfilled to []', () => {
-    // Hand-write a v6 blob (no `fallen` field) into the slot key, then load it.
+  test('a v6 save migrates forward with fallen + activeParty backfilled to []', () => {
+    // Hand-write a v6 blob (no `fallen`/`activeParty` field) into the slot key,
+    // then load it — both new fields should backfill to empty.
     const v6 = {
       campaignId: 'calebs_hollow_prologue', version: 6,
       currentMission: 'prologue', completedMissions: ['tutorial'],
@@ -722,15 +723,17 @@ describe('Campaign class', () => {
 
     const c = new Campaign(hollowDef);
     assert.ok(c.load());
-    assert.equal(c.version, 7, 'migrated to v7');
+    assert.equal(c.version, 8, 'migrated to v8');
     assert.deepEqual(c.fallen, [], 'fallen backfilled to empty');
+    assert.deepEqual(c.activeParty, [], 'activeParty backfilled to empty');
     assert.equal(c.roster.length, 1, 'roster preserved through migration');
     assert.equal(c.roster[0].name, 'Bob');
     assert.equal(c.resources.herbs, 2, 'resources preserved');
     // The migrated form is persisted back so we don't re-migrate next load.
     const persisted = JSON.parse(localStorage.getItem('brimstone-campaign-calebs_hollow_prologue-slot1'));
-    assert.equal(persisted.version, 7);
+    assert.equal(persisted.version, 8);
     assert.ok(Array.isArray(persisted.fallen));
+    assert.ok(Array.isArray(persisted.activeParty));
   });
 
   test('fallen rides through the server sync blob (restoreFromServerData)', () => {

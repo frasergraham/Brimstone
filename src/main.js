@@ -3915,11 +3915,29 @@ function _progressMaxActive() {
   return Math.min(_progressSquadCap(_activeCampaign?.roster), PARTY_CAP);
 }
 
-/** Front-fill the active squad to the cap (called on fresh entry, not re-renders). */
+/**
+ * Seed the working active-squad selection on fresh entry (not on re-renders).
+ * Restores the player's persisted choice (Campaign.activeParty, sanitized against
+ * the current roster) when one exists; otherwise front-fills to the cap and
+ * persists that default so the selection is sticky from the first visit.
+ */
 function _seedActiveRosterForProgress() {
   if (!_activeCampaign) { _activeRosterIndices = []; return; }
   const maxActive = _progressMaxActive();
+  const saved = _activeCampaign.getActiveParty(maxActive);
+  if (saved.length > 0) {
+    _activeRosterIndices = saved;
+    return;
+  }
+  // No saved squad (fresh campaign / pre-v8 save) — front-fill and persist.
   _activeRosterIndices = _activeCampaign.roster.map((_, i) => i).slice(0, maxActive);
+  _activeCampaign.setActiveParty(_activeRosterIndices);
+}
+
+/** Commit the working active-squad selection to the campaign save so it survives
+ *  a reload. Mirrors the heal/equip helpers, which persist immediately. */
+function _persistActiveRoster() {
+  if (_activeCampaign) _activeCampaign.setActiveParty(_activeRosterIndices);
 }
 
 function _renderCampaignProgressScreen() {
@@ -3981,6 +3999,7 @@ function _wireCampaignProgressHandlers() {
       const idx = parseInt(btn.dataset.idx, 10);
       if (_activeRosterIndices.length < maxActive && !_activeRosterIndices.includes(idx)) {
         _activeRosterIndices.push(idx);
+        _persistActiveRoster();
         _renderCampaignProgressScreen();
       }
     });
@@ -3990,6 +4009,7 @@ function _wireCampaignProgressHandlers() {
     btn.addEventListener('click', () => {
       const idx = parseInt(btn.dataset.idx, 10);
       _activeRosterIndices = _activeRosterIndices.filter(i => i !== idx);
+      _persistActiveRoster();
       _renderCampaignProgressScreen();
     });
   });
@@ -4124,6 +4144,7 @@ function _renderDeployRoster(heroStats, roster, maxActive) {
       const idx = parseInt(btn.dataset.idx);
       if (_activeRosterIndices.length < maxActive && !_activeRosterIndices.includes(idx)) {
         _activeRosterIndices.push(idx);
+        _persistActiveRoster();
         _renderDeployRoster(heroStats, roster, maxActive);
       }
     });
@@ -4132,6 +4153,7 @@ function _renderDeployRoster(heroStats, roster, maxActive) {
     btn.addEventListener('click', () => {
       const idx = parseInt(btn.dataset.idx);
       _activeRosterIndices = _activeRosterIndices.filter(i => i !== idx);
+      _persistActiveRoster();
       _renderDeployRoster(heroStats, roster, maxActive);
     });
   });
@@ -4200,12 +4222,15 @@ function _showMissionBriefing(missionId) {
   // mission's authored value clamped to the START-only PARTY_CAP (≤3 survivors),
   // so the picker can never select more than 3 — the rest stay benched.
   const maxActive = Math.min(missionDef.maxSurvivorsFromRoster ?? 0, PARTY_CAP);
-  // Preserve a squad already chosen on the Progress screen; otherwise default to
-  // front-filling the active slots. Either way clamp to this mission's cap and
-  // drop any indices that fall outside the current roster.
-  _activeRosterIndices = (_activeRosterIndices || [])
-    .filter(i => i >= 0 && i < _activeCampaign.roster.length)
-    .slice(0, maxActive);
+  // Preserve a squad already chosen on the Progress screen (or persisted from a
+  // prior session); otherwise default to front-filling the active slots. Either
+  // way clamp to this mission's cap and drop any indices outside the roster. Fall
+  // back to the persisted selection when the in-memory working copy is empty
+  // (e.g. entered straight into the briefing on app launch, bypassing Progress).
+  let chosen = (_activeRosterIndices || [])
+    .filter(i => i >= 0 && i < _activeCampaign.roster.length);
+  if (chosen.length === 0) chosen = _activeCampaign.getActiveParty();
+  _activeRosterIndices = chosen.slice(0, maxActive);
   if (_activeRosterIndices.length === 0) {
     _activeRosterIndices = _activeCampaign.roster.map((_, i) => i).slice(0, maxActive);
   }
@@ -9214,9 +9239,12 @@ function _ledgerPartyAction(kind, target, weapon) {
   const idx = target === 'leader' ? 'leader' : parseInt(target, 10);
   switch (kind) {
     case 'promote':
-      if (_activeRosterIndices.length < maxActive && !_activeRosterIndices.includes(idx)) _activeRosterIndices.push(idx);
+      if (_activeRosterIndices.length < maxActive && !_activeRosterIndices.includes(idx)) {
+        _activeRosterIndices.push(idx);
+        _persistActiveRoster();
+      }
       break;
-    case 'demote':     _activeRosterIndices = _activeRosterIndices.filter(i => i !== idx); break;
+    case 'demote':     _activeRosterIndices = _activeRosterIndices.filter(i => i !== idx); _persistActiveRoster(); break;
     case 'heal':       _activeCampaign.healUnitWithHerb(idx); break;
     case 'equip':      _activeCampaign.equipWeaponForUnit(idx, weapon); break;
     case 'return':     _activeCampaign.returnWeaponToInventory(idx, weapon); break;
