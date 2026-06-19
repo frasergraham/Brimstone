@@ -114,6 +114,7 @@
   border-radius:6px; padding:16px; margin-bottom:20px; }
 .lg-resume-thumb { width:170px; height:108px; flex:none; border-radius:4px; display:flex; align-items:center; justify-content:center;
   font-size:40px; color:rgba(245,200,66,.5); background:radial-gradient(circle at 50% 40%, rgba(40,32,18,.9), rgba(8,9,13,.95)); border:1px solid rgba(212,167,44,.2); }
+.lg-resume-thumb.has-img { background-size:cover; background-position:center; border-color:rgba(212,167,44,.34); }
 .lg-resume-body { flex:1; min-width:0; display:flex; flex-direction:column; }
 .lg-resume-kicker { font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--lg-gold-dim); margin-bottom:4px; }
 .lg-resume-title { font-family:var(--lg-display); font-weight:600; font-size:28px; color:var(--lg-ink); line-height:1.02; }
@@ -126,6 +127,8 @@
   border-radius:5px; padding:10px 14px; cursor:pointer; }
 .lg-feed-row:hover { border-color:#33304a; background:rgba(20,22,32,.8); }
 .lg-feed-row.is-action { border-color:rgba(76,175,125,.4); }
+.lg-feed-thumb { width:56px; height:42px; flex:none; border-radius:4px; background-size:cover; background-position:center;
+  border:1px solid rgba(212,167,44,.22); }
 .lg-feed-text { flex:1; min-width:0; }
 .lg-feed-text .t { font-size:15px; color:#d4c9b0; }
 .lg-feed-text .m { font-size:12px; color:var(--lg-faint); }

@@ -54,6 +54,7 @@ import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, c
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, CAMPAIGN_SLOT_COUNT, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
 import { CAMPAIGNS } from './campaign/campaign-registry.js';
+import { saveThumb, deleteThumb } from './menu/thumbnails.js';
 import { processStoryTriggers } from './campaign/missions.js';
 import { MissionLogicEngine } from './mission-logic/engine.js';
 import { createGameContext } from './mission-logic/game-context.js';
@@ -1337,6 +1338,10 @@ async function _runLocalResolution(skipSummary = false) {
       (!_missionConductor || _missionConductor.isHints)) {
     _saveCampaignMission();
   }
+
+  // Snapshot the board for the menu save lists (end of every round). Fire-and-
+  // forget — an offscreen render that never disturbs the live view.
+  _captureRoundThumbnail();
 
   // Accumulate round for full-game replay
   if (!_autoplay) {
@@ -5040,6 +5045,22 @@ function _deleteSpSave(id) {
   const saves = _loadSpSaves().filter(s => s.id !== id);
   _saveSpSaves(saves);
   try { localStorage.removeItem('brimstone_sp_history_' + id); } catch {}
+  deleteThumb(id);
+}
+
+/** End-of-round board thumbnail for the menu save lists. Keyed by the same row
+ *  id the lists use (room_id): `_spSaveId` for single-player, or
+ *  `campaignId/slotN/missionId` for a campaign mission. Fire-and-forget — the
+ *  capture renders to an offscreen target, never touching the live view. */
+function _captureRoundThumbnail() {
+  if (!renderer?.captureMapThumbnail || !state || state.gameOver || _autoplay) return;
+  const id = (_activeCampaign && _activeMissionDef)
+    ? `${_activeCampaign.campaignDef.id}/slot${_activeCampaign.slotIndex}/${_activeMissionDef.id}`
+    : _spSaveId;
+  if (!id) return;
+  Promise.resolve(renderer.captureMapThumbnail(512))
+    .then((url) => { if (url) saveThumb(id, url); })
+    .catch(() => {});
 }
 
 /** Render the in-progress saves list on the vs. AI screen using mm-row style. */

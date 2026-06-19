@@ -5879,6 +5879,35 @@ export class Renderer3D {
     }).then(() => true);
   }
 
+  /** Capture a square top-down, north-up "fit-the-map" thumbnail of the current
+   *  board from the observer's perspective — the exact pose of pressing the ⛶
+   *  fit button twice (max zoom-out → near top-down via the tilt ramp, centred
+   *  on the observer's own units, α = π/2 north-up). Renders to an offscreen
+   *  target so the live view is never disturbed. Returns a JPEG data URL (or
+   *  null if the renderer isn't ready). */
+  async captureMapThumbnail(size = 512) {
+    const BABYLON = this._babylon, scene = this._scene, engine = this._engine, cam = this._camera;
+    if (!BABYLON || !scene || !engine || !cam || !this.state?.tiles) return null;
+    const { target, radius } = this._fitToOwnedUnitsTarget();
+    const thumbCam = new BABYLON.ArcRotateCamera(
+      '_thumbCam', Math.PI / 2, CAMERA_BETA_TOPDOWN, radius, target, scene);
+    thumbCam.fov = cam.fov; thumbCam.minZ = cam.minZ; thumbCam.maxZ = cam.maxZ;
+    try {
+      return await new Promise((resolve) => {
+        BABYLON.Tools.CreateScreenshotUsingRenderTarget(
+          engine, thumbCam, { width: size, height: size },
+          (data) => resolve(data || null),
+          'image/jpeg', 1, false, undefined, 0.6,
+        );
+      });
+    } catch (e) {
+      console.warn('thumbnail capture failed:', e);
+      return null;
+    } finally {
+      thumbCam.dispose();
+    }
+  }
+
   _clampPan()                                         { /* camera panning is bounded via panning limits in _initBabylon */ }
   // Phase 6: real fog visibility. Sums sight ranges across all alive entities
   // owned by `observerOwner` (same logic as 2D `_buildFogVisibleHexes`).

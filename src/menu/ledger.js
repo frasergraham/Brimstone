@@ -10,6 +10,7 @@
 
 import { mmSortRows, mmFormatRow } from '../main-menu-games.js';
 import { mountServerSelector } from '../server-selector.js';
+import { loadThumb } from './thumbnails.js';
 
 /** The six rail destinations, top to bottom (mirrors the mock). */
 const DESTINATIONS = [
@@ -962,10 +963,12 @@ function _placeholderPanel(body, dest) {
 
 function _resumeHero(row) {
   const f = mmFormatRow(row);
+  const thumb = loadThumb(row.room_id);
   const wrap = document.createElement('div');
   wrap.className = 'lg-resume';
   wrap.innerHTML =
-    `<div class="lg-resume-thumb" aria-hidden="true">🜂</div>` +
+    `<div class="lg-resume-thumb${thumb ? ' has-img' : ''}" aria-hidden="true"` +
+      `${thumb ? ` style="background-image:url(${thumb})"` : ''}>${thumb ? '' : '🜂'}</div>` +
     `<div class="lg-resume-body">` +
       `<div class="lg-resume-kicker">${row.action_needed ? 'Your turn' : 'Continue'}</div>` +
       `<div class="lg-resume-title gthc">${esc(f.title)}</div>` +
@@ -983,6 +986,13 @@ function _feedRow(row, cta = null) {
   const f = mmFormatRow(row);
   const el = document.createElement('div');
   el.className = 'lg-feed-row' + (row.action_needed ? ' is-action' : '');
+  const thumb = loadThumb(row.room_id);
+  if (thumb) {
+    const th = document.createElement('div');
+    th.className = 'lg-feed-thumb';
+    th.style.backgroundImage = `url(${thumb})`;
+    el.appendChild(th);
+  }
   const text = document.createElement('div');
   text.className = 'lg-feed-text';
   const t2 = _gameTimeMeta(row);
