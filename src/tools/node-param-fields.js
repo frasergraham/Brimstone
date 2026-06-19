@@ -73,6 +73,9 @@ export const NODE_PARAM_FIELDS = {
   setFlag: [{ key: 'key', label: 'Flag key', kind: 'text' }, { key: 'value', label: 'Value', kind: 'text' }],
   startConversation: [{ key: 'conversationId', label: 'Conversation', kind: 'select', options: 'conversations', empty: '' }, { key: 'roleInputs', label: 'Participant roles (wire entities in)', kind: 'stringList' }],
   storyBeat: [{ key: 'title', label: 'Title', kind: 'text' }, { key: 'text', label: 'Text', kind: 'prose' }],
+  setObjective: [{ key: 'id', label: 'Objective id', kind: 'text' }, { key: 'label', label: 'Label (shown in the Mission Log)', kind: 'text' }, { key: 'target', label: 'Target count (blank = checkbox)', kind: 'number' }, { key: 'completed', label: 'Start completed', kind: 'checkbox' }],
+  updateObjective: [{ key: 'id', label: 'Objective id', kind: 'text' }, { key: 'set', label: 'Set count to (absolute)', kind: 'number' }, { key: 'delta', label: 'Or advance by (default +1)', kind: 'number' }],
+  completeObjective: [{ key: 'id', label: 'Objective id', kind: 'text' }],
   winMission: [{ key: 'winner', label: 'Winner', kind: 'select', options: FACTIONS }, { key: 'reason', label: 'Reason', kind: 'prose' }],
   loseMission: [{ key: 'winner', label: 'Winner (beats player)', kind: 'select', options: FACTIONS }, { key: 'reason', label: 'Reason', kind: 'prose' }],
   objectiveOutcome: [{ key: 'side', label: 'Side', kind: 'select', options: SIDES }, { key: 'spec', label: 'Objective', kind: 'objectiveSpec' }, { key: 'reason', label: 'Reason', kind: 'prose' }],
@@ -182,6 +185,7 @@ function controlFor(params, field, ctx) {
     case 'unitList': return unitListControl(params, field, ctx);
     case 'stringList': return stringListControl(params, field, ctx);
     case 'objectiveSpec': return objectiveSpecControl(params, field, ctx);
+    case 'checkbox': return checkboxControl(params, field, ctx);
     default: return textControl(params, field, ctx, false);
   }
 }
@@ -200,6 +204,14 @@ function numberControl(params, field, ctx) {
   if (field.min != null) el.min = String(field.min);
   el.value = params[field.key] ?? '';
   el.addEventListener('change', () => { setOrDelete(params, field.key, el.value === '' ? undefined : Number(el.value)); ctx.onChange(); });
+  return el;
+}
+
+function checkboxControl(params, field, ctx) {
+  const el = ctx.doc.createElement('input');
+  el.type = 'checkbox';
+  el.checked = !!params[field.key];
+  el.addEventListener('change', () => { setOrDelete(params, field.key, el.checked ? true : undefined); ctx.onChange(); });
   return el;
 }
 

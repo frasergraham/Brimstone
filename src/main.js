@@ -362,7 +362,7 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
 
   ui = new UIController(canvas, state, renderer, localWitchAI, redraw, localHeroAI, autoplay);
   ui.onQuitToMenu = () => location.reload();
-  ui.showMissionInfoBtn(false); // hidden by default; campaign init enables it
+  ui.renderMissionLog([]); // empty by default; mission-logic objectives populate it
 
   // AI-assist (debug): carry the console-toggled flags onto the fresh UI and let
   // it request AI-generated plans for the human's planning faction.
@@ -778,7 +778,40 @@ function _logicEventsToStory(events) {
 
 function _drainLogicStoryEvents() {
   if (!state?.logicPresentation?.length) return [];
-  return _logicEventsToStory(state.logicPresentation.splice(0));
+  const drained = state.logicPresentation.splice(0);
+  // Mission Log (docs/09): objective add/update/complete events fire a toast and
+  // refresh the Chronicle's Mission Log panel here (presentation-only — they read
+  // the engine's authoritative objective list, never write it). Any other
+  // non-story kinds left in the stream (spawn/flag/scriptedAction) are handled by
+  // their own drains; _logicEventsToStory ignores them.
+  for (const ev of drained) {
+    if (ev.kind === 'objectiveLog') { ui?.showMissionLogToast?.(ev); }
+  }
+  if (drained.some((e) => e.kind === 'objectiveLog')) _syncMissionLog();
+  return _logicEventsToStory(drained);
+}
+
+/** Refresh the Chronicle's Mission Log panel from the engine's authoritative
+ *  objective list. Safe no-op for non-logic games (engine is null → []). */
+function _syncMissionLog() {
+  ui?.renderMissionLog?.(state?.logicEngine?.objectives?.() ?? []);
+}
+
+/** Drain ONLY the queued objectiveLog presentation events (toast + panel sync),
+ *  leaving story beats / conversations / scripted actions in the stream for their
+ *  own handlers. Called right after a round resolves so kill-count objective
+ *  markers tick in step with the kills. No-op for non-logic games. */
+function _presentRoundObjectiveLogs() {
+  const queue = state?.logicPresentation;
+  if (!queue?.length) return;
+  let drainedAny = false;
+  state.logicPresentation = queue.filter((ev) => {
+    if (ev.kind !== 'objectiveLog') return true;
+    ui?.showMissionLogToast?.(ev);
+    drainedAny = true;
+    return false;
+  });
+  if (drainedAny) _syncMissionLog();
 }
 
 // Present a TURN's mission-logic Show events DURING the replay, in order: a story
@@ -790,14 +823,23 @@ let _beatCardSeq = 0;
 // so the caller can skip the redundant manual-step gate for this step.
 async function _presentStepLogicEvents(events, afterStepIndex) {
   let gatedBeat = false;
+  let sawObjective = false;
   for (const ev of events ?? []) {
     if (ev.kind === 'conversation') {
       await _playMissionConversation(ev.id, { manageHud: false, runOnComplete: false, nodeId: ev.nodeId, roles: ev.roles });
     } else if (ev.kind === 'storyBeat') {
       await _presentStoryBeatCard(ev, afterStepIndex);
       gatedBeat = true;
+    } else if (ev.kind === 'objectiveLog') {
+      // Mission Log update earned on THIS turn (e.g. an area-triggered objective):
+      // toast it and refresh the panel right at this point in the replay. The
+      // objective STATE already mutated inside the sealed resolution — this is the
+      // SHOW half, so it never gates the step (no NEXT needed for a toast).
+      ui?.showMissionLogToast?.(ev);
+      sawObjective = true;
     }
   }
+  if (sawObjective) _syncMissionLog();
   return gatedBeat;
 }
 
@@ -1324,6 +1366,14 @@ async function _runLocalResolution(skipSummary = false) {
   // state._waveProcessor (set during mission load) before checkVictory, so
   // triggered wave spawns can pre-empt an otherwise-firing eliminate_all win.
   state.finalizeRound();
+
+  // Mission Log (docs/09): finalizeRound() ran pumpMissionLogic('postResolution'),
+  // which may have advanced kill-count objectives (e.g. "kill 3 zombies"). Toast
+  // those + refresh the panel now, right at the end of this round's resolution,
+  // so the marker ticks 1/3 → 2/3 → 3/3 in step with the kills. The Sim state
+  // already mutated; this drains only the SHOW objectiveLog half (story beats +
+  // conversations stay queued for the next planning gate, unchanged).
+  _presentRoundObjectiveLogs();
 
   // Show encounter dialogs for survivors spawned at power nodes during endRound
   if (ui && !_autoplay && state.nodeSpawnedSurvivors?.length) {
@@ -3843,9 +3893,8 @@ function _resumeCampaignMission(missionId) {
   // Hide chronicle by default for story mode
   ui._setChronicleOpen(false);
 
-  // Wire mission info button
-  ui.showMissionInfoBtn(true);
-  ui.onMissionInfo = () => _showMissionInfoModal();
+  // Mission Log (Chronicle panel) reflects the logic-graph objectives, if any.
+  _syncMissionLog();
 
   // Re-wire micro-lesson hints (round/`when`-anchored, so a resumed game only
   // shows hints still relevant to the current round)
@@ -4212,18 +4261,6 @@ function _showMissionBriefing(missionId) {
   _renderDeployRoster(_activeCampaign.heroStats, _activeCampaign.roster, maxActive);
 }
 
-
-function _showMissionInfoModal() {
-  if (!_activeMissionDef) return;
-  const def = _activeMissionDef;
-  const winDesc = _objectiveDescription(def.objectives?.win);
-  const loseObj = def.objectives?.lose;
-  const loseDesc = Array.isArray(loseObj)
-    ? loseObj.map(o => _objectiveDescription(o)).join('; ')
-    : _objectiveDescription(loseObj);
-  const text = `${def.briefing}\n\n☀ Victory: ${winDesc}\n💀 Defeat: ${loseDesc}`;
-  ui.showStoryModal(def.title, text);
-}
 
 function _createEnemyEntity(type, col, row, state = null) {
   switch (type) {
@@ -4771,9 +4808,8 @@ function _initCampaignMission(missionDef) {
     return;
   }
 
-  // Wire mission info button callback
-  ui.showMissionInfoBtn(true);
-  ui.onMissionInfo = () => _showMissionInfoModal();
+  // Mission Log (Chronicle panel) reflects the logic-graph objectives, if any.
+  _syncMissionLog();
 
   // Micro-lesson hints (MissionConductor in 'hints' mode)
   _setupMissionHints(missionDef);

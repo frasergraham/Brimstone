@@ -748,14 +748,22 @@ export function resolvePlansMP(state, playerEntries) {
   return steps;
 }
 
+// The SHOW presentation kinds that ride a TURN's `step.logicEvents` so they
+// animate AT THE RIGHT POINT in the replay (vs the post-round Sim-side
+// presentation — spawn / flags / NPC choreography — which stays queued). The
+// Mission Log toasts (`objectiveLog`) belong here: a "1/3 → 2/3" toast must land
+// on the turn the kill happened, not all at once at round end.
+const REPLAY_SHOW_KINDS = new Set(['storyBeat', 'conversation', 'objectiveLog']);
+
 // Mission-logic (docs/09): after a TURN's moves apply, fire the events that a
 // unit's movement/discovery this turn can trigger — Area enter/exit (so triggers
 // fire on pass-through, not only when a unit stops on the hex at a round boundary)
 // and Actor spawn/death (so finding a pinned survivor fires its On Actor node
-// right here). Returns the SHOW (story beat / conversation) events to play at this
-// point in the replay; Sim-side presentation (spawn / flags / NPC choreography)
-// stays queued for the existing post-round handling. Sealed: reads only `state`.
-// No-op without an attached engine, so normal/online games are byte-identical.
+// right here). Returns the SHOW (story beat / conversation / objective-log) events
+// to play at this point in the replay; Sim-side presentation (spawn / flags / NPC
+// choreography) stays queued for the existing post-round handling. Sealed: reads
+// only `state`. No-op without an attached engine, so normal/online games are
+// byte-identical.
 function captureTurnStoryEvents(state) {
   if (!state?.logicEngine || !Array.isArray(state.logicPresentation)) return null;
   const before = state.logicPresentation.length;
@@ -766,7 +774,7 @@ function captureTurnStoryEvents(state) {
   const rest = [];
   for (let k = before; k < state.logicPresentation.length; k++) {
     const e = state.logicPresentation[k];
-    (e.kind === 'storyBeat' || e.kind === 'conversation' ? captured : rest).push(e);
+    (REPLAY_SHOW_KINDS.has(e.kind) ? captured : rest).push(e);
   }
   state.logicPresentation.length = before;
   state.logicPresentation.push(...rest);

@@ -20,7 +20,7 @@ import { compileTurnBattleSummary, compileTurnXpSummary } from './battle-utils.j
 import { buildWrapupCombatsHtml, wrapupIconHtml } from './wrapup-summary.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
-import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos, TurnCardAutoScroll, shouldAutoScrollToActive, computeFadeFlags } from './ui-render.js';
+import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildMissionLogHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos, TurnCardAutoScroll, shouldAutoScrollToActive, computeFadeFlags } from './ui-render.js';
 import {
   hideActionPopup, getEntityScreenPos, computeArcPositions,
   positionArcPopup, startArcTracking, positionPopup,
@@ -445,9 +445,6 @@ export class UIController {
       const backdrop = this._el('game-menu-backdrop');
       if (backdrop) backdrop.style.display = 'none';
     };
-    this._el('mission-info-btn')?.addEventListener('click', () => {
-      this.onMissionInfo?.();
-    }, sig);
     this._el('menu-btn')?.addEventListener('click', () => {
       const backdrop = this._el('game-menu-backdrop');
       if (backdrop) backdrop.style.display = backdrop.style.display === 'none' ? 'flex' : 'none';
@@ -3869,10 +3866,70 @@ export class UIController {
     }, 0);
   }
 
-  /** Toggle visibility of the mission info header button. */
-  showMissionInfoBtn(visible) {
-    const btn = this._el('mission-info-btn');
-    if (btn) btn.style.display = visible ? '' : 'none';
+  /**
+   * Render the Mission Log — the live objective checklist at the top of the
+   * Chronicle sidebar (it replaced the old static mission-goals header button).
+   * `objectives` is the authoritative list from the mission-logic engine
+   * (`engine.objectives()`): an ordered array of
+   *   { id, label, current, target, completed }
+   * This is pure presentation — it READS the engine's state, never writes it
+   * (Sim/Show split). The section hides itself until at least one objective is
+   * pushed, so non-logic / normal games show no Mission Log at all.
+   */
+  /** Minimal HTML-escape for user/author text injected into the Mission Log. */
+  _escHtml(s) {
+    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  renderMissionLog(objectives) {
+    const section = this._el('mission-log-section');
+    const list = this._el('mission-log-list');
+    if (!section || !list) return;
+    const objs = Array.isArray(objectives) ? objectives : [];
+    if (objs.length === 0) {
+      section.style.display = 'none';
+      list.innerHTML = '';
+      return;
+    }
+    section.style.display = '';
+    list.innerHTML = buildMissionLogHtml(objs);
+  }
+
+  /**
+   * Toast for a Mission Log change (objective added / progressed / completed).
+   * Auto-dismisses; presentation-only. `change` ∈ {'added','progress','completed'};
+   * `objective` is the changed entry { id, label, current, target, completed }.
+   */
+  showMissionLogToast({ change, objective } = {}) {
+    if (!objective) return;
+    let toast = document.getElementById('mission-log-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'mission-log-toast';
+      toast.className = 'mission-log-toast';
+      const wrapper = this._el('canvas-wrapper');
+      if (wrapper) wrapper.appendChild(toast);
+    }
+    const icon = change === 'completed' ? '✓'
+      : change === 'added' ? '🗒'
+      : '•';
+    const verb = change === 'completed' ? 'Objective complete'
+      : change === 'added' ? 'New objective'
+      : 'Objective updated';
+    const progress = (change !== 'completed' && objective.target != null)
+      ? ` (${Math.max(0, objective.current ?? 0)}/${objective.target})`
+      : '';
+    toast.className = 'mission-log-toast' + (change === 'completed' ? ' completed' : '');
+    toast.innerHTML = `<span class="mlt-icon">${icon}</span>`
+      + `<span class="mlt-body"><span class="mlt-verb">${verb}</span>`
+      + `<span class="mlt-label">${this._escHtml(objective.label ?? '')}${progress}</span></span>`;
+    toast.classList.remove('mission-log-toast-out');
+    // Force reflow so re-triggering the same toast restarts its animation.
+    void toast.offsetWidth;
+    clearTimeout(this._missionLogToastTimer);
+    this._missionLogToastTimer = setTimeout(() => {
+      toast.classList.add('mission-log-toast-out');
+    }, 3200);
   }
 
   /**

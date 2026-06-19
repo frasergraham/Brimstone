@@ -1866,8 +1866,9 @@ body.renderer-3d.debug-counters #cam-counter { display: block; }
   overflow: visible;
 }
 .chronicle-panel.collapsed .chronicle-panel-header,
+.chronicle-panel.collapsed #mission-log-section,
 .chronicle-panel.collapsed #chronicle-sidebar-log {
-  display: none;
+  display: none !important;
 }
 
 /* Tab — the protruding button that's always clickable */
@@ -1942,6 +1943,118 @@ body.renderer-3d.debug-counters #cam-counter { display: block; }
 #chronicle-sidebar-log .log-entry {
   padding: 3px 0;
   border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+
+/* ── Mission Log (top half of the Chronicle sidebar) ───────────────────── */
+
+.mission-log-section {
+  flex: 0 0 auto;
+  /* Cap the to-do list so a long list scrolls rather than crowding out the
+     Chronicle below it. */
+  max-height: 45%;
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid rgba(212,167,44,0.25);
+}
+
+.mission-log-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.35rem 0.6rem 0.5rem;
+  overflow-y: auto;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.mission-log-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  padding: 0.18rem 0;
+  color: var(--text, #e8e2d6);
+}
+
+.mission-log-marker {
+  flex: 0 0 auto;
+  min-width: 2.1rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 0.72rem;
+  padding: 0.05rem 0.25rem;
+  border-radius: 4px;
+  background: rgba(212,167,44,0.14);
+  border: 1px solid rgba(212,167,44,0.4);
+  color: var(--day, #d4a72c);
+}
+
+.mission-log-label {
+  flex: 1 1 auto;
+}
+
+.mission-log-item.done .mission-log-label {
+  text-decoration: line-through;
+  color: var(--text-dim, #8a8578);
+  opacity: 0.75;
+}
+.mission-log-item.done .mission-log-marker {
+  background: rgba(120,200,120,0.15);
+  border-color: rgba(120,200,120,0.5);
+  color: #79d279;
+}
+
+/* ── Mission Log toast (objective added / progressed / completed) ───────── */
+
+.mission-log-toast {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  max-width: min(360px, 84vw);
+  padding: 0.5rem 0.85rem;
+  background: rgba(20, 24, 31, 0.97);
+  border: 1px solid rgba(212,167,44,0.55);
+  border-radius: 8px;
+  box-shadow: 0 6px 22px rgba(0,0,0,0.55);
+  color: var(--text, #e8e2d6);
+  font-size: 0.85rem;
+  pointer-events: none;
+  animation: mission-log-toast-in 0.25s ease;
+}
+.mission-log-toast.completed {
+  border-color: rgba(120,200,120,0.65);
+}
+.mission-log-toast .mlt-icon {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+.mission-log-toast .mlt-body {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+.mission-log-toast .mlt-verb {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--day, #d4a72c);
+}
+.mission-log-toast.completed .mlt-verb { color: #79d279; }
+.mission-log-toast .mlt-label { font-weight: 600; }
+.mission-log-toast.mission-log-toast-out {
+  animation: mission-log-toast-out 0.35s ease forwards;
+}
+@keyframes mission-log-toast-in {
+  from { opacity: 0; transform: translate(-50%, -8px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+@keyframes mission-log-toast-out {
+  from { opacity: 1; transform: translate(-50%, 0); }
+  to   { opacity: 0; transform: translate(-50%, -8px); }
 }
 
 /* ── Chronicle overlay ─────────────────────────────────────────────────── */
