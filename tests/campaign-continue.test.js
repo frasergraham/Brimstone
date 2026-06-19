@@ -16,6 +16,7 @@ globalThis.localStorage = {
 
 import {
   resolveCampaignContinue, hasCampaignToContinue, campaignMissionNumber,
+  campaignMissionTotal,
 } from '../src/campaign/continue-resolver.js';
 import {
   Campaign, setActiveSlot,
@@ -46,13 +47,30 @@ function writeMissionSave(missionId, slot) {
 }
 
 describe('campaignMissionNumber', () => {
-  test('returns the 1-based campaign position', () => {
-    assert.equal(campaignMissionNumber(hollowDef, FIRST), 1);
-    assert.equal(campaignMissionNumber(hollowDef, 'prologue'), 2);
-    assert.equal(campaignMissionNumber(hollowDef, 'gathering_survivors'), 3);
+  test('is 0-based from the tutorial — tutorial=0, prologue=1', () => {
+    // FIRST is the tutorial; it is Mission 0. The first real mission (prologue)
+    // is Mission 1, matching its on-disk Ch1M1 file.
+    assert.equal(campaignMissionNumber(hollowDef, FIRST), 0);
+    assert.equal(campaignMissionNumber(hollowDef, 'prologue'), 1);
+    assert.equal(campaignMissionNumber(hollowDef, 'gathering_survivors'), 2);
+  });
+  test('the last real mission is Mission 12', () => {
+    assert.equal(campaignMissionNumber(hollowDef, 'witchs_trail'), 12);
   });
   test('returns null for a mission not in the campaign', () => {
     assert.equal(campaignMissionNumber(hollowDef, 'nope'), null);
+  });
+});
+
+describe('campaignMissionTotal', () => {
+  test('counts the real missions, excluding the tutorial', () => {
+    // 13 catalog entries (1 tutorial + 12 real) → denominator 12.
+    assert.equal(campaignMissionTotal(hollowDef), hollowDef.missions.length - 1);
+    assert.equal(campaignMissionTotal(hollowDef), 12);
+  });
+  test('safe on an empty / missing campaign', () => {
+    assert.equal(campaignMissionTotal({ missions: [] }), 0);
+    assert.equal(campaignMissionTotal(null), 0);
   });
 });
 
@@ -75,8 +93,8 @@ describe('resolveCampaignContinue — active-slot aware', () => {
     assert.equal(t.slot, 1);
     assert.equal(t.missionId, 'prologue');
     assert.equal(t.resume, false);
-    assert.equal(t.missionNumber, 2);
-    assert.equal(t.missionTotal, hollowDef.missions.length);
+    assert.equal(t.missionNumber, 1);                       // prologue is Mission 1 (0-based from tutorial)
+    assert.equal(t.missionTotal, hollowDef.missions.length - 1);  // tutorial excluded from the denominator
   });
 
   test('resolves to RESUME when a mid-mission save exists for the next mission', () => {
@@ -97,7 +115,7 @@ describe('resolveCampaignContinue — active-slot aware', () => {
     assert.ok(t, 'should find progress in the active slot (2), not hardcode slot 1');
     assert.equal(t.slot, 2);
     assert.equal(t.missionId, 'gathering_survivors');
-    assert.equal(t.missionNumber, 3);
+    assert.equal(t.missionNumber, 2);   // 0-based from tutorial: tutorial=0, prologue=1, gathering=2
   });
 
   test('defaults to slot 1 when no active slot was ever persisted', () => {
@@ -169,7 +187,10 @@ describe('just-played campaign surfaces at the top of Continue', () => {
     assert.ok(row, 'a Continue target exists after the win');
     assert.notEqual(row._nextMissionId, 'first_night', 'advances past the played mission');
     assert.equal(row._nextMissionId, expectedId, 'surfaces the next unlocked mission');
-    assert.ok(row._missionNumber > 4, 'with a campaign position past the played one');
+    // first_night is Mission 3 (0-based from the tutorial); the next mission's
+    // number must be past it.
+    assert.ok(row._missionNumber > campaignMissionNumber(hollowDef, 'first_night'),
+      'with a campaign position past the played one');
   });
 
   test('the just-played campaign outranks an older idle game in the feed', () => {
