@@ -45,7 +45,10 @@
   "rewards": {
     "wood": 2,
     "metal": 1,
-    "food": 2
+    "food": 2,
+    "survivors": [
+      {}
+    ]
   },
   "healBonus": 21,
   "lootOverrides": {
