@@ -747,7 +747,7 @@ describe('buildRollTip', () => {
     assert.match(tip, /\+3 ATK/);
     assert.match(tip, /\+2 gang-up/);
     assert.match(tip, /Defense 5 = die 3/);
-    assert.match(tip, /\+1 fort/);
+    assert.match(tip, /\+1 fort \(def\)/);
     assert.match(tip, /−1 fatigue/);
   });
 
@@ -807,7 +807,7 @@ describe('buildRollRows', () => {
     assert.deepEqual(rows.atk.dice, { pool: [4, 2, 1], picked: 4, advantage: 2 });
     assert.deepEqual(rows.atk.terms, [{ label: 'ATK', val: 3 }, { label: 'gang-up', val: 2 }]);
     assert.equal(rows.def.roll, 5);
-    assert.deepEqual(rows.def.terms, [{ label: 'DEF', val: 2 }, { label: 'fort', val: 1 }, { label: 'fatigue', val: -1 }]);
+    assert.deepEqual(rows.def.terms, [{ label: 'DEF', val: 2 }, { label: 'fort (def)', val: 1 }, { label: 'fatigue', val: -1 }]);
     assert.equal(rows.notes.length, 1);
     assert.match(rows.rule, /crush/);
   });
@@ -830,6 +830,35 @@ describe('buildRollRows', () => {
     // Legacy replays without the weapon id still label the row.
     delete armed.breakdown.atkWeaponId;
     assert.deepEqual(buildRollRows(armed, false).atk.terms[1], { label: 'weapon', val: 2 });
+  });
+
+  test('attacker fortification surfaces a distinct "fort (att)" term', () => {
+    const fortified = JSON.parse(JSON.stringify(result));
+    // Attacker stands on a fortified tile; defender carries no fort.
+    fortified.breakdown.atkFortAtkBonus = 2;
+    fortified.breakdown.fortBonus = 0;
+    const rows = buildRollRows(fortified, false);
+    assert.ok(
+      rows.atk.terms.some(t => t.label === 'fort (att)' && t.val === 2),
+      'attacker fort renders a fort (att) term carrying the bonus value',
+    );
+    assert.ok(
+      !rows.def.terms.some(t => t.label === 'fort (def)'),
+      'no defender fort term when the defender tile is unfortified',
+    );
+  });
+
+  test('both sides fortified → attacker and defender fort rows are unambiguous', () => {
+    const fortified = JSON.parse(JSON.stringify(result));
+    fortified.breakdown.atkFortAtkBonus = 1;
+    fortified.breakdown.fortBonus = 3;
+    const rows = buildRollRows(fortified, false);
+    assert.deepEqual(rows.atk.terms.find(t => t.label.startsWith('fort')), { label: 'fort (att)', val: 1 });
+    assert.deepEqual(rows.def.terms.find(t => t.label.startsWith('fort')), { label: 'fort (def)', val: 3 });
+    // The plain-text tip reflects both fortification lines too.
+    const tip = buildRollTip(fortified, false);
+    assert.match(tip, /\+1 fort \(att\)/);
+    assert.match(tip, /\+3 fort \(def\)/);
   });
 
   test('returns null without breakdown data', () => {
