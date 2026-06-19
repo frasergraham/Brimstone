@@ -1,5 +1,15 @@
 [
   {
+    "version": "1.8.2",
+    "date": "2026-06-19",
+    "summary": "New features, and improvements",
+    "notes": [
+      "Move the dev server selector to the bottom of the Account pane",
+      "Move the dev server selector into the ledger rail",
+      "Dead-code sweep — remove unreachable legacy menu JS"
+    ]
+  },
+  {
     "version": "1.8.1",
     "date": "2026-06-19",
     "summary": "Improvements",

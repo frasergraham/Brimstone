@@ -11,21 +11,17 @@
  * server returns devMode:true, or when local isDevMode is true.
  */
 
-import { isDevMode } from './platform.js';
-
 const CUSTOM_VALUE = '__custom__';
 const THIS_SERVER  = '';
 
 /**
- * Initialise the server selector UI.
- * @param {boolean} serverDevMode - devMode flag from the server's /api/config
+ * Mount the server selector UI into a target element (the ledger Account pane,
+ * at the bottom). Called on each Account render, so it clears any prior instance.
+ * @param {HTMLElement} target - container to append the selector into
  */
-export async function initServerSelector(serverDevMode = false) {
-  // Always show the server selector for now
-  // if (!serverDevMode && !isDevMode) return;
-
-  const setupScreen = document.getElementById('setup-screen');
-  if (!setupScreen) return;
+export async function mountServerSelector(target) {
+  if (!target) return;
+  document.getElementById('server-selector')?.remove();   // avoid duplicates across re-renders
 
   // In Electron, BRIMSTONE_SERVER may not be set yet (async preload race).
   // Await the electron API to ensure we have the correct server URL.
@@ -69,7 +65,7 @@ export async function initServerSelector(serverDevMode = false) {
 
   wrap.appendChild(select);
   wrap.appendChild(input);
-  setupScreen.appendChild(wrap);
+  target.appendChild(wrap);
 
   // ── Fetch Railway environments ────────────────────────────────────────────
   _fetchEnvironments(select, input, storedUrl);
