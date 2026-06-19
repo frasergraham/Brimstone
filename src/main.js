@@ -5052,11 +5052,11 @@ function _deleteSpSave(id) {
  *  id the lists use (room_id): `_spSaveId` for single-player, or
  *  `campaignId/slotN/missionId` for a campaign mission. Fire-and-forget — the
  *  capture renders to an offscreen target, never touching the live view. */
-function _captureRoundThumbnail() {
+function _captureRoundThumbnail(idOverride = null) {
   if (!renderer?.captureMapThumbnail || !state || state.gameOver || _autoplay) return;
-  const id = (_activeCampaign && _activeMissionDef)
+  const id = idOverride || ((_activeCampaign && _activeMissionDef)
     ? `${_activeCampaign.campaignDef.id}/slot${_activeCampaign.slotIndex}/${_activeMissionDef.id}`
-    : _spSaveId;
+    : _spSaveId);
   if (!id) return;
   Promise.resolve(renderer.captureMapThumbnail(512))
     .then((url) => { if (url) saveThumb(id, url); })
@@ -8444,6 +8444,10 @@ function _createMpClient() {
         // Mirror the same post-resolution side effects as the local path.
         await ui._triggerPostRoundEffects();
         redrawOnline();
+
+        // Snapshot the board for the menu save lists (online, end of round),
+        // keyed by the online room id (== the game row's room_id).
+        _captureRoundThumbnail(mp?.roomId);
 
         // Show the post-resolution review for human players via the shared
         // _runEndOfRoundReview helper (same card/modal split as offline).
