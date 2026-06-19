@@ -3460,6 +3460,18 @@ function initOnline(mirrorState, myFaction, mpClient) {
 
   redrawOnline();
 
+  // Capture a fresh board thumbnail for the menu lists once assets are ready,
+  // keyed by the online room id (== the games-list row's room_id). This is the
+  // ONLY way the persistent Battle — whose rounds resolve server-side while the
+  // player is away, so the round-end capture rarely fires — ever gets a
+  // thumbnail; live games simply refresh theirs on each view.
+  const _thumbRoomId = mpClient?.roomId ?? mp?.roomId;
+  if (_thumbRoomId && typeof renderer.whenReady === 'function') {
+    renderer.whenReady()
+      .then(() => { try { _captureRoundThumbnail(_thumbRoomId); } catch { /* best-effort */ } })
+      .catch(() => {});
+  }
+
   requestAnimationFrame(() => {
     // Resize now that game-screen layout is complete and canvas has real dimensions.
     renderer.resize();
@@ -6145,7 +6157,9 @@ async function _fetchAllGames() {
       turn_deadline: b.turnDeadline ?? null,
       players_count: playersCount,
       players_per_side: pps,
-      updated_at: Math.floor(Date.now() / 1000),
+      // Real last-resolution time from the server (null before the first turn),
+      // so the menu shows the actual "last turn N ago" instead of the poll time.
+      updated_at: b.lastTurnAt ?? null,
       status: 'playing',
     });
   } else if (battleStatus?.battles?.length) {

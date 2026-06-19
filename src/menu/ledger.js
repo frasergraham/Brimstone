@@ -1435,16 +1435,13 @@ function _countdown(unixSec) {
 // carry a real updated_at; the Battle's last turn is derived from its deadline
 // (turns resolve on a 12h cadence — noon & midnight). '' when there's no data.
 function _gameTimeMeta(row) {
-  let last = null, dl = null;
-  if (row.kind === 'game') {
-    last = _relTime(row.updated_at);
-    dl = _countdown(row.turn_deadline);
-  } else if (row.kind === 'battle' && row.turn_deadline) {
-    last = _relTime(row.turn_deadline - 12 * 3600);
-    dl = _countdown(row.turn_deadline);
-  } else {
-    return '';
-  }
+  if (row.kind !== 'game' && row.kind !== 'battle') return '';
+  // Both games and the Battle carry a real last-resolution time in updated_at
+  // (server room.lastTurnAt); the deadline drives the countdown. The Battle no
+  // longer guesses "last turn" from turn_deadline − 12h, which was wrong whenever
+  // a round resolved off the noon/midnight schedule (e.g. early submit).
+  const last = _relTime(row.updated_at);
+  const dl = _countdown(row.turn_deadline);
   const bits = [];
   if (last) bits.push(`last turn ${last}`);
   if (dl) bits.push(`⏱ ${dl}`);
