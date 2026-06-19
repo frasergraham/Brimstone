@@ -1229,6 +1229,16 @@
         "y": 600
       },
       {
+        "id": "golem_beat",
+        "type": "storyBeat",
+        "params": {
+          "title": "Something Rises",
+          "text": "The fallen corpses shudder and knit together — splintered timber, bone, and blood-soaked rope lurch upright into a crude golem. It turns its eyeless face toward you."
+        },
+        "x": 820,
+        "y": 180
+      },
+      {
         "id": "obj_set",
         "type": "setObjective",
         "params": {
@@ -1382,6 +1392,17 @@
         },
         "to": {
           "node": "n4",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "n4",
+          "pin": "done"
+        },
+        "to": {
+          "node": "golem_beat",
           "pin": "in"
         },
         "kind": "exec"

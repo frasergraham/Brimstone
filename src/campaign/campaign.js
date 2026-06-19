@@ -9,6 +9,7 @@ import { EntityType, applyLevel, normalizeItems, getEquippedWeaponIdOf,
 import { SURVIVOR_ROSTER, SURVIVOR_COLORS } from '../content/survivors.js';
 import { ITEMS } from '../items.js';
 import { isRiver, hasBuilding } from '../tiles.js';
+import { hasLineOfSight } from '../actions.js';
 import { evaluateUnlock } from './unlock.js';
 
 // v1: initial campaign save format.
@@ -627,25 +628,38 @@ export function resolveSpawnPosition(state, spawnAt) {
   if (spawnAt === 'near_hero') {
     // Spawn on a passable tile close enough for the hero to see on spawn, but
     // not adjacent. Hero day-phase sight is 3; target an annulus of 2–3 hexes.
+    // Crucially, require an unobstructed LINE OF SIGHT from the tile to the
+    // hero — distance alone isn't enough on a forested map, where a 2–3 hex
+    // tile can sit behind a tree/wall and the unit would "rise" off-screen.
+    // The golem must appear where the player can watch it emerge.
     const hero = state.hero;
     if (!hero) return null;
     const isPassable = (tile) =>
       !isRiver(tile) && !hasBuilding(tile);
     const isOccupied = (col, row) =>
       state.entities.some(e => e.alive && e.col === col && e.row === row);
-    const pickFrom = (minDist, maxDist) => {
+    const inSight = (tile) =>
+      hasLineOfSight(state, tile.col, tile.row, hero.col, hero.row);
+    // requireLos: when true, drop tiles the hero can't actually see. Used for
+    // the preferred passes; the final fallback drops it so we never fail to
+    // spawn on a pathological map.
+    const pickFrom = (minDist, maxDist, requireLos) => {
       const candidates = [];
       for (const [, tile] of state.tiles) {
         if (!isPassable(tile)) continue;
         if (isOccupied(tile.col, tile.row)) continue;
         const d = hexDistance(tile.col, tile.row, hero.col, hero.row);
-        if (d >= minDist && d <= maxDist) candidates.push(tile);
+        if (d < minDist || d > maxDist) continue;
+        if (requireLos && !inSight(tile)) continue;
+        candidates.push(tile);
       }
       return candidates;
     };
-    // Prefer 2–3 hexes (visible but not adjacent). Widen if we must.
-    let candidates = pickFrom(2, 3);
-    if (candidates.length === 0) candidates = pickFrom(1, 4);
+    // Prefer 2–3 hexes IN SIGHT (visible but not adjacent). Widen the ring,
+    // then — only if the whole map is somehow blocked — drop the LOS gate.
+    let candidates = pickFrom(2, 3, true);
+    if (candidates.length === 0) candidates = pickFrom(1, 4, true);
+    if (candidates.length === 0) candidates = pickFrom(1, 4, false);
     if (candidates.length === 0) return null;
     const t = candidates[Math.floor(Math.random() * candidates.length)];
     return { col: t.col, row: t.row };

@@ -325,6 +325,12 @@ export class GameState {
     // Left false for normal/online/skirmish games.
     this.isCampaign = false;
 
+    // The mission's briefing/description text, shown at the top of the Mission
+    // Log (Show: pure presentation). Static mission metadata — set by main.js
+    // when a logic-mission loads and round-tripped through state-sync so a
+    // mid-mission resume keeps the header. Empty for non-campaign games.
+    this.missionBriefing = '';
+
     // ── Game mode ──────────────────────────────────────────────────────────
     // 'standard' = normal game; 'battle' = persistent weekly Battle for Caleb's Hollow.
     this.gameMode = mapDataOverride?.gameMode ?? GameMode.STANDARD;

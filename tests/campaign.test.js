@@ -11,6 +11,7 @@ import {
   reconcileRosterAfterMission, applyCarriedHeroLoadout, rosterSnapshotFromName,
 } from '../src/campaign/campaign.js';
 import { getFaction } from '../src/factions.js';
+import { hasLineOfSight } from '../src/actions.js';
 import { ObjectiveType, processStoryTriggers } from '../src/campaign/missions.js';
 import { CAMPAIGNS, getCampaignById } from '../src/campaign/campaign-registry.js';
 import { roundsUntilScoring } from '../src/ai.js';
@@ -2850,6 +2851,106 @@ describe('processWaves near_hero spawn appears in view', () => {
     // If the fallback silently re-picked from 2-3, this would fail.
     assert.ok(d === 1 || d === 4,
       `fallback spawn distance ${d} should be 1 or 4 (2-3 ring is saturated)`);
+  });
+});
+
+// ── Mission Log briefing header round-trips through state-sync ────────────────
+
+describe('Mission Log — briefing survives save/resume (state-sync)', () => {
+  test('missionBriefing serializes and restores (so the header persists)', () => {
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    state.isCampaign = true;
+    state.missionBriefing = 'Cut down the dead and face what rises in their wake.';
+
+    const restored = deserializeState(serializeState(state));
+    assert.equal(restored.missionBriefing, state.missionBriefing,
+      'the Mission Log briefing must survive a mid-mission resume');
+  });
+
+  test('a non-campaign game carries an empty briefing (no leak into normal play)', () => {
+    const state = new GameState(true, true, 'skirmish');
+    assert.equal(state.missionBriefing, '');
+    const restored = deserializeState(serializeState(state));
+    assert.equal(restored.missionBriefing, '');
+  });
+});
+
+// ── Ch1M1 golem: spawns IN LINE OF SIGHT + a story beat fires ────────────────
+
+describe('Ch1M1 — the Wood Golem rises in view with a story beat', () => {
+  // Drive the REAL Ch1M1 logic graph through the real engine + game context.
+  // After 3 hero kills the golem must (a) spawn at a hex the hero can actually
+  // SEE (LOS, not merely near), and (b) be accompanied by a Show story beat.
+  function runGolemSpawn() {
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    state.phase = 'day'; // hero day sight = 3 (matches the live mission cadence)
+
+    const emitted = [];
+    const createEnemyFn = (type, col, row) =>
+      (type === 'wood_golem' ? createWoodGolem(col, row, 'witch') : createZombie(col, row, 'witch'));
+    const ctx = createGameContext(state, {
+      createEnemyFn,
+      emit: (ev) => emitted.push(ev),
+      random: () => 0.5, // deterministic candidate pick
+    });
+    const graph = hollowDef.missions.find((m) => m.id === 'prologue').logic;
+    const eng = new MissionLogicEngine(graph, ctx);
+
+    eng.dispatch('missionStart');
+    // Cumulative hero-kill pulses (the live loop fires onKillCount with the
+    // running total) — the third crosses the >=3 threshold and spawns the golem.
+    eng.dispatch('killCount', { faction: 'hero', count: 1 });
+    eng.dispatch('killCount', { faction: 'hero', count: 2 });
+    eng.dispatch('killCount', { faction: 'hero', count: 3 });
+    return { state, emitted };
+  }
+
+  test('the golem spawns on a hex the hero has line of sight to', () => {
+    const { state } = runGolemSpawn();
+    const golem = state.entities.find((e) => e.type === EntityType.WOOD_GOLEM);
+    assert.ok(golem, 'a wood golem spawned after 3 kills');
+    // The whole point of the fix: the player must SEE it rise, not just be near.
+    assert.ok(
+      hasLineOfSight(state, golem.col, golem.row, state.hero.col, state.hero.row),
+      `golem at (${golem.col},${golem.row}) must be in the hero's line of sight`,
+    );
+    const d = hexDistance(golem.col, golem.row, state.hero.col, state.hero.row);
+    assert.ok(d >= 1 && d <= 4, `golem distance ${d} should be within sight range`);
+  });
+
+  test('a story beat accompanies the golem, fired AFTER the spawn (Sim → Show)', () => {
+    const { emitted } = runGolemSpawn();
+    const beats = emitted.filter((e) => e.kind === 'storyBeat');
+    assert.equal(beats.length, 1, 'exactly one golem story beat');
+    assert.match(beats[0].text, /golem/i, 'the beat narrates the golem rising');
+    const spawnIdx = emitted.findIndex((e) => e.kind === 'spawn');
+    const beatIdx = emitted.findIndex((e) => e.kind === 'storyBeat');
+    assert.ok(spawnIdx >= 0, 'the golem spawn was emitted');
+    assert.ok(spawnIdx < beatIdx, 'Sim spawn precedes the Show story beat');
+  });
+
+  test('the golem spawn + beat fire exactly once even on repeated kill pulses', () => {
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    state.phase = 'day';
+    const emitted = [];
+    const ctx = createGameContext(state, {
+      createEnemyFn: (type, col, row) => createWoodGolem(col, row, 'witch'),
+      emit: (ev) => emitted.push(ev),
+      random: () => 0.5,
+    });
+    const eng = new MissionLogicEngine(hollowDef.missions.find((m) => m.id === 'prologue').logic, ctx);
+    eng.dispatch('missionStart');
+    eng.dispatch('killCount', { faction: 'hero', count: 3 });
+    eng.dispatch('killCount', { faction: 'hero', count: 4 });
+    eng.dispatch('killCount', { faction: 'hero', count: 5 });
+    assert.equal(state.entities.filter((e) => e.type === EntityType.WOOD_GOLEM).length, 1);
+    assert.equal(emitted.filter((e) => e.kind === 'storyBeat').length, 1);
   });
 });
 
