@@ -231,6 +231,7 @@
   background:rgba(12,13,20,.62); border:1px solid #242236; border-radius:8px; padding:12px 12px 14px; }
 .lg-party .cprog-shared .cprog-section-label:first-child { margin-top:0; }
 .lg-party .cprog-shared .cprog-inv-grid { grid-template-columns:repeat(auto-fill, minmax(64px,1fr)); }
+.lg-party .cprog-shared .cprog-inv-grid.is-resources { grid-template-columns:repeat(2, 1fr); }
 .lg-party .cprog-shared .cprog-inv-grid.is-equipment { overflow-y:auto; flex:1; min-height:80px; align-content:start; }
 .lg-party .cprog-shared .cprog-slot.is-weapon { grid-column:span 2; }
 /* Mobile-only pull-out tab for the inventory drawer (hidden on desktop). */

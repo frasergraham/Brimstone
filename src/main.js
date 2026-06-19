@@ -9836,7 +9836,9 @@ async function _ledgerOnline() {
   return {
     signedIn,
     games: rows.filter(r => r.kind === 'game'),
-    battle: rows.find(r => r.kind === 'battle' || r.kind === 'battle-invite') || null,
+    // Only the Battle the player is actually IN (myBattle) — a 'battle-invite'
+    // (war exists but not joined) no longer surfaces on the landing.
+    battle: rows.find(r => r.kind === 'battle') || null,
   };
 }
 
@@ -9971,7 +9973,10 @@ let _ledgerLobbyListCb = null;
 function _buildLedgerData() {
   return {
     session:          () => loadSession(),
-    activeGames:      async () => (await _fetchAllGames()).rows,
+    // Resumable games for Continue. Drop 'battle-invite' (a Battle exists but the
+    // player hasn't joined) — the persistent Battle should only appear as a
+    // resumable game once you're actually in it (kind 'battle' / myBattle).
+    activeGames:      async () => (await _fetchAllGames()).rows.filter(r => r.kind !== 'battle-invite'),
     // Native online lobby (verified vs the dev server). `mp` is the connected
     // multiplayer client (present once signed in). Seat indices are absolute
     // (server-side); the ledger passes lobby.slots indices straight through.

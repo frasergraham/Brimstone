@@ -515,15 +515,18 @@ function _othersLanding(body) {
       () => { _createAsync = false; _othersView = 'find'; select('others'); }));
     body.appendChild(rh);
 
-    const bf = document.createElement('div');
-    bf.className = 'lg-battle' + (battle ? ' is-live' : '');
-    bf.innerHTML =
-      `<div class="lg-battle-head"><span class="gthc">⚔ The Battle for Caleb's Hollow</span>` +
-      `${battle ? '<span class="lg-battle-live">● live</span>' : '<span class="lg-battle-cta">View ▸</span>'}</div>` +
-      `<div class="lg-battle-sub">Persistent 10v10 war — turns resolve at noon &amp; midnight.` +
-      `${battle && battle.round != null ? ' · Round ' + battle.round : ''}</div>`;
-    bf.addEventListener('click', () => { _othersView = 'battle'; select('others'); });
-    body.appendChild(bf);
+    // Only surface the persistent Battle once the player is actually in it.
+    if (battle) {
+      const bf = document.createElement('div');
+      bf.className = 'lg-battle is-live';
+      bf.innerHTML =
+        `<div class="lg-battle-head"><span class="gthc">⚔ The Battle for Caleb's Hollow</span>` +
+        `<span class="lg-battle-live">● live</span></div>` +
+        `<div class="lg-battle-sub">Persistent 10v10 war — turns resolve at noon &amp; midnight.` +
+        `${battle.round != null ? ' · Round ' + battle.round : ''}</div>`;
+      bf.addEventListener('click', () => { _othersView = 'battle'; select('others'); });
+      body.appendChild(bf);
+    }
 
     body.appendChild(_cap('Your games'));
     if (!games.length) {
