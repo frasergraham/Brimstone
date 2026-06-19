@@ -3,7 +3,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mmUrgencyScore, mmSortRows, mmFormatRow, mmDedupeCampaignRows } from '../src/main-menu-games.js';
+import { mmUrgencyScore, mmSortRows, mmFormatRow, mmDedupeCampaignRows, mmCampaignProgressLabel } from '../src/main-menu-games.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -232,40 +232,42 @@ describe('mmFormatRow', () => {
     assert.ok(view.meta.includes('23 rounds'));
   });
 
-  test('campaign-next row shows Campaign and next mission title in meta', () => {
+  test('campaign-next row leads with the next mission title and tags Campaign', () => {
     const view = mmFormatRow({
       kind: 'campaign-next',
       title: '📖 Caleb\'s Hollow Prologue',
       _nextMissionTitle: 'The First Night',
     });
     assert.ok(view.classes.includes('mm-game-local'));
+    // Mission name now leads the title; meta tags it as Campaign.
+    assert.ok(view.title.includes('The First Night'));
     assert.ok(view.meta.includes('Campaign'));
-    assert.ok(view.meta.includes('The First Night'));
     assert.equal(view.showTurnBadge, false);
   });
 
-  test('campaign-next row without _nextMissionTitle shows Campaign only', () => {
+  test('campaign-next row without _nextMissionTitle keeps its campaign title', () => {
     const view = mmFormatRow({
       kind: 'campaign-next',
       title: '📖 Caleb\'s Hollow Prologue',
     });
+    assert.equal(view.title, '📖 Caleb\'s Hollow Prologue');
     assert.ok(view.meta.includes('Campaign'));
     assert.equal(view.meta, 'Campaign');
   });
 
-  test('local-campaign row surfaces the slot and mission when present', () => {
+  test('local-campaign row surfaces the slot in meta and the mission in the title', () => {
     const view = mmFormatRow({
       kind: 'local-campaign',
       title: '📖 The First Night',
       _slotIndex: 2,
       _missionTitle: 'The First Night',
     });
+    assert.ok(view.title.includes('The First Night'));
     assert.ok(view.meta.includes('Campaign'));
     assert.ok(view.meta.includes('Slot 2'));
-    assert.ok(view.meta.includes('The First Night'));
   });
 
-  test('campaign-next row surfaces the slot when present', () => {
+  test('campaign-next row surfaces the slot in meta and the mission in the title', () => {
     const view = mmFormatRow({
       kind: 'campaign-next',
       title: '📖 Caleb\'s Hollow Prologue',
@@ -273,7 +275,47 @@ describe('mmFormatRow', () => {
       _nextMissionTitle: 'The River Crossing',
     });
     assert.ok(view.meta.includes('Slot 3'));
-    assert.ok(view.meta.includes('The River Crossing'));
+    assert.ok(view.title.includes('The River Crossing'));
+  });
+
+  // Task 4 — campaign rows show the mission NUMBER ("Mission N — Title" in the
+  // title, "Mission N/Total" in the meta) so Continue tells you where you are.
+  test('campaign-next row prefixes the mission number when present', () => {
+    const view = mmFormatRow({
+      kind: 'campaign-next',
+      title: '📖 Caleb\'s Hollow Prologue',
+      _slotIndex: 1,
+      _nextMissionTitle: "Trouble at The Wanderer's Inn",
+      _missionNumber: 2,
+      _missionTotal: 7,
+    });
+    assert.equal(view.title, "Mission 2 — Trouble at The Wanderer's Inn");
+    assert.ok(view.meta.includes('Mission 2/7'));
+  });
+
+  test('local-campaign row prefixes the mission number when present', () => {
+    const view = mmFormatRow({
+      kind: 'local-campaign',
+      title: '📖 The First Night',
+      _slotIndex: 1,
+      _missionTitle: 'The First Night',
+      _missionNumber: 4,
+      _missionTotal: 13,
+    });
+    assert.equal(view.title, 'Mission 4 — The First Night');
+    assert.ok(view.meta.includes('Mission 4/13'));
+  });
+
+  test('campaign row with a number but no total omits the slash', () => {
+    const view = mmFormatRow({
+      kind: 'campaign-next',
+      title: '📖 Campaign',
+      _nextMissionTitle: 'Some Mission',
+      _missionNumber: 3,
+    });
+    assert.equal(view.title, 'Mission 3 — Some Mission');
+    assert.ok(view.meta.includes('Mission 3'));
+    assert.ok(!view.meta.includes('Mission 3/'));
   });
 });
 
@@ -328,5 +370,20 @@ describe('mmDedupeCampaignRows', () => {
     const out = mmDedupeCampaignRows(rows);
     assert.equal(out.length, 1);
     assert.equal(out[0]._slotIndex, 1);
+  });
+});
+
+// ── mmCampaignProgressLabel (Task 4) ─────────────────────────────────────────
+describe('mmCampaignProgressLabel', () => {
+  test('shows "Mission N/Total" when both are present', () => {
+    assert.equal(mmCampaignProgressLabel({ _missionNumber: 2, _missionTotal: 7 }), 'Mission 2/7');
+  });
+  test('shows "Mission N" when the total is unknown', () => {
+    assert.equal(mmCampaignProgressLabel({ _missionNumber: 5 }), 'Mission 5');
+  });
+  test('returns empty string when there is no mission number', () => {
+    assert.equal(mmCampaignProgressLabel({}), '');
+    assert.equal(mmCampaignProgressLabel({ _missionTotal: 7 }), '');
+    assert.equal(mmCampaignProgressLabel(null), '');
   });
 });

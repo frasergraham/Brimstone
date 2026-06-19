@@ -89,6 +89,41 @@ export function legacyCampaignSaveSlot(campaignId) {
   return `campaign-${campaignId}`;
 }
 
+// ── Active slot ─────────────────────────────────────────────────────────────
+// Which playthrough slot the player last selected/started for a campaign. The
+// menu persists this so the Continue card and the Campaign destination resume
+// the slot the player actually cares about — not just whichever slot was
+// touched most recently by an autosave. Stored as a single small int per
+// campaign under its own key; defaults to slot 1 when never set.
+
+/** localStorage key holding the active (last-selected) slot for a campaign. */
+export function campaignActiveSlotKey(campaignId) {
+  return `brimstone-campaign-${campaignId}-activeSlot`;
+}
+
+/**
+ * Read the persisted active slot for a campaign, clamped to a valid index.
+ * Defaults to slot 1 when never set or unreadable.
+ */
+export function getActiveSlot(campaignId) {
+  try {
+    const raw = localStorage.getItem(campaignActiveSlotKey(campaignId));
+    return raw == null ? 1 : clampSlotIndex(raw);
+  } catch {
+    return 1;
+  }
+}
+
+/**
+ * Persist the active slot for a campaign (clamped). Call when the player
+ * selects or starts a slot so Continue/Campaign resume the right playthrough.
+ */
+export function setActiveSlot(campaignId, slotIndex) {
+  try {
+    localStorage.setItem(campaignActiveSlotKey(campaignId), String(clampSlotIndex(slotIndex)));
+  } catch { /* storage unavailable — non-fatal */ }
+}
+
 /**
  * Serialize a survivor entity into a plain object for campaign roster storage.
  * Captures all fields needed to reconstruct the entity between missions.

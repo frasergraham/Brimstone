@@ -96,6 +96,20 @@ export function mmDedupeCampaignRows(rows) {
   return out;
 }
 
+/**
+ * Short "where in the campaign" marker for a campaign row's meta line, e.g.
+ * "Mission 2/7" (or "Mission 2" when the total is unknown). Returns '' when the
+ * row carries no mission number, so callers can safely push it unconditionally
+ * — empty parts are dropped by the join. Reads `_missionNumber`/`_missionTotal`
+ * set by the campaign-row builder.
+ */
+export function mmCampaignProgressLabel(row) {
+  const n = row?._missionNumber;
+  if (n == null) return '';
+  const total = row?._missionTotal;
+  return total != null ? `Mission ${n}/${total}` : `Mission ${n}`;
+}
+
 const PHASE_LABELS = {
   dawn:  '🌅 Dawn',
   day:   '☀ Day',
@@ -120,7 +134,18 @@ export function mmFormatRow(row) {
   }
   if (row.action_needed) classes.push('mm-game-action');
 
-  const title = row.title || 'Game';
+  // Campaign rows lead with the mission they'll resume into, prefixed with its
+  // campaign position ("Mission 2 — Trouble at The Wanderer's Inn") so the
+  // Continue card tells the player exactly where they are in the chapter.
+  let title = row.title || 'Game';
+  if (row.kind === 'local-campaign' || row.kind === 'campaign-next') {
+    const missionTitle = (row.kind === 'local-campaign' ? row._missionTitle : row._nextMissionTitle);
+    if (missionTitle) {
+      title = row._missionNumber != null
+        ? `Mission ${row._missionNumber} — ${missionTitle}`
+        : missionTitle;
+    }
+  }
 
   // Build the line 2 meta string.
   const parts = [];
@@ -142,17 +167,17 @@ export function mmFormatRow(row) {
     if (row.map_size) parts.push(capitalize(row.map_size));
     parts.push('Local');
   } else if (row.kind === 'local-campaign') {
-    // Campaign mission-in-progress
+    // Campaign mission-in-progress (the mission title rides in the row title now)
     parts.push('Campaign');
     if (row._slotIndex != null) parts.push(`Slot ${row._slotIndex}`);
-    if (row._missionTitle) parts.push(row._missionTitle);
+    parts.push(mmCampaignProgressLabel(row));
     if (row.round != null) parts.push(`Round ${row.round}`);
     if (row.phase) parts.push(PHASE_LABELS[row.phase] ?? row.phase);
   } else if (row.kind === 'campaign-next') {
-    // Campaign with a next mission ready to play
+    // Campaign with a next mission ready to play (title carries the mission name)
     parts.push('Campaign');
     if (row._slotIndex != null) parts.push(`Slot ${row._slotIndex}`);
-    if (row._nextMissionTitle) parts.push(row._nextMissionTitle);
+    parts.push(mmCampaignProgressLabel(row));
   } else if (row.kind === 'completed-sp') {
     // Completed local game (for the Replays page)
     if (row.win_reason) parts.push(row.win_reason);
@@ -180,7 +205,7 @@ export function mmFormatRow(row) {
 
   return {
     title,
-    meta: parts.join(' · '),
+    meta: parts.filter(Boolean).join(' · '),
     classes,
     showTurnBadge: !!row.action_needed,
     deadline: row.turn_deadline ?? null,
