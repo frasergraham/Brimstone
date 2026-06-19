@@ -1090,10 +1090,16 @@ export class Campaign {
    * Apply the result of a completed mission.
    * @param {string} missionId
    * @param {object} result - { won, survivors[], resources, heroStats, flags }
+   * @returns {{won:boolean, rewards:{survivors:object[], resources:Object<string,number>}}}
+   *   On a WIN, `rewards` summarises what the mission GRANTED this run — the
+   *   granted survivor snapshots (full icon/stats/abilities, for the debrief's
+   *   Rewards section) and the positive resource deltas applied. Empty arrays/
+   *   object when the mission has no `rewards` block. On a LOSS, `won:false` and
+   *   an empty reward summary (the party is restored — nothing is granted).
    */
   applyMissionResult(missionId, result) {
     // On defeat: no state changes — party is restored to pre-mission state
-    if (!result.won) return;
+    if (!result.won) return { won: false, rewards: { survivors: [], resources: {} } };
 
     const missionDef = this.getMissionDef(missionId);
 
@@ -1163,13 +1169,19 @@ export class Campaign {
     // Granting runs AFTER the roster is rebuilt above so the new ally survives
     // the permadeath reconcile, and after the heal bonus so a freshly-granted
     // survivor starts at full HP rather than over-healed.
+    //
+    // `rewardSummary` captures what was granted so the caller (the debrief)
+    // can SHOW it — the granted survivor snapshots (rendered as full cards) and
+    // the positive resource deltas applied this run.
+    const rewardSummary = { survivors: [], resources: {} };
     if (missionDef?.rewards) {
       for (const [key, val] of Object.entries(missionDef.rewards)) {
         if (key === 'survivors') continue; // handled below — not a resource
         this.resources[key] = (this.resources[key] ?? 0) + val;
+        if (val) rewardSummary.resources[key] = val;
       }
       if (Array.isArray(missionDef.rewards.survivors)) {
-        this.grantRewardSurvivors(missionDef.rewards.survivors);
+        rewardSummary.survivors = this.grantRewardSurvivors(missionDef.rewards.survivors);
       }
     }
 
@@ -1179,6 +1191,8 @@ export class Campaign {
     }
 
     this.save();
+
+    return { won: true, rewards: rewardSummary };
   }
 
   /**
@@ -1194,7 +1208,9 @@ export class Campaign {
    * save on its own — the caller (applyMissionResult) persists afterward.
    *
    * @param {{name?:string}[]} specs
-   * @returns {string[]} the names actually granted (in order).
+   * @returns {object[]} the roster snapshots actually granted (in order) — the
+   *   same objects pushed onto `roster`, so the debrief can render each as a full
+   *   survivor card (icon/stats/abilities) without re-deriving from the name.
    */
   grantRewardSurvivors(specs) {
     if (!Array.isArray(specs)) return [];
@@ -1223,7 +1239,7 @@ export class Campaign {
       if (!snapshot) continue;
       taken.add(snapshot.name);
       this.roster.push(snapshot);
-      granted.push(snapshot.name);
+      granted.push(snapshot);
     }
     return granted;
   }

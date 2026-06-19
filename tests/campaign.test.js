@@ -875,9 +875,14 @@ describe('Campaign class', () => {
   test('grantRewardSurvivors adds a named survivor to the roster', () => {
     const c = new Campaign(hollowDef);
     const granted = c.grantRewardSurvivors([{ name: 'Thomas Putnam' }]);
-    assert.deepEqual(granted, ['Thomas Putnam']);
+    // Returns the full roster snapshots (icon/stats/abilities), not just names,
+    // so the debrief can render each as a card. The snapshot IS the roster entry.
+    assert.equal(granted.length, 1);
+    assert.equal(granted[0].name, 'Thomas Putnam');
+    assert.ok(granted[0].maxHp > 0, 'snapshot carries stats for the card');
+    assert.ok(Array.isArray(granted[0].abilities), 'snapshot carries abilities');
     assert.equal(c.roster.length, 1);
-    assert.equal(c.roster[0].name, 'Thomas Putnam');
+    assert.equal(c.roster[0], granted[0], 'granted snapshot is the rostered object');
   });
 
   test('grantRewardSurvivors with an empty spec adds a random roster survivor', () => {
@@ -885,8 +890,8 @@ describe('Campaign class', () => {
     const granted = c.grantRewardSurvivors([{}]);
     assert.equal(granted.length, 1);
     assert.equal(c.roster.length, 1);
-    assert.equal(c.roster[0].name, granted[0]);
-    assert.ok(SURVIVOR_ROSTER.some(s => s.name === granted[0]),
+    assert.equal(c.roster[0].name, granted[0].name);
+    assert.ok(SURVIVOR_ROSTER.some(s => s.name === granted[0].name),
       'granted survivor must be a real roster character');
   });
 
@@ -897,7 +902,7 @@ describe('Campaign class', () => {
     // Many empty specs — must draw distinct, fresh names each time.
     const granted = c.grantRewardSurvivors([{}, {}, {}]);
     assert.equal(granted.length, 3);
-    const names = new Set(granted);
+    const names = new Set(granted.map(g => g.name));
     assert.equal(names.size, 3, 'granted names must be distinct');
     assert.ok(!names.has('Mary Quinn'), 'must not re-grant a party member');
     assert.ok(!names.has('Thomas Putnam'), 'must not resurrect a fallen survivor');
@@ -919,6 +924,50 @@ describe('Campaign class', () => {
     assert.equal(c.roster.length, before + 1,
       'beating Mission 3 must add the promised new ally to the roster');
     assert.ok(SURVIVOR_ROSTER.some(s => s.name === c.roster[0].name));
+  });
+
+  // ── Reward summary surfaced to the debrief ────────────────────────────────
+  test('applyMissionResult returns the granted survivor snapshots + resource deltas', () => {
+    const c = new Campaign(hollowDef);
+    for (const id of ['tutorial', 'prologue', 'gathering_survivors']) c.completedMissions.add(id);
+    c.currentMission = 'first_night';
+    const res = c.applyMissionResult('first_night', {
+      won: true, survivors: [], resources: {},
+      heroStats: { hp: 14, maxHp: 14, attack: 3, defense: 2, items: {} },
+    });
+    assert.equal(res.won, true);
+    // Ch1M3 grants one survivor — returned as a full snapshot (card-ready), and
+    // it IS the object pushed onto the roster (granted after the reconcile).
+    assert.equal(res.rewards.survivors.length, 1, 'one survivor granted');
+    const snap = res.rewards.survivors[0];
+    assert.ok(snap.name && snap.maxHp > 0, 'snapshot has icon-name + stats');
+    assert.ok(Array.isArray(snap.abilities), 'snapshot carries abilities');
+    assert.equal(c.roster.at(-1), snap, 'granted snapshot is the rostered object');
+    // Ch1M3 rewards: wood:2, metal:1, food:2 — positive deltas only.
+    assert.deepEqual(res.rewards.resources, { wood: 2, metal: 1, food: 2 });
+  });
+
+  test('applyMissionResult on a LOSS returns an empty reward summary (no grants)', () => {
+    const c = new Campaign(hollowDef);
+    for (const id of ['tutorial', 'prologue', 'gathering_survivors']) c.completedMissions.add(id);
+    c.currentMission = 'first_night';
+    const before = c.roster.length;
+    const res = c.applyMissionResult('first_night', { won: false });
+    assert.equal(res.won, false);
+    assert.deepEqual(res.rewards, { survivors: [], resources: {} });
+    assert.equal(c.roster.length, before, 'a loss grants nothing');
+    assert.ok(!c.completedMissions.has('first_night'), 'a loss never completes the mission');
+  });
+
+  test('applyMissionResult returns empty rewards for a mission with no rewards block', () => {
+    const c = new Campaign(hollowDef);
+    c.currentMission = 'tutorial';
+    const res = c.applyMissionResult('tutorial', {
+      won: true, survivors: [], resources: {},
+      heroStats: { hp: 14, maxHp: 14, attack: 3, defense: 2, items: {} },
+    });
+    assert.equal(res.won, true);
+    assert.deepEqual(res.rewards, { survivors: [], resources: {} });
   });
 
   test('Mission 3 reward survivor persists across save/load', () => {

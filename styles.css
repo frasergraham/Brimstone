@@ -7037,6 +7037,88 @@ body.spectator-mode #game-screen   { display: flex !important; }
   background: rgba(212,167,44,0.06);
 }
 
+/* ── ✦ Rewards (debrief, win only) ─────────────────────────────────────── */
+/* What a won mission GRANTED this run: new-ally cards (the SAME .campaign-party-
+   card the roster uses, so the style is consistent) + a resource-gains line.
+   Gold-tinted to read as a reward, distinct from the neutral roster section. */
+
+.reward-section {
+  margin-top: 0.85rem;
+  padding-top: 0.6rem;
+  border-top: 1px dashed rgba(212,167,44,0.28);
+}
+
+.reward-heading {
+  font-size: 0.9rem;
+  color: var(--clr-gold, #d4a72c);
+  letter-spacing: 0.04em;
+  margin-bottom: 0.4rem;
+}
+
+.reward-survivors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: center;
+}
+
+/* Wrapper that hangs the NEW badge over the reused survivor card's corner. */
+.reward-survivor {
+  position: relative;
+  display: flex;
+  flex: 1 1 calc(50% - 0.35rem);
+  max-width: calc(50% - 0.18rem);
+}
+
+/* The reused card fills the wrapper (its own flex sizing is overridden here so
+   the badge anchors to the card edge, not a half-width column). */
+.reward-survivor .campaign-party-card {
+  flex: 1 1 auto;
+  max-width: none;
+  border-color: rgba(212,167,44,0.35);
+  background: rgba(212,167,44,0.07);
+}
+
+.reward-new-badge {
+  position: absolute;
+  top: -6px;
+  right: -4px;
+  z-index: 2;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  color: #1a1208;
+  background: var(--clr-gold, #d4a72c);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+}
+
+.reward-resources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--clr-gold, #d4a72c);
+  justify-content: center;
+}
+
+.reward-resource {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.1rem 0.4rem;
+  background: rgba(212,167,44,0.1);
+  border: 1px solid rgba(212,167,44,0.25);
+  border-radius: 4px;
+}
+
+.reward-res-icon {
+  font-size: 0.95rem;
+}
+
 /* ── ⚰ Fallen memorial ─────────────────────────────────────────────────── */
 /* Tombstone cards for survivors lost to permadeath. Desaturated + greyed,
    reusing the .campaign-party-card layout patterns. */

@@ -194,6 +194,49 @@ export function fallenSectionHTML(fallen, missionTitleResolver = (id) => id) {
   </div>`;
 }
 
+/**
+ * The debrief's ✦ Rewards section — what a WON mission GRANTED this run. Two
+ * parts, either of which may be empty:
+ *   • Granted survivors: each rendered through the SAME survivorCardHTML the
+ *     roster/party use, so the reward card matches the roster cards exactly
+ *     (icon + ATK/DEF/HP + ability label). A small NEW badge flags the fresh
+ *     ally. The granted objects ARE roster snapshots (see grantRewardSurvivors).
+ *   • Resource gains: a single line of "✦ +N <resource>" chips for the positive
+ *     deltas the mission's `rewards.*` numeric keys applied.
+ * Returns '' when there is nothing to show — a loss grants nothing, and the
+ * caller already gates on the WIN, so the section simply vanishes when empty.
+ *
+ * @param {{survivors?:object[], resources?:Object<string,number>}} rewards
+ * @returns {string} rewards HTML, or '' when there's nothing granted.
+ */
+export function rewardsSectionHTML(rewards) {
+  const survivors = Array.isArray(rewards?.survivors) ? rewards.survivors : [];
+  const resources = rewards?.resources && typeof rewards.resources === 'object'
+    ? rewards.resources : {};
+  const resEntries = Object.entries(resources).filter(([, v]) => v > 0);
+  if (survivors.length === 0 && resEntries.length === 0) return '';
+
+  let body = '';
+  if (survivors.length) {
+    // Reuse the roster survivor card verbatim, wrapped so a NEW badge can sit
+    // over the corner — consistent style with the surviving-roster cards above.
+    const cards = survivors.map(s =>
+      `<div class="reward-survivor"><span class="reward-new-badge">NEW</span>${survivorCardHTML(s)}</div>`
+    ).join('');
+    body += `<div class="reward-survivors">${cards}</div>`;
+  }
+  if (resEntries.length) {
+    const chips = resEntries.map(([k, v]) =>
+      `<span class="reward-resource"><span class="reward-res-icon">${RESOURCE_ICONS[k] || '🎒'}</span>+${v} ${k}</span>`
+    ).join('');
+    body += `<div class="reward-resources">✦ ${chips}</div>`;
+  }
+  return `<div class="reward-section">
+    <h3 class="reward-heading">✦ Rewards</h3>
+    ${body}
+  </div>`;
+}
+
 // ── Campaign Progress screen (between-mission landing) ──────────────────────
 //
 // A richer party view than campaignPartyHTML: per-unit level/XP, HP, ATK/DEF,

@@ -24,6 +24,7 @@ import {
   campaignMissionSaveKey,
 } from '../src/campaign/campaign-ui.js';
 import { getCampaignById } from '../src/campaign/campaign-registry.js';
+import { mmUrgencyScore } from '../src/main-menu-games.js';
 
 const hollowDef = getCampaignById('calebs_hollow_prologue');
 const FIRST = hollowDef.firstMission; // 'tutorial'
@@ -118,6 +119,82 @@ describe('resolveCampaignContinue — active-slot aware', () => {
     assert.ok(c.isComplete());
     setActiveSlot(hollowDef.id, 1);
     assert.equal(resolveCampaignContinue(hollowDef), null);
+  });
+});
+
+// Build the campaign-next Continue row the menu would render for the active
+// slot — the same shape _localCampaignRows emits, derived from the resolver so
+// the test stays in lockstep with the live recency + next-mission fields.
+function continueRowForActiveSlot() {
+  const t = resolveCampaignContinue(hollowDef);
+  if (!t) return null;
+  return {
+    kind: 'campaign-next',
+    action_needed: false,
+    turn_deadline: null,
+    // _localCampaignRows derives updated_at from Campaign.updatedAt (ms → s).
+    updated_at: t.updatedAt ? Math.floor(t.updatedAt / 1000) : 0,
+    _campaignId: hollowDef.id,
+    _nextMissionId: t.missionId,
+    _missionNumber: t.missionNumber,
+    _missionTotal: t.missionTotal,
+  };
+}
+
+describe('just-played campaign surfaces at the top of Continue', () => {
+  beforeEach(() => localStorage.clear());
+
+  test('after winning a mission, the next mission is the Continue target', () => {
+    // Stand at first_night with the chain cleared; play + WIN it.
+    const c = new Campaign(hollowDef, 1);
+    for (const id of ['tutorial', 'prologue', 'gathering_survivors']) c.completedMissions.add(id);
+    c.currentMission = 'first_night';
+    c.save();
+    setActiveSlot(hollowDef.id, 1);
+
+    c.applyMissionResult('first_night', {
+      won: true, survivors: [], resources: {},
+      heroStats: { hp: 14, maxHp: 14, attack: 3, defense: 2, items: {} },
+    });
+
+    // The next unlocked mission after the win — derived from the same engine the
+    // resolver uses, so the assertion can't drift if missions are reordered.
+    const expectedNext = new Campaign(hollowDef, 1);
+    expectedNext.load();
+    const expectedId = expectedNext.getNextMission();
+
+    // The Continue row now points at that NEXT mission (first_night done), with a
+    // freshly-bumped recency from applyMissionResult's save().
+    const row = continueRowForActiveSlot();
+    assert.ok(row, 'a Continue target exists after the win');
+    assert.notEqual(row._nextMissionId, 'first_night', 'advances past the played mission');
+    assert.equal(row._nextMissionId, expectedId, 'surfaces the next unlocked mission');
+    assert.ok(row._missionNumber > 4, 'with a campaign position past the played one');
+  });
+
+  test('the just-played campaign outranks an older idle game in the feed', () => {
+    const NOW = Date.now();
+    const c = new Campaign(hollowDef, 1);
+    for (const id of ['tutorial', 'prologue', 'gathering_survivors']) c.completedMissions.add(id);
+    c.currentMission = 'first_night';
+    c.save();
+    setActiveSlot(hollowDef.id, 1);
+    c.applyMissionResult('first_night', {
+      won: true, survivors: [], resources: {},
+      heroStats: { hp: 14, maxHp: 14, attack: 3, defense: 2, items: {} },
+    });
+
+    const campaignRow = continueRowForActiveSlot();
+    // A stale single-player save touched an hour ago — must sort BELOW the
+    // just-played campaign (idle rows rank by recency; the campaign is freshest).
+    const staleIdle = {
+      kind: 'local-sp', action_needed: false, turn_deadline: null,
+      updated_at: Math.floor(NOW / 1000) - 3600,
+    };
+    assert.ok(
+      mmUrgencyScore(campaignRow, NOW) < mmUrgencyScore(staleIdle, NOW),
+      'the just-played campaign must rank first among idle Continue rows',
+    );
   });
 });
 
