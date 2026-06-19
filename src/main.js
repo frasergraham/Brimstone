@@ -54,7 +54,7 @@ import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, c
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, CAMPAIGN_SLOT_COUNT, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
 import { CAMPAIGNS } from './campaign/campaign-registry.js';
-import { saveThumb, deleteThumb, loadThumb } from './menu/thumbnails.js';
+import { saveThumb, deleteThumb, loadThumb, saveStats, loadStats } from './menu/thumbnails.js';
 import { processStoryTriggers } from './campaign/missions.js';
 import { MissionLogicEngine } from './mission-logic/engine.js';
 import { createGameContext } from './mission-logic/game-context.js';
@@ -5067,6 +5067,7 @@ function _captureRoundThumbnail(idOverride = null) {
     ? `${_activeCampaign.campaignDef.id}/slot${_activeCampaign.slotIndex}/${_activeMissionDef.id}`
     : _spSaveId);
   if (!id) return;
+  try { saveStats(id, _extractStats(state)); } catch { /* detail snapshot is best-effort */ }
   Promise.resolve(renderer.captureMapThumbnail(512))
     .then((url) => { if (url) saveThumb(id, url); })
     .catch(() => {});
@@ -5117,30 +5118,43 @@ function _participantsFromEntities(entities) {
 /** Detail payload for the ledger's game-detail overlay (thumbnail click):
  *  round, day-cycle phase, score, kills, and participants. Rich for local saves
  *  (from the serialized state); basic (row fields) for online games. */
+/** Build the detail stats payload (round/phase/map + score/kills/participants/
+ *  nodes) from a live GameState OR a serialized snapshot — both expose the same
+ *  fields. Captured at round-end and stored so online games (state lives on the
+ *  server) get full detail too. */
+function _extractStats(st) {
+  if (!st) return null;
+  return {
+    round:   st.round,
+    phase:   st.phase,
+    mapSize: st.mapSize,
+    score:   st.nodeScore
+      ? { hero: st.nodeScore.hero ?? 0, witch: st.nodeScore.witch ?? 0, threshold: st.nodeScoreThreshold ?? 4 }
+      : null,
+    kills:        { hero: st.heroKills ?? 0, witch: st.witchKills ?? 0 },
+    participants: _participantsFromEntities(st.entities),
+    nodes:        _nodeOwnership(st),
+  };
+}
+
 function _gameDetail(row) {
-  const st = _savedStateForRow(row);
-  const phase = st?.phase ?? row.phase ?? null;
+  // Prefer the round-end snapshot (covers online games, whose state lives on the
+  // server); fall back to parsing a local save, then the row's basics.
+  const stats = loadStats(row.room_id) || _extractStats(_savedStateForRow(row));
+  const phase = stats?.phase ?? row.phase ?? null;
   const base = {
     title:      row.title || 'Game',
-    round:      st?.round ?? row.round ?? null,
+    round:      stats?.round ?? row.round ?? null,
     phase,
     phaseLabel: _PHASE_NAMES[phase] ?? phase,
-    mapSize:    st?.mapSize ?? row.map_size ?? row.mapSize ?? null,
+    mapSize:    stats?.mapSize ?? row.map_size ?? row.mapSize ?? null,
     thumb:      loadThumb(row.room_id),
   };
-  if (!st) {
+  if (!stats) {
     return { ...base, score: null, kills: null, participants: null,
              players: row.players_count ?? row.players_total ?? null };
   }
-  return {
-    ...base,
-    score: st.nodeScore
-      ? { hero: st.nodeScore.hero ?? 0, witch: st.nodeScore.witch ?? 0, threshold: st.nodeScoreThreshold ?? 4 }
-      : null,
-    kills: { hero: st.heroKills ?? 0, witch: st.witchKills ?? 0 },
-    participants: _participantsFromEntities(st.entities),
-    nodes: _nodeOwnership(st),
-  };
+  return { ...base, score: stats.score, kills: stats.kills, participants: stats.participants, nodes: stats.nodes };
 }
 
 /** Per-power-node controller for the detail's node-dots (same nodeController the

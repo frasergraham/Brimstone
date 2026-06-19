@@ -6,8 +6,9 @@
 // same id the menu lists use). The ledger shows it wherever a saved game appears.
 // Fully client-side — no server dependency.
 
-const PREFIX    = 'brimstone-thumb-';
-const INDEX_KEY = 'brimstone-thumb-index';   // MRU-ordered ids, for pruning
+const PREFIX       = 'brimstone-thumb-';
+const STATS_PREFIX = 'brimstone-stats-';      // tiny round-end stats snapshot (online + local)
+const INDEX_KEY    = 'brimstone-thumb-index';   // MRU-ordered ids, for pruning
 const MAX_THUMBS = 24;                        // ~24 × <100KB JPEG keeps us well under quota
 
 function _loadIndex() {
@@ -27,6 +28,7 @@ export function saveThumb(id, dataURL) {
   while (idx.length > MAX_THUMBS) {
     const drop = idx.pop();
     try { localStorage.removeItem(PREFIX + drop); } catch {}
+    try { localStorage.removeItem(STATS_PREFIX + drop); } catch {}
   }
   try {
     localStorage.setItem(PREFIX + id, dataURL);
@@ -49,5 +51,20 @@ export function loadThumb(id) {
 export function deleteThumb(id) {
   if (!id) return;
   try { localStorage.removeItem(PREFIX + id); } catch {}
+  try { localStorage.removeItem(STATS_PREFIX + id); } catch {}
   _saveIndex(_loadIndex().filter((x) => x !== id));
+}
+
+/** Store the round-end stats snapshot for `id` (round/phase/score/kills/participants/
+ *  nodes) — the data the game-detail overlay needs for games whose state we don't
+ *  keep locally (online). Pruned alongside the thumbnail. */
+export function saveStats(id, stats) {
+  if (!id || !stats) return;
+  try { localStorage.setItem(STATS_PREFIX + id, JSON.stringify(stats)); } catch {}
+}
+
+/** Read the stored stats snapshot for `id`, or null. */
+export function loadStats(id) {
+  if (!id) return null;
+  try { return JSON.parse(localStorage.getItem(STATS_PREFIX + id) || 'null'); } catch { return null; }
 }
