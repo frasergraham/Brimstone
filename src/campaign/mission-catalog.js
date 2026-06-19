@@ -71,7 +71,7 @@ export function missionJSONUrl(id) {
  * top-down map image. Keyed by the mission's stable on-disk file basename (the
  * ChXMY convention) so the asset name survives a mission-id rename — the same
  * decoupling missionFileName() relies on. Returns the basename only; callers
- * append the `assets/mission-maps/` path + `.png` (see fixedMissionImage).
+ * append the `assets/mission-maps/` path + `.jpg` (see fixedMissionImage).
  *
  * @param {string} id — mission id.
  * @returns {string} basename, e.g. "Ch1M3"

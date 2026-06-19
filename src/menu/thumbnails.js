@@ -77,7 +77,7 @@ export function loadStats(id) {
  * `<campaignId>/slot<N>/<missionId>`) — show that, exactly like a skirmish. A
  * not-yet-started (or never-played) mission has no saved thumbnail, so fall back
  * to the mission's fixed pre-generated map image (a committed static asset). An
- * unknown mission still resolves to a deterministic `assets/mission-maps/<id>.png`
+ * unknown mission still resolves to a deterministic `assets/mission-maps/<id>.jpg`
  * path (the browser <img>/CSS background simply renders nothing if it 404s) — the
  * caller never gets null, so a card always has an image source.
  *
