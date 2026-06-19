@@ -9946,9 +9946,14 @@ function _buildLedgerData() {
     // multiplayer client (present once signed in). Seat indices are absolute
     // (server-side); the ledger passes lobby.slots indices straight through.
     lobby: {
-      create:       (config) => mp?.createLobby(config),
-      join:         (codeOrId) => mp?.joinLobby(codeOrId),
-      browse:       () => mp?.browseLobby(),
+      // create/join/browse may be the first online action this session, so route
+      // them through _ensureAuthed — it lazily creates + connects + authenticates
+      // the mp client (a no-op when already connected). Without this, an
+      // already-signed-in player whose mp client was never spun up would click
+      // Create Game and nothing would happen.
+      create:       (config) => _ensureAuthed(() => mp.createLobby(config)),
+      join:         (codeOrId) => _ensureAuthed(() => mp.joinLobby(codeOrId)),
+      browse:       () => _ensureAuthed(() => mp.browseLobby()),
       claimSlot:    (idx) => _currentLobby && mp?.claimSlot(_currentLobby.id, idx),
       setFaction:   (factionId) => _currentLobby && mp?.setFaction(_currentLobby.id, factionId),
       setSlotAI:    (seatIdx, personality) => _currentLobby && mp?.setSlotAI(_currentLobby.id, seatIdx, personality),
@@ -9993,7 +9998,7 @@ function _buildLedgerData() {
     },
     // Battle: live status + join (native panel; no legacy screen).
     battleStatus:     () => _ledgerBattleStatus(),
-    joinBattle:       () => { mp?.joinBattle?.(); },
+    joinBattle:       () => _ensureAuthed(() => mp.joinBattle()),
     // Account edits (native): rename + email link via the server.
     setUsername:      (name) => _ledgerSetUsername(name),
     linkEmail:        (email) => _ledgerLinkEmail(email),
