@@ -1,4 +1,60 @@
 {
+  "ch1m1/m1_chronicle": {
+    "hash": "f0b6ca51b68e38410e03c1969c14171744202b0c2dc4f95a2f44dcc948a7f0ff",
+    "voice": "narrator"
+  },
+  "ch1m1/m1_guard": {
+    "hash": "8455afe83c6963629d573a27c531212022ded76d5a6b147a53d2659de2eb3fcf",
+    "voice": "narrator"
+  },
+  "ch1m2/m2_equip": {
+    "hash": "ca8d45803e20c2982fc1f44ecdf595033a96410999a1efb39b7a914185b1fb77",
+    "voice": "narrator"
+  },
+  "ch1m2/m2_fog": {
+    "hash": "88ddcd46b4d5743c3644eb3bcde63beb93e174b3393d23aac38a327d0c558054",
+    "voice": "narrator"
+  },
+  "ch1m2/m2_gangup": {
+    "hash": "f72e60193ff99af8c6e1d4a45a1ad18cb6cb3204014698092003c3d3cd4ff5a3",
+    "voice": "narrator"
+  },
+  "ch1m2/m2_mission_info": {
+    "hash": "b2b469e5737ed54d90100e49c27901b498d14d0bc32657aaad65d5ae509c79f2",
+    "voice": "narrator"
+  },
+  "ch1m3/m3_fortify": {
+    "hash": "71f4aeaf8893cf08d4b08a81508b7777bd328b4812687d950fb05a6d0b316b1f",
+    "voice": "narrator"
+  },
+  "ch1m3/m3_heal": {
+    "hash": "ec1c3746912e877d8f22478b3caa372096486aba62a50cbdd96a9fce49b4bc0f",
+    "voice": "narrator"
+  },
+  "ch1m3/m3_shelter": {
+    "hash": "bd9258a64dadf8f4a6f63e618877cdef182f4ea6df6a87d3f2f14ef3ff0975c5",
+    "voice": "narrator"
+  },
+  "ch1m4/m4_abilities": {
+    "hash": "8f2c8ade3581a2fb4330ac7244c616cb75edf4d3962fd78d9e06fc62604471e3",
+    "voice": "narrator"
+  },
+  "ch1m4/m4_party_budget": {
+    "hash": "72442daea2ecbf35ff7ee0adf11ef0cdf9cfb323964c473a6fa6494c78fffd45",
+    "voice": "narrator"
+  },
+  "ch1m5/m5_checkpoint": {
+    "hash": "518dc8bc59ff63abeb95b4bc0498745964817056348ee494ace52433b7b38613",
+    "voice": "narrator"
+  },
+  "ch1m5/m5_nodes": {
+    "hash": "19f46dfcee49161ad303d1e01d137f6522d76072877d61311874d0e6f98c6a15",
+    "voice": "narrator"
+  },
+  "ch1m6/m6_node_budget": {
+    "hash": "b838ce139d3d389dcebf70db86c3067b5440db3adccf7094aea4534a7053ef8b",
+    "voice": "narrator"
+  },
   "conv/ch1m1-intro/0": {
     "hash": "c5791b770e2b1c26b548766e23bceefcb00fc4732c2d18e320d5afe071c8db5e",
     "voice": "hero"
@@ -37,6 +93,22 @@
   },
   "conv/ch1m1-intro/9": {
     "hash": "891e91bbdf14f4d11347c93922d8f77e0a882f031b9575595f0af45de0fd8076",
+    "voice": "hero"
+  },
+  "conv/ch1m2-survivor/0": {
+    "hash": "6839b8911360b2c915079dd9854d3cc6a320f97d043f99b83ef3dfb9b8f2a416",
+    "voice": "default"
+  },
+  "conv/ch1m2-survivor/1": {
+    "hash": "3475f2a597813e6435a3c7615cd997644f18106f0dd916813c35920e766a01ff",
+    "voice": "hero"
+  },
+  "conv/ch1m2-survivor/2": {
+    "hash": "65b4a859916aef3df9c3aa1fec70fb95142546735b6a8f8463303c86f2e29a21",
+    "voice": "default"
+  },
+  "conv/ch1m2-survivor/3": {
+    "hash": "937424883af916bd01936fca1b1c7bc32541fa91bb11919b785e6a55a467089b",
     "voice": "hero"
   },
   "tutorial/action_budget": {
