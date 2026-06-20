@@ -2,6 +2,7 @@
 // Stored in localStorage; optionally synced to server for verified users.
 
 import { countHeldNodes } from '../game.js';
+import { ICON } from '../icons.js';
 import { getFaction } from '../factions.js';
 import { hexDistance } from '../hex.js';
 import { EntityType, applyLevel, normalizeItems, getEquippedWeaponIdOf,
@@ -350,7 +351,7 @@ function _checkLoseCondition(cond, state) {
         return {
           winner: 'witch',
           winReason: cond.reason || 'The hero has fallen.',
-          log: '💀 The hero has been slain…',
+          log: '\uE097 The hero has been slain…',
         };
       }
       return null;
@@ -359,7 +360,7 @@ function _checkLoseCondition(cond, state) {
         return {
           winner: 'witch',
           winReason: cond.reason || `Failed to complete the mission in ${cond.rounds} rounds.`,
-          log: `⏳ Time ran out — the mission is lost.`,
+          log: `${ICON.hourglass} Time ran out — the mission is lost.`,
         };
       }
       return null;
@@ -368,7 +369,7 @@ function _checkLoseCondition(cond, state) {
         return {
           winner: 'witch',
           winReason: cond.reason || `Night fell before you gathered enough survivors.`,
-          log: `🌒 The light fades and you stand alone — the mission is lost.`,
+          log: `${ICON.newMoon} The light fades and you stand alone — the mission is lost.`,
         };
       }
       return null;
@@ -378,7 +379,7 @@ function _checkLoseCondition(cond, state) {
         return {
           winner: 'witch',
           winReason: cond.reason || 'A companion has fallen — the party is broken.',
-          log: '💔 The party is broken.',
+          log: '\uE09D The party is broken.',
         };
       }
       return null;
@@ -391,7 +392,7 @@ function _checkLoseCondition(cond, state) {
       return {
         winner: 'witch',
         winReason: cond.reason || 'The witch holds a node at dawn.',
-        log: '🌑 Dawn breaks and her power still pulses through the grove.',
+        log: '\uE024 Dawn breaks and her power still pulses through the grove.',
       };
     }
     case 'witch_score_threshold': {
@@ -400,7 +401,7 @@ function _checkLoseCondition(cond, state) {
       return {
         winner: 'witch',
         winReason: cond.reason || 'The witch has held the nodes too long.',
-        log: '🌑 The ritual has reached its climax.',
+        log: '\uE024 The ritual has reached its climax.',
       };
     }
     default:
@@ -420,7 +421,7 @@ function _checkWinCondition(cond, state) {
         return {
           winner: 'hero',
           winReason: cond.reason || 'All enemies have been eliminated.',
-          log: '☀ Every last enemy has been vanquished!',
+          log: '\uE021 Every last enemy has been vanquished!',
         };
       }
       return null;
@@ -430,7 +431,7 @@ function _checkWinCondition(cond, state) {
         return {
           winner: 'hero',
           winReason: cond.reason || `Survived ${cond.rounds} rounds.`,
-          log: `☀ You held the line! The darkness recedes… for now.`,
+          log: `${ICON.day} You held the line! The darkness recedes… for now.`,
         };
       }
       return null;
@@ -439,7 +440,7 @@ function _checkWinCondition(cond, state) {
         return {
           winner: 'hero',
           winReason: cond.reason || 'Reached the objective.',
-          log: '☀ The hero has reached the objective!',
+          log: '\uE021 The hero has reached the objective!',
         };
       }
       return null;
@@ -448,7 +449,7 @@ function _checkWinCondition(cond, state) {
         return {
           winner: 'hero',
           winReason: cond.reason || 'The witch has been slain!',
-          log: '☀ The witch has been defeated! Caleb\'s Hollow is saved!',
+          log: '\uE021 The witch has been defeated! Caleb\'s Hollow is saved!',
         };
       }
       return null;
@@ -463,7 +464,7 @@ function _checkWinCondition(cond, state) {
         return {
           winner: 'hero',
           winReason: cond.reason || 'Survivors gathered — the mission is a success.',
-          log: '☀ The survivors are safe!',
+          log: '\uE021 The survivors are safe!',
         };
       }
       return null;
@@ -476,7 +477,7 @@ function _checkWinCondition(cond, state) {
       return {
         winner: 'hero',
         winReason: cond.reason || 'You and your companions survived until dawn.',
-        log: '☀ Dawn breaks — you have survived the night.',
+        log: '\uE021 Dawn breaks — you have survived the night.',
       };
     }
     case 'all_party_at_hexes': {
@@ -497,7 +498,7 @@ function _checkWinCondition(cond, state) {
       return {
         winner: 'hero',
         winReason: cond.reason || 'The party has reached the target.',
-        log: '☀ The whole party has made it through.',
+        log: '\uE021 The whole party has made it through.',
       };
     }
     case 'witch_denied_nodes': {
@@ -509,7 +510,7 @@ function _checkWinCondition(cond, state) {
       return {
         winner: 'hero',
         winReason: cond.reason || 'The witch has been denied at every node.',
-        log: '☀ Dawn breaks over silent nodes — the ritual is broken!',
+        log: '\uE021 Dawn breaks over silent nodes — the ritual is broken!',
       };
     }
     case 'hero_holds_all_nodes': {
@@ -522,7 +523,7 @@ function _checkWinCondition(cond, state) {
       return {
         winner: 'hero',
         winReason: cond.reason || 'You hold every node at dawn.',
-        log: '☀ Every node bears your banner at first light.',
+        log: '\uE021 Every node bears your banner at first light.',
       };
     }
     case 'control_nodes':
@@ -580,7 +581,7 @@ export function processWaves(state, waves, createEnemyFn) {
         if (unit.level) applyLevel(entity, unit.level);
         if (unit.overrides) Object.assign(entity, unit.overrides);
         state.entities.push(entity);
-        logs.push(unit.spawnLog ?? `🌑 ${entity.displayName} emerges from the shadows!`);
+        logs.push(unit.spawnLog ?? `${ICON.newMoon} ${entity.displayName} emerges from the shadows!`);
       }
     }
   }

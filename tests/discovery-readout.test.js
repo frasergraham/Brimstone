@@ -27,6 +27,7 @@ import {
   discoveryText,
   DISCOVERY_COUNTDOWN_SEC,
 } from '../src/discovery-cinematic.js';
+import { ICON } from '../src/icons.js';
 
 // ─── Pure model ──────────────────────────────────────────────────────────────
 
@@ -40,7 +41,7 @@ describe('discoveryReadoutModel', () => {
     const m = discoveryReadoutModel(entity, { text: 'hello' });
     assert.equal(m.name, 'Eliza');
     assert.equal(m.title, 'Mason');
-    assert.equal(m.glyph, '☺');
+    assert.equal(m.glyph, ICON.survivor);
     assert.equal(m.accentColor, '#abc');
     assert.equal(m.statLine, 'HP 4/5 · ATK 2 · DEF 3');
     assert.equal(m.abilityLabel, 'Mason — fortifies');
@@ -54,7 +55,7 @@ describe('discoveryReadoutModel', () => {
     };
     const m = discoveryReadoutModel(data);
     assert.equal(m.name, 'Zombie');
-    assert.equal(m.glyph, '†');
+    assert.equal(m.glyph, ICON.zombie);
     assert.equal(m.statLine, 'HP 3/3 · ATK 1 · DEF 1');
     assert.equal(m.text, ''); // no opts.text
   });

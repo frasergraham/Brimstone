@@ -4,6 +4,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { ICON } from '../src/icons.js';
 import {
   EFFECTS, applyEffect, removeEffect, hasEffect,
   effectStatMod, effectRangeMod, effectIncomingAtkAdvantage,
@@ -668,7 +669,7 @@ describe('post-round death visibility', () => {
     const kill = events.find(e => e.type === 'kill');
     assert.ok(kill, 'lethal DOT produces a kill event');
     assert.ok(kill.flash, 'kill carries a flash so the vanish is explained on the map');
-    assert.match(kill.flash.label, /💀/);
+    assert.match(kill.flash.label, new RegExp(ICON.defeat));
     assert.match(kill.text, /bleeding/i);
   });
 
@@ -678,7 +679,7 @@ describe('post-round death visibility', () => {
         text: '🩸 Zombie succumbs to bleeding!' },
       { type: 'damage',  ownerId: 'enemy', entityName: 'Minion', amount: 1, text: 'x' },
       { type: 'damage',  ownerId: 'me',    entityName: 'Mary',   amount: 2, text: 'y' },
-      { type: 'shelter', ownerId: 'me',    entityName: 'Sam',    amount: 0, text: '🏠 Sam is sheltered.' },
+      { type: 'shelter', ownerId: 'me',    entityName: 'Sam',    amount: 0, text: `${ICON.shelter} Sam is sheltered.` },
       { type: 'safe',    ownerId: null },
     ], 'me');
 

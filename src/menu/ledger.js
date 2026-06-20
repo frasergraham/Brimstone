@@ -9,6 +9,7 @@
 // ============================================================================
 
 import { mmSortRows, mmFormatRow, mmIsCampaignRow } from '../main-menu-games.js';
+import { ICON } from '../icons.js';
 import { mountServerSelector } from '../server-selector.js';
 import { loadThumb, missionThumb, campaignMissionRowId } from './thumbnails.js';
 import { isModeAvailable, isFactionAvailable, COMING_SOON_LABEL } from '../demo-config.js';
@@ -16,11 +17,11 @@ import { isModeAvailable, isFactionAvailable, COMING_SOON_LABEL } from '../demo-
 /** The six rail destinations, top to bottom (mirrors the mock). */
 const DESTINATIONS = [
   { id: 'continue', icon: '▶',  label: 'Continue',         title: 'Continue',         tag: '— the night is not over',            accent: 'gold' },
-  { id: 'campaign', icon: '☀',  label: 'Campaign',         title: 'The Campaign',     tag: '— six nights to break the curse',    accent: 'gold' },
-  { id: 'skirmish', icon: '🎯', label: 'Skirmish',         title: 'Skirmish',         tag: '— choose a champion, set the night', accent: 'gold' },
-  { id: 'others',   icon: '🌙', label: 'Play Online',       title: 'Play Online',      tag: '— a single battle, or the war',      accent: 'purple' },
-  { id: 'replays',  icon: '📜', label: 'Replays',          title: 'Replays',          tag: '— games already told',               accent: 'gold' },
-  { id: 'account',  icon: '⚙',  label: 'Account',          title: 'Account',          tag: '',                                   accent: 'gold' },
+  { id: 'campaign', icon: '\uE021',  label: 'Campaign',         title: 'The Campaign',     tag: '— six nights to break the curse',    accent: 'gold' },
+  { id: 'skirmish', icon: '\uE061', label: 'Skirmish',         title: 'Skirmish',         tag: '— choose a champion, set the night', accent: 'gold' },
+  { id: 'others',   icon: '\uE023', label: 'Play Online',       title: 'Play Online',      tag: '— a single battle, or the war',      accent: 'purple' },
+  { id: 'replays',  icon: '\uE014', label: 'Replays',          title: 'Replays',          tag: '— games already told',               accent: 'gold' },
+  { id: 'account',  icon: '\uE0A1',  label: 'Account',          title: 'Account',          tag: '',                                   accent: 'gold' },
 ];
 
 let _root = null;
@@ -257,7 +258,7 @@ function _panelCampaign(body) {
       const del = document.createElement('button');
       del.type = 'button';
       del.className = 'lg-slot-del';
-      del.textContent = '✕';
+      del.textContent = '\uE070';
       del.title = 'Delete this slot';
       del.addEventListener('click', (e) => { e.stopPropagation(); _campConfirmDelete = s.slot; select('campaign'); });
       card.appendChild(del);
@@ -389,7 +390,7 @@ function _briefMapImage(b) {
   const el = document.createElement('div');
   el.className = 'lg-brief-map' + (img ? ' has-img' : '');
   if (img) el.style.backgroundImage = `url(${img})`;
-  else el.textContent = '🜂';
+  else el.textContent = '\uE08D';
   el.setAttribute('aria-hidden', 'true');
   return el;
 }
@@ -422,7 +423,7 @@ function _ensureInvTab(container) {
   const tab = document.createElement('button');
   tab.type = 'button';
   tab.className = 'lg-inv-tab';
-  tab.textContent = '🎒 Inventory';
+  tab.textContent = '\uE016 Inventory';
   tab.addEventListener('click', () => shared.classList.toggle('is-open'));
   container.appendChild(tab);
 }
@@ -540,7 +541,7 @@ function _panelSkirmish(body) {
   body.appendChild(_cap('Your champion'));
   const champs = document.createElement('div');
   champs.className = 'lg-champ-scroll';
-  for (const [side, label, icon] of [['day', 'Day — the Hero', '☀'], ['night', 'Night — the Witch', '🌙']]) {
+  for (const [side, label, icon] of [['day', 'Day — the Hero', '\uE021'], ['night', 'Night — the Witch', '\uE023']]) {
     // Available champions first; demo-blocked ("coming soon") ones sort to the
     // end of their side (stable sort preserves the authored order otherwise).
     const fs = factions.filter((f) => f.side === side)
@@ -594,11 +595,11 @@ function _champCard(f) {
       `${stat('AGI', f.agi, 'Agility — higher acts earlier each turn')}</div>`
     : '';
   const weaponHtml = f.weapon
-    ? `<div class="lg-champ-weapon">⚔ ${esc(f.weapon.name)}${f.weapon.stats ? ` <span class="lg-champ-wstats">${esc(f.weapon.stats)}</span>` : ''}</div>`
+    ? `<div class="lg-champ-weapon">\uE0A2 ${esc(f.weapon.name)}${f.weapon.stats ? ` <span class="lg-champ-wstats">${esc(f.weapon.stats)}</span>` : ''}</div>`
     : '';
   const abilitiesHtml = (f.abilities && f.abilities.length)
     ? `<div class="cprog-uabilities">${f.abilities.map((a) =>
-        `<span class="cprog-uability" data-tip="${esc(a.description)}">✦ ${esc(a.label)}</span>`).join('')}</div>`
+        `<span class="cprog-uability" data-tip="${esc(a.description)}">\uE062 ${esc(a.label)}</span>`).join('')}</div>`
     : '';
   card.innerHTML =
     `<img src="${esc(f.img)}" alt="">` +
@@ -654,7 +655,7 @@ function _othersLanding(body) {
     }
     const rh = document.createElement('div');
     rh.className = 'lg-rhythms';
-    rh.appendChild(_rhythmCard('⚔ Single Battle', 'live or async', 'One game against another player. Choose the pace when you create it.',
+    rh.appendChild(_rhythmCard('\uE000 Single Battle', 'live or async', 'One game against another player. Choose the pace when you create it.',
       () => { _createAsync = false; _othersView = 'find'; select('others'); }));
     body.appendChild(rh);
 
@@ -673,10 +674,10 @@ function _othersLanding(body) {
         // glyph still shows so the card has a board, matching feed/resume rows.
         ? `<div class="lg-battle-thumb${battleThumb ? ' has-img clickable' : ''}" aria-hidden="true"` +
             `${battleThumb ? ` style="background-image:url(${battleThumb})" title="View battle details"` : ''}>` +
-            `${battleThumb ? '' : '🜂'}</div>`
+            `${battleThumb ? '' : '\uE08D'}</div>`
         : '') +
       `<div class="lg-battle-body">` +
-        `<div class="lg-battle-head"><span class="gthc">⚔ The Battle for Caleb's Hollow</span>` +
+        `<div class="lg-battle-head"><span class="gthc">${ICON.hero} The Battle for Caleb's Hollow</span>` +
         `${inBattle ? '<span class="lg-battle-live">● live</span>' : '<span class="lg-battle-cta">View ▸</span>'}</div>` +
         `<div class="lg-battle-sub">Persistent 10v10 war — turns resolve at noon &amp; midnight.` +
         `${inBattle && battle.round != null ? ' · Round ' + battle.round : ''}</div>` +
@@ -807,10 +808,10 @@ function _othersLobby(body, lobby) {
   if (link) {
     const inviteRow = document.createElement('div');
     inviteRow.className = 'lg-invite-row';
-    const copy = _button('📋 Copy invite link', 'ghost', () => {
+    const copy = _button('\uE078 Copy invite link', 'ghost', () => {
       navigator.clipboard?.writeText(link).then(() => {
-        copy.textContent = 'Copied ✓';
-        setTimeout(() => { copy.textContent = '📋 Copy invite link'; }, 1500);
+        copy.textContent = 'Copied \uE071';
+        setTimeout(() => { copy.textContent = '\uE078 Copy invite link'; }, 1500);
       }).catch(() => {});
     });
     inviteRow.appendChild(copy);
@@ -828,7 +829,7 @@ function _othersLobby(body, lobby) {
 
   const cols = document.createElement('div');
   cols.className = 'lg-seats';
-  for (const [side, label, icon] of [['day', 'Day', '☀'], ['night', 'Night', '🌙']]) {
+  for (const [side, label, icon] of [['day', 'Day', '\uE021'], ['night', 'Night', '\uE023']]) {
     const col = document.createElement('div');
     col.className = 'lg-seat-col is-' + side;
     col.innerHTML = `<div class="lg-seat-label">${icon} ${label}</div>`;
@@ -840,7 +841,7 @@ function _othersLobby(body, lobby) {
 
   const footer = document.createElement('div');
   footer.className = 'lg-lobby-footer';
-  if (isHost) footer.appendChild(_button('🤖 Fill with AI', 'ghost', () => _data.lobby?.fillAll?.('random')));
+  if (isHost) footer.appendChild(_button('\uE07F Fill with AI', 'ghost', () => _data.lobby?.fillAll?.('random')));
   const allFilled = (lobby.slots || []).every((s) => s.status === 'human' || s.status === 'ai');
   const startBtn = _button('▶ Start', 'gold', () => _data.lobby?.start?.());
   if (!isHost || !allFilled) startBtn.disabled = true;
@@ -878,9 +879,9 @@ function _lobbySeat(lobby, slot, { myId, isHost, canClaim }) {
     }
   } else if (slot.status === 'ai') {
     el.classList.add('is-ai');
-    el.innerHTML = `<span class="nm">🤖 ${esc(slot.name || 'AI')}</span><span class="fac">${esc(cap(fac))}</span>`;
+    el.innerHTML = `<span class="nm">${ICON.bot} ${esc(slot.name || 'AI')}</span><span class="fac">${esc(cap(fac))}</span>`;
     if (isHost) {
-      const rm = _button('✕', 'ghost', () => _data.lobby?.removeSlotAI?.(idx));
+      const rm = _button('\uE070', 'ghost', () => _data.lobby?.removeSlotAI?.(idx));
       rm.classList.add('lg-seat-x');
       el.appendChild(rm);
     }
@@ -890,7 +891,7 @@ function _lobbySeat(lobby, slot, { myId, isHost, canClaim }) {
     const acts = document.createElement('div');
     acts.className = 'lg-seat-acts';
     if (canClaim) acts.appendChild(_button('Claim', 'gold', () => _data.lobby?.claimSlot?.(idx)));
-    if (isHost) acts.appendChild(_button('🤖 AI', 'ghost', () => _data.lobby?.setSlotAI?.(idx, 'random')));
+    if (isHost) acts.appendChild(_button('\uE07F AI', 'ghost', () => _data.lobby?.setSlotAI?.(idx, 'random')));
     el.appendChild(acts);
   }
   return el;
@@ -912,22 +913,22 @@ function _othersBattle(body) {
     const card = document.createElement('div');
     card.className = 'lg-battle is-live';
     card.innerHTML =
-      `<div class="lg-battle-head"><span class="gthc">⚔ The Battle for Caleb's Hollow</span><span class="lg-battle-live">● live</span></div>` +
-      `<div class="lg-battle-scorebar"><span class="d">☀ Day ${day}</span>` +
+      `<div class="lg-battle-head"><span class="gthc">${ICON.hero} The Battle for Caleb's Hollow</span><span class="lg-battle-live">● live</span></div>` +
+      `<div class="lg-battle-scorebar"><span class="d">${ICON.day} Day ${day}</span>` +
       `<div class="track"><div class="fill" style="width:${Math.round(day / total * 100)}%"></div></div>` +
-      `<span class="n">${night} Night 🌙</span></div>` +
+      `<span class="n">${night} Night ${ICON.night}</span></div>` +
       `<div class="lg-battle-sub">Persistent ${pps}v${pps} war${b.round != null ? ' · Round ' + b.round : ''}.</div>`;
     body.appendChild(card);
     const mySide = st?.mySide;
     if (mySide) {
-      body.appendChild(_note(`You fight for ${mySide === 'day' ? '☀ Day' : '🌙 Night'}.`));
+      body.appendChild(_note(`You fight for ${mySide === 'day' ? '\uE021 Day' : '\uE023 Night'}.`));
     }
     // Always offer a way into the live game. A player already in the battle needs
     // to RETURN to it (joinBattle with no roomId ⇒ the server routes them back to
     // their own room); an unjoined player JOINS. Previously the in-battle branch
     // rendered only the status note with no button, so a joined player had no way
     // to launch back in — a dead "launch screen that does nothing".
-    const j = _button(mySide ? '⚔ Return to Battle' : '⚔ Join the Battle', 'purple', () => _data.joinBattle?.());
+    const j = _button(mySide ? '\uE000 Return to Battle' : '\uE000 Join the Battle', 'purple', () => _data.joinBattle?.());
     j.style.marginTop = '14px';
     body.appendChild(j);
   }).catch(() => { if (token === _renderToken) { loading.remove(); body.appendChild(_empty('Could not reach the Battle.')); } });
@@ -1070,7 +1071,7 @@ function _panelAccount(body) {
   body.appendChild(_editRow('New name', 'text', (val, status) => {
     status('Saving…');
     Promise.resolve(_data?.setUsername?.(val)).then((r) => {
-      status(r?.ok ? 'Saved ✓' : (r?.error || 'Could not change name'), r?.ok);
+      status(r?.ok ? 'Saved \uE071' : (r?.error || 'Could not change name'), r?.ok);
       if (r?.ok) setTimeout(() => select('account'), 700);
     });
   }));
@@ -1079,7 +1080,7 @@ function _panelAccount(body) {
   body.appendChild(_editRow('you@example.com', 'email', (val, status) => {
     status('Sending…');
     Promise.resolve(_data?.linkEmail?.(val)).then((r) =>
-      status(r?.ok ? (r.message || 'Check your email ✓') : (r?.error || 'Could not send link'), r?.ok));
+      status(r?.ok ? (r.message || 'Check your email \uE071') : (r?.error || 'Could not send link'), r?.ok));
   }));
 
   const out = _button('Sign out', 'ghost', () => _data?.signOut?.());
@@ -1198,7 +1199,7 @@ function _resumeHero(row) {
   wrap.className = 'lg-resume';
   wrap.innerHTML =
     `<div class="lg-resume-thumb${thumb ? ' has-img' : ''}" aria-hidden="true"` +
-      `${thumb ? ` style="background-image:url(${thumb})"` : ''}>${thumb ? '' : '🜂'}</div>` +
+      `${thumb ? ` style="background-image:url(${thumb})"` : ''}>${thumb ? '' : '\uE08D'}</div>` +
     `<div class="lg-resume-body">` +
       `<div class="lg-resume-kicker">${row.action_needed ? 'Your turn' : 'Continue'}</div>` +
       `<div class="lg-resume-title gthc">${esc(f.title)}</div>` +
@@ -1322,9 +1323,9 @@ function _openGameDetail(row) {
   panel.className = 'lg-detail';
   panel.innerHTML =
     `<div class="lg-detail-img${d.thumb ? ' has-img' : ''}"` +
-      `${d.thumb ? ` style="background-image:url(${d.thumb})"` : ''}>${d.thumb ? '' : '🜂'}</div>` +
+      `${d.thumb ? ` style="background-image:url(${d.thumb})"` : ''}>${d.thumb ? '' : '\uE08D'}</div>` +
     `<div class="lg-detail-side">${_detailStatsHTML(d)}</div>` +
-    `<button class="lg-detail-close" aria-label="Close">✕</button>`;
+    `<button class="lg-detail-close" aria-label="Close">${ICON.close}</button>`;
   const close = () => { back.remove(); document.removeEventListener('keydown', onKey); };
   const onKey = (e) => { if (e.key === 'Escape') close(); };
   back.addEventListener('click', (e) => { if (e.target === back) close(); });
@@ -1365,7 +1366,7 @@ function _activateRow(row) {
 function _missionRow(slot, m, status, index, campaignId) {
   const playable = status === 'current' || status === 'available';
   const resume = status === 'current' && slot.resumeMissionId === m.id;
-  const mark = status === 'done' ? '✓' : status === 'locked' ? '🔒' : '◆';
+  const mark = status === 'done' ? '\uE071' : status === 'locked' ? '\uE081' : '◆';
   // Map image: the live saved thumbnail when this mission is in progress (keyed
   // by its row id `<campaignId>/slot<N>/<missionId>`, captured at round-end like
   // a skirmish), else the mission's fixed pre-generated map image.
@@ -1444,7 +1445,7 @@ function _gameTimeMeta(row) {
   const dl = _countdown(row.turn_deadline);
   const bits = [];
   if (last) bits.push(`last turn ${last}`);
-  if (dl) bits.push(`⏱ ${dl}`);
+  if (dl) bits.push(`${ICON.timer} ${dl}`);
   return bits.join(' · ');
 }
 

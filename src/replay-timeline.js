@@ -8,6 +8,7 @@
 // dependency graph, so it stays trivially unit-testable.
 
 import { ENTITY_COLOR, normalizeDamage, isLeaderType } from './entities.js';
+import { ICON } from './icons.js';
 import { makeOverlay } from './overlays.js';
 import { ITEMS, getWeaponDamage, lootDisplayLabel } from './items.js';
 import { pickBlockWord } from './combat-words.js';
@@ -33,8 +34,8 @@ function weaponName(weaponId) {
 // Glyph fallback when no portrait sprite is available. Matches the maps used in
 // ui.js / ui-render.js (kept local to preserve this module's purity).
 const GLYPHS = Object.freeze({
-  hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟',
-  zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙',
+  hero: ICON.hero, witch: ICON.witch, survivor: ICON.survivor, soldier: ICON.soldier,
+  zombie: ICON.zombie, minion: ICON.minion, wood_golem: ICON.woodGolem, iron_golem: ICON.ironGolem,
 });
 
 /** Presentation outcome kinds for a battle row. */
@@ -616,7 +617,7 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
           label:       'RECEIVE',
           outcomeKind: null,
           targetDmg:   0, actorDmg: 0, killed: false,
-          note:        { text: `📥 from ${fromName}`, kind: 'gain' },
+          note:        { text: `${ICON.receivedFrom} from ${fromName}`, kind: 'gain' },
           hexes:       [
             ...(recipientLeader ? [{ col: recipientLeader.col, row: recipientLeader.row }] : []),
             { col: survivorSnap.col, row: survivorSnap.row },
@@ -657,7 +658,7 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
           label:       ACTION_LABEL[PA.SENT_TO] ?? 'SEND',
           outcomeKind: null,
           targetDmg:   0, actorDmg: 0, killed: false,
-          note:        { text: `📤 to ${destName}`, kind: 'gain' },
+          note:        { text: `${ICON.sentTo} to ${destName}`, kind: 'gain' },
           hexes:       [
             { col: cardActorSnap.col, row: cardActorSnap.row },
             ...(survivorSnap ? [{ col: survivorSnap.col, row: survivorSnap.row }] : []),

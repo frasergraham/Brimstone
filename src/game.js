@@ -1,5 +1,6 @@
 // Central game state and turn management
 import { generateMap } from './map.js';
+import { ICON } from './icons.js';
 import { createHero, createWitch, createMinion, createSurvivor, resetRoster, survivorRosterIndexByName, bumpEntityId as _bumpModuleEntityId, EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, normalizeItems } from './entities.js';
 import { BuildingType, ResourceType, hasBuilding, isRiver } from './tiles.js';
 import { hexKey, hexDistance, getNeighbors, setMapDimensions, MAP_COLS, MAP_ROWS } from './hex.js';
@@ -136,10 +137,10 @@ function phaseForRound(round, cycleConfig = null) {
 }
 
 const PHASE_ICON = {
-  [Phase.DAWN]:  '🌅',
-  [Phase.DAY]:   '☀',
-  [Phase.DUSK]:  '🌇',
-  [Phase.NIGHT]: '🌙',
+  [Phase.DAWN]:  ICON.dawn,
+  [Phase.DAY]:   ICON.day,
+  [Phase.DUSK]:  ICON.dusk,
+  [Phase.NIGHT]: ICON.night,
 };
 
 export { PHASE_ICON, phaseForRound, CYCLE_LENGTH };
@@ -258,12 +259,12 @@ export class GameState {
     this.activePlayer = 'hero';
     this.actionsLeft  = computeActions('hero', Phase.DAWN, []);
     this.log = [
-      `🌅 Dawn breaks over Caleb's Hollow. ${this.hero.displayName} stirs at the Inn.`,
+      `${ICON.dawn} Dawn breaks over Caleb's Hollow. ${this.hero.displayName} stirs at the Inn.`,
     ];
     if (this.witchObjectives.length > 0) {
       this.log.push(
         `${this.witchObjectives.length} Power Node${this.witchObjectives.length !== 1 ? 's' : ''}: ${this.witchObjectives.map(o => o.label).join(', ')}.`,
-        `⚔ Hold 2+ nodes at each dawn/dusk to score. First to 4 points wins. Three cycles — then darkness claims Caleb's Hollow.`,
+        `${ICON.hero} Hold 2+ nodes at each dawn/dusk to score. First to 4 points wins. Three cycles — then darkness claims Caleb's Hollow.`,
       );
     }
 
@@ -693,7 +694,7 @@ export class GameState {
     const heroBB  = battleBonus.hero  ? ` (+${battleBonus.hero} underdog)` : '';
     const witchBB = battleBonus.witch ? ` (+${battleBonus.witch} underdog)` : '';
     this.addLog(
-      `📋 Planning phase — Hero: ${this.heroActionsLeft} actions${heroNB}${heroBB}, ` +
+      `${ICON.planning} Planning phase — Hero: ${this.heroActionsLeft} actions${heroNB}${heroBB}, ` +
       `Witch: ${this.witchActionsLeft} actions${witchNB}${witchBB}.`
     );
   }
@@ -712,7 +713,7 @@ export class GameState {
           leader.name = p.name;
           this.entities.push(leader);
           p.leaderId = leader.id;
-          this.addLog(`⚡ ${p.name} has rejoined the battle!`);
+          this.addLog(`${ICON.join} ${p.name} has rejoined the battle!`);
         }
         delete p.respawnRound;
       }
@@ -781,11 +782,11 @@ export class GameState {
     if (faction === 'hero') {
       this.heroPlan  = plan;
       this.heroReady = true;
-      this.addLog(`⚔ Hero submits their plan (${plan.length} step${plan.length !== 1 ? 's' : ''}).`);
+      this.addLog(`${ICON.hero} Hero submits their plan (${plan.length} step${plan.length !== 1 ? 's' : ''}).`);
     } else {
       this.witchPlan  = plan;
       this.witchReady = true;
-      this.addLog(`✦ Witch submits their plan (${plan.length} step${plan.length !== 1 ? 's' : ''}).`);
+      this.addLog(`${ICON.witch} Witch submits their plan (${plan.length} step${plan.length !== 1 ? 's' : ''}).`);
     }
     if (this.heroReady && this.witchReady) {
       this.planningPhase = false;
@@ -816,7 +817,7 @@ export class GameState {
     this.playerPlans.set(playerId, plan);
     this.playerReady.set(playerId, true);
 
-    const icon = player.faction === 'hero' ? '⚔' : '✦';
+    const icon = player.faction === 'hero' ? '\uE000' : '\uE001';
     this.addLog(`${icon} ${player.name} submits their plan (${plan.length} step${plan.length !== 1 ? 's' : ''}).`);
 
     return [...this.playerReady.values()].every(Boolean);
@@ -883,9 +884,9 @@ export class GameState {
       this.attritionChanged = newLevel !== this.attritionLevel;
       this.attritionLevel   = newLevel;
       if (this.attritionChanged && newLevel > 0) {
-        this.addLog(`🌅 A new dawn — cycle ${cycle}. The curse deepens! Hazard damage rises to ${newLevel}.`);
+        this.addLog(`${ICON.dawn} A new dawn — cycle ${cycle}. The curse deepens! Hazard damage rises to ${newLevel}.`);
       } else {
-        this.addLog(`🌅 A new dawn — cycle ${cycle}.`);
+        this.addLog(`${ICON.dawn} A new dawn — cycle ${cycle}.`);
       }
       for (const [, t] of this.tiles) t.explored = false;
       if (!this.disableScoring) this._checkNodeObjectives(Phase.DAWN);
@@ -1010,13 +1011,13 @@ export class GameState {
     const wName = this.factionName('witch');
     const messages = {
       [`${Phase.DAWN}->${Phase.DAY}`]:
-        `☀ The sun rises. Daylight favors ${hName}.`,
+        `${ICON.day} The sun rises. Daylight favors ${hName}.`,
       [`${Phase.DAY}->${Phase.DUSK}`]:
-        `🌇 Dusk falls. Seek shelter before night. Neither side has advantage.`,
+        `${ICON.dusk} Dusk falls. Seek shelter before night. Neither side has advantage.`,
       [`${Phase.DUSK}->${Phase.NIGHT}`]:
-        `🌙 Night descends! ${wName} grows powerful. Survivors in the open will suffer!`,
+        `${ICON.night} Night descends! ${wName} grows powerful. Survivors in the open will suffer!`,
       [`${Phase.NIGHT}->${Phase.DAWN}`]:
-        `🌅 Dawn breaks. The darkness retreats. Find cover for the coming night.`,
+        `${ICON.dawn} Dawn breaks. The darkness retreats. Find cover for the coming night.`,
     };
     const key = `${from}->${to}`;
     this.addLog(messages[key] || `Phase changed: ${to.toUpperCase()}`);
@@ -1050,14 +1051,14 @@ export class GameState {
     if (this.witch !== null && this.factionEliminated('witch')) {
       this.winner    = 'hero';
       this.winReason = WIN_REASON.WITCH_SLAIN;
-      this.addLog(`☀ ${this.factionName('witch')} has been defeated! Caleb's Hollow is saved!`, 'hero');
+      this.addLog(`${ICON.day} ${this.factionName('witch')} has been defeated! Caleb's Hollow is saved!`, 'hero');
       return;
     }
     // All hero leaders eliminated → witches win
     if (this.factionEliminated('hero')) {
       this.winner    = 'witch';
       this.winReason = WIN_REASON.HERO_SLAIN;
-      this.addLog(`🌙 ${this.factionName('hero')} has fallen. Darkness descends on Caleb's Hollow forever…`, 'witch');
+      this.addLog(`${ICON.night} ${this.factionName('hero')} has fallen. Darkness descends on Caleb's Hollow forever…`, 'witch');
     }
   }
 
@@ -1076,11 +1077,11 @@ export class GameState {
     if (hs > ws) {
       this.winner    = 'hero';
       this.winReason = WIN_REASON.BATTLE_HERO;
-      this.addLog(`☀ The Battle for Caleb's Hollow ends! Heroes win ${hs}–${ws}!`, 'hero');
+      this.addLog(`${ICON.day} The Battle for Caleb's Hollow ends! Heroes win ${hs}–${ws}!`, 'hero');
     } else if (ws > hs) {
       this.winner    = 'witch';
       this.winReason = WIN_REASON.BATTLE_WITCH;
-      this.addLog(`🌙 The Battle for Caleb's Hollow ends! Witches win ${ws}–${hs}!`, 'witch');
+      this.addLog(`${ICON.night} The Battle for Caleb's Hollow ends! Witches win ${ws}–${hs}!`, 'witch');
     } else {
       // Tiebreak: faction with more living leaders
       const heroAlive  = this.players.filter(p => p.faction === 'hero'  && this.getLeader(p.id)).length;
@@ -1088,15 +1089,15 @@ export class GameState {
       if (heroAlive > witchAlive) {
         this.winner    = 'hero';
         this.winReason = WIN_REASON.BATTLE_HERO;
-        this.addLog(`☀ The Battle ends tied ${hs}–${ws}, but more heroes stand — they win!`, 'hero');
+        this.addLog(`${ICON.day} The Battle ends tied ${hs}–${ws}, but more heroes stand — they win!`, 'hero');
       } else if (witchAlive > heroAlive) {
         this.winner    = 'witch';
         this.winReason = WIN_REASON.BATTLE_WITCH;
-        this.addLog(`🌙 The Battle ends tied ${ws}–${hs}, but more witches remain — they win!`, 'witch');
+        this.addLog(`${ICON.night} The Battle ends tied ${ws}–${hs}, but more witches remain — they win!`, 'witch');
       } else {
         this.winner    = 'draw';
         this.winReason = WIN_REASON.BATTLE_DRAW;
-        this.addLog(`⚖ The Battle for Caleb's Hollow ends in a ${hs}–${ws} draw!`);
+        this.addLog(`${ICON.balance} The Battle for Caleb's Hollow ends in a ${hs}–${ws} draw!`);
       }
     }
   }
@@ -1149,7 +1150,7 @@ export class GameState {
       const leader = this.entities.find(e => e.id === player.leaderId);
       const label = player.name ?? leader?.displayName ?? this.factionName(player.faction);
       if (toScatter.length > 0) {
-        this.addLog(`💨 ${label}'s companions scatter into the wilderness…`);
+        this.addLog(`${ICON.wind} ${label}'s companions scatter into the wilderness…`);
       }
     }
   }
@@ -1194,31 +1195,31 @@ export class GameState {
     // Scoring: whoever controls more nodes scores 1 point (ties score nothing)
     if (witchCount > heroCount) {
       this.nodeScore.witch++;
-      this.addLog(`🌙 At ${phaseLabel}: ${this.factionName('witch')} leads ${witchCount}–${heroCount}. Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);
+      this.addLog(`${ICON.night} At ${phaseLabel}: ${this.factionName('witch')} leads ${witchCount}–${heroCount}. Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);
       // Mission opt-in: prolong the night. Each witch score appends extra
       // phases to the active cycle (e.g. another 'night' turn). Inert when
       // cycleConfig is absent or extendOnWitchScore is unset.
       const extend = this.cycleConfig?.extendOnWitchScore;
       if (extend && extend.length) {
         this.cycleConfig.phases.push(...extend);
-        this.addLog(`🌑 The night deepens — the dawn slips further away.`);
+        this.addLog(`${ICON.newMoon} The night deepens — the dawn slips further away.`);
       }
       // Score threshold win (disabled in battle mode — runs until time expires)
       if (!isBattle && !this.disableScoreWin && this.nodeScore.witch >= this.nodeScoreThreshold) {
         this.winner    = 'witch';
         this.winReason = WIN_REASON.SCORE_WITCH;
-        this.addLog(`🌙 ${this.factionName('witch')} has claimed ${this.nodeScoreThreshold} ritual moments — Caleb's Hollow falls to darkness!`);
+        this.addLog(`${ICON.night} ${this.factionName('witch')} has claimed ${this.nodeScoreThreshold} ritual moments — Caleb's Hollow falls to darkness!`);
       }
     } else if (heroCount > witchCount) {
       this.nodeScore.hero++;
-      this.addLog(`☀ At ${phaseLabel}: ${this.factionName('hero')} leads ${heroCount}–${witchCount}. Score — Hero ${this.nodeScore.hero} / Witch ${this.nodeScore.witch}`);
+      this.addLog(`${ICON.day} At ${phaseLabel}: ${this.factionName('hero')} leads ${heroCount}–${witchCount}. Score — Hero ${this.nodeScore.hero} / Witch ${this.nodeScore.witch}`);
       if (!isBattle && !this.disableScoreWin && this.nodeScore.hero >= this.nodeScoreThreshold) {
         this.winner    = 'hero';
         this.winReason = WIN_REASON.SCORE_HERO;
-        this.addLog(`☀ ${this.factionName('hero')} has broken the ritual ${this.nodeScoreThreshold} times — Caleb's Hollow is saved!`);
+        this.addLog(`${ICON.day} ${this.factionName('hero')} has broken the ritual ${this.nodeScoreThreshold} times — Caleb's Hollow is saved!`);
       }
     } else {
-      this.addLog(`⚖ At ${phaseLabel}: nodes tied (${witchCount}–${heroCount}). Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);
+      this.addLog(`${ICON.balance} At ${phaseLabel}: nodes tied (${witchCount}–${heroCount}). Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);
     }
   }
 
@@ -1236,12 +1237,12 @@ export class GameState {
 
     if (witchCount > heroCount) {
       this.nodeScore.witch++;
-      this.addLog(`🌙 Round ${this.round}: Witches lead nodes ${witchCount}–${heroCount}. Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`, 'witch');
+      this.addLog(`${ICON.night} Round ${this.round}: Witches lead nodes ${witchCount}–${heroCount}. Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`, 'witch');
     } else if (heroCount > witchCount) {
       this.nodeScore.hero++;
-      this.addLog(`☀ Round ${this.round}: Heroes lead nodes ${heroCount}–${witchCount}. Score — Hero ${this.nodeScore.hero} / Witch ${this.nodeScore.witch}`, 'hero');
+      this.addLog(`${ICON.day} Round ${this.round}: Heroes lead nodes ${heroCount}–${witchCount}. Score — Hero ${this.nodeScore.hero} / Witch ${this.nodeScore.witch}`, 'hero');
     } else {
-      this.addLog(`⚖ Round ${this.round}: nodes tied (${witchCount}–${heroCount}). Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);
+      this.addLog(`${ICON.balance} Round ${this.round}: nodes tied (${witchCount}–${heroCount}). Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);
     }
   }
 
@@ -1254,13 +1255,13 @@ export class GameState {
       const ctrl = nodeController(obj, this.entities);
       if (ctrl !== obj.prevCtrl) {
         if (ctrl === 'contested')
-          this.addLog(`⚡ ${obj.label} is now contested!`);
+          this.addLog(`${ICON.join} ${obj.label} is now contested!`);
         else if (ctrl === 'hero')
-          this.addLog(`🔵 ${this.factionName('hero')} claims ${obj.label}.`, 'hero');
+          this.addLog(`${ICON.nodeHero} ${this.factionName('hero')} claims ${obj.label}.`, 'hero');
         else if (ctrl === 'witch')
-          this.addLog(`🔴 ${this.factionName('witch')} seizes ${obj.label}.`, 'witch');
+          this.addLog(`${ICON.nodeWitch} ${this.factionName('witch')} seizes ${obj.label}.`, 'witch');
         else if (ctrl === 'neutral')
-          this.addLog(`⭕ ${obj.label} is no longer held.`);
+          this.addLog(`${ICON.nodeNeutral} ${obj.label} is no longer held.`);
         obj.prevCtrl = ctrl;
       }
     }

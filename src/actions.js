@@ -1,5 +1,6 @@
 // Action system: definitions, validation, and execution
 import { getNeighbors, hexKey, hexDistance, hexRange, hexLine, offsetToAxial, axialToOffset } from './hex.js';
+import { ICON } from './icons.js';
 import {
   ResourceType, WEAPON_LABEL, BUILDING_LOOT, TERRAIN_LOOT, rollLoot,
   MAX_FORTIFY_LEVEL, getFortifyCombatBonus, isFortWall,
@@ -544,11 +545,11 @@ export function getValidActions(state, actor) {
 
     // Shared resources
     if (getItemCountOf(shared, ResourceType.FOOD) > 0)
-      usable.push({ item: ResourceType.FOOD, label: '🍞 Food (+1 action)', source: 'shared' });
+      usable.push({ item: ResourceType.FOOD, label: '\uE012 Food (+1 action)', source: 'shared' });
     if (getItemCountOf(shared, ResourceType.SILVER) > 0)
-      usable.push({ item: ResourceType.SILVER, label: '🪙 Silver (+1 ATK)', source: 'shared' });
+      usable.push({ item: ResourceType.SILVER, label: '\uE013 Silver (+1 ATK)', source: 'shared' });
     if (getItemCountOf(shared, ResourceType.SCRIPTURE) > 0 && battleTargets.length)
-      usable.push({ item: ResourceType.SCRIPTURE, label: '📜 Scripture (ward)', source: 'shared' });
+      usable.push({ item: ResourceType.SCRIPTURE, label: '\uE014 Scripture (ward)', source: 'shared' });
 
     if (usable.length) actions.push({ type: ActionType.USE_ITEM, usable });
 
@@ -838,7 +839,7 @@ export function executeExplore(state, actor) {
     const herbInv = getFaction(actor.owner).getInventory(state);
     addItemInItems(herbInv, ResourceType.HERBS, 1);
     log.push(`${actor.displayName}'s keen eye also finds Herbs!`);
-    lootItems.push('+🌿');
+    lootItems.push('+\uE015');
     lootItemIds.push(ResourceType.HERBS);
   }
 
@@ -889,7 +890,7 @@ function _applyLoot(state, actor, lootType, log, lootItems, lootItemIds) {
     if (faction.canEquipHorse()) {
       if (!actor.hasItem('horse')) actor.addItem('horse');
       log.push(`Found a horse! ${actor.displayName}'s movement range increases to 2.`);
-      gained('+🐴', 'horse');
+      gained('+\uE048', 'horse');
     }
     return;
   }
@@ -899,7 +900,7 @@ function _applyLoot(state, actor, lootType, log, lootItems, lootItemIds) {
     // Sound Horn action. Idempotent: re-exploring the same tile won't stack it.
     if (!actor.hasItem('horn')) actor.addItem('horn');
     log.push(`Found a horn! ${actor.displayName} can sound it to call out across the land.`);
-    gained('+📯', 'horn');
+    gained('+\uE049', 'horn');
     return;
   }
 
@@ -910,11 +911,11 @@ function _applyLoot(state, actor, lootType, log, lootItems, lootItemIds) {
       if (!actor.getEquippedWeaponId()) {
         actor.equipWeapon(lootType);
         log.push(`Found a ${label}! ${actor.displayName} equips it immediately.`);
-        gained('+⚔', lootType);
+        gained('+\uE0A2', lootType);
       } else {
         actor.addItem(lootType);
         log.push(`Found a ${label}! Added to ${actor.displayName}'s pack.`);
-        gained('+⚔', lootType);
+        gained('+\uE0A2', lootType);
       }
     } else if (faction.canEquipWeapon()) {
       // The side can use weapons in general, but this faction rejects this
@@ -932,13 +933,13 @@ function _applyLoot(state, actor, lootType, log, lootItems, lootItemIds) {
     const inv = faction.getInventory(state);
     addItemInItems(inv, lootType, 1);
     log.push(`${actor.displayName} found Herbs! Added to supplies.`);
-    gained('+🌿', lootType);
+    gained('+\uE015', lootType);
     return;
   }
 
   // All other resources go to faction inventory
   const resLabel = lootType.charAt(0).toUpperCase() + lootType.slice(1);
-  const RES_ICON = { wood: '🪵', metal: '⚙', food: '🍞', silver: '🥈', scripture: '📜' };
+  const RES_ICON = { wood: ICON.wood, metal: ICON.metal, food: ICON.food, silver: ICON.silver, scripture: ICON.scripture };
   const resIcon = RES_ICON[lootType] || `+${resLabel}`;
   const inv = faction.getInventory(state);
   addItemInItems(inv, lootType, 1);
@@ -987,14 +988,14 @@ function _applySplashDamage(state, col, row, excludeIds, log, opts = {}) {
     const fromCol = b.col, fromRow = b.row;
     const dmg = b.applyIncomingDamage(damage, (sd) => state.nextDie(sd));
     const wasKilled = b.takeDamage(dmg);
-    log.push(`💢 ${b.displayName} caught in the blast — takes ${dmg} splash damage! (${b.hp}/${b.maxHp} HP)`);
+    log.push(`${ICON.splash} ${b.displayName} caught in the blast — takes ${dmg} splash damage! (${b.hp}/${b.maxHp} HP)`);
     let pushedTo = null;
     if (knockback && !wasKilled && (fromCol !== col || fromRow !== row)) {
       pushedTo = _knockbackDestination(state, b, col, row);
       if (pushedTo) {
         b.col = pushedTo.col;
         b.row = pushedTo.row;
-        log.push(`💨 ${b.displayName} is hurled to (${pushedTo.col},${pushedTo.row}).`);
+        log.push(`${ICON.wind} ${b.displayName} is hurled to (${pushedTo.col},${pushedTo.row}).`);
       }
     }
     splashHits.push({
@@ -1221,12 +1222,12 @@ export function executeBattle(state, actor, target, opts = {}) {
   if (target.defendCount === undefined) target.defendCount = 0;
   target.defendCount += 1;
 
-  const phaseNote  = phaseBonus > 0 ? ' (🌙 night bonus)' : '';
+  const phaseNote  = phaseBonus > 0 ? ' (\uE023 night bonus)' : '';
   const rangeFalloffNote = rangeDistancePenalty > 0 ? ` (−${rangeDistancePenalty} range)` : '';
   const rangedNote   = isRanged
-    ? (isCloseRanged ? ' 🎯 (point-blank, disadvantage)' : ` 🏹 (ranged)${rangeFalloffNote}`)
+    ? (isCloseRanged ? ' \uE061 (point-blank, disadvantage)' : ` ${ICON.bow} (ranged)${rangeFalloffNote}`)
     : '';
-  const coverNote    = forestCoverBonus > 0 ? ' 🌲 (forest cover +1 DEF)' : '';
+  const coverNote    = forestCoverBonus > 0 ? ' \uE051 (forest cover +1 DEF)' : '';
   const gangNote    = !isRanged && attackerAllies >= 1
     ? ` [advantage ${atkAdvantageDice}, flat +${atkGangupFlat}]` : '';
   const allyDefNote = !isRanged && defenderAllies >= 1
@@ -1299,8 +1300,8 @@ export function executeBattle(state, actor, target, opts = {}) {
       const label = isCrush ? `${damage} damage (crushing blow!)` : `${damage} damage`;
       log.push(`${target.displayName} takes ${label}. (${target.hp}/${target.maxHp} HP)`);
     }
-    if (isGreatCrush) log.push(`💥💥 Great crushing blow! (${attackRoll} vs ${defenseRoll})`);
-    else if (isCrush) log.push(`💥 Crushing blow! (${attackRoll} vs ${defenseRoll})`);
+    if (isGreatCrush) log.push(`${ICON.crush}${ICON.crush} Great crushing blow! (${attackRoll} vs ${defenseRoll})`);
+    else if (isCrush) log.push(`${ICON.crush} Crushing blow! (${attackRoll} vs ${defenseRoll})`);
 
     // Crushing blows leave a wound on the target — +1 damage taken from
     // any source for the next 3 rounds. Universal (applies to all
@@ -1308,7 +1309,7 @@ export function executeBattle(state, actor, target, opts = {}) {
     // tax. Skipped on a kill (no point wounding a corpse).
     if (isCrush && !killed) {
       applyEffect(target, 'wounded');
-      log.push(`🩸 ${target.displayName} is wounded by the brutal blow.`);
+      log.push(`${ICON.bleed} ${target.displayName} is wounded by the brutal blow.`);
     }
 
     // Splash damage: vanilla rule splashes only on crush / kill. The
@@ -1372,7 +1373,7 @@ export function executeBattle(state, actor, target, opts = {}) {
         (sd) => state.nextDie(sd),
       );
       const counterKilled = actor.takeDamage(counterDmg);
-      log.push(`⚔ ${target.displayName} counter-attacks! ${actor.displayName} takes ${counterDmg} damage.`);
+      log.push(`${ICON.hero} ${target.displayName} counter-attacks! ${actor.displayName} takes ${counterDmg} damage.`);
       dispatchTrigger('damaged', actor, { state, amount: counterDmg, source: target });
       if (counterKilled) {
         log.push(`${actor.displayName} is slain by the counter!`);
@@ -1465,7 +1466,7 @@ export function executeBattle(state, actor, target, opts = {}) {
         const lvlNote = fd.levelsLost > 0
           ? ` — the wall weakens to +${getFortifyCombatBonus(fd.lvlAfter).defense} DEF`
           : '';
-        log.push(`🏰 The fortifications take ${fd.hpDealt} damage. (${fd.hpAfter}/${fd.lvlBefore * FORTIFY_HP_PER_LEVEL} HP)${lvlNote}`);
+        log.push(`${ICON.fort} The fortifications take ${fd.hpDealt} damage. (${fd.hpAfter}/${fd.lvlBefore * FORTIFY_HP_PER_LEVEL} HP)${lvlNote}`);
       }
     }
   }
@@ -1591,7 +1592,7 @@ export function executeFortAssault(state, actor, targetCol, targetRow) {
   const hit   = attackRoll > defenseRoll;
   const crush = hit && attackRoll >= 2 * defenseRoll;
 
-  const phaseNote = phaseBonus > 0 ? ' (🌙 night bonus)' : '';
+  const phaseNote = phaseBonus > 0 ? ' (\uE023 night bonus)' : '';
   const gangNote  = atkAllies.length >= 1 ? ` [advantage ${atkAdvantage}]` : '';
   log.push(
     `${actor.displayName} assaults the fortifications at (${targetCol},${targetRow})! ` +
@@ -1611,9 +1612,9 @@ export function executeFortAssault(state, actor, targetCol, targetRow) {
     fortHpDamage = fd.hpDealt;
     damage = fd.levelsLost;
     if (crush) {
-      log.push(`💥 The wall buckles under a crushing blow! (${fd.hpAfter}/${fortLevelBefore * FORTIFY_HP_PER_LEVEL} HP, fort level ${fortLevelBefore} → ${t.fortifyLevel})`);
+      log.push(`${ICON.crush} The wall buckles under a crushing blow! (${fd.hpAfter}/${fortLevelBefore * FORTIFY_HP_PER_LEVEL} HP, fort level ${fortLevelBefore} → ${t.fortifyLevel})`);
     } else {
-      log.push(`🏰 The fortifications crack under the assault. (${fd.hpAfter}/${fortLevelBefore * FORTIFY_HP_PER_LEVEL} HP, fort level ${fortLevelBefore} → ${t.fortifyLevel})`);
+      log.push(`${ICON.fort} The fortifications crack under the assault. (${fd.hpAfter}/${fortLevelBefore * FORTIFY_HP_PER_LEVEL} HP, fort level ${fortLevelBefore} → ${t.fortifyLevel})`);
     }
     if (t.fortifyLevel === 0) {
       log.push(`The fortifications crumble away.`);
@@ -1678,7 +1679,7 @@ export function executeFortify(state, actor) {
     t.fortifyHP = Math.min(MAX_FORTIFY_HP, prevHp + gainLevels * FORTIFY_HP_PER_LEVEL);
     const defGain    = t.fortifyLevel - prevLevel;
     const defHpGain  = t.fortifyHP - prevHp;
-    const star = hasDoubler ? ' ★' : '';
+    const star = hasDoubler ? ' \uE074' : '';
     // Campaign veterancy: fortify XP scales with the NEW fort level. No ally share.
     const xpAwards = [];
     grantXp(xpAwards, actor, XP_PER_FORTIFY_BASE + XP_PER_FORTIFY_LEVEL_BONUS * t.fortifyLevel, state, 'fortify');
@@ -2024,10 +2025,10 @@ export function executeSoundHorn(state, actor) {
   // Reveal hero to all opponents for the rest of this round
   state.heroRevealedByHorn = true;
 
-  log.push(`📯 ${actor.displayName} sounds the horn! The call echoes across the land.`);
+  log.push(`${ICON.horn} ${actor.displayName} sounds the horn! The call echoes across the land.`);
 
   // Witch-side log so the opponent sees it in summary
-  state.addLog('📯 A horn sounds in the distance — the Hero reveals their position!', 'witch');
+  state.addLog('\uE049 A horn sounds in the distance — the Hero reveals their position!', 'witch');
 
   // Find hidden survivors within 4 hexes
   const candidates = [];

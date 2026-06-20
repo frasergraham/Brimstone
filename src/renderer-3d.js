@@ -76,6 +76,7 @@ export {
   GROUND_LABEL_EDGE_INSET,
 };
 import { Renderer } from './renderer.js';
+import { ICON } from './icons.js';
 import { BLOCK_WORD_VARIANTS, pickBlockWord } from './combat-words.js';
 import {
   FACE_TURN_MS, FACING_EPSILON,
@@ -6248,6 +6249,14 @@ export class Renderer3D {
     if (!BABYLON) return;
     this._babylon = BABYLON;
 
+    // Ensure the monochrome icon font (BrimstoneIcons) is loaded before we paint
+    // glyphs into DynamicTextures. Canvas fillText has no CSS unicode-range
+    // fallback, so an unloaded font would paint tofu on the first billboards.
+    // Fire-and-forget; the render loop repaints later frames with the loaded font.
+    if (typeof document !== 'undefined' && document.fonts?.load) {
+      document.fonts.load('48px BrimstoneIcons').catch(() => {});
+    }
+
     const engine = new BABYLON.Engine(this.canvas, true, { preserveDrawingBuffer: true, stencil: true });
     const scene  = new BABYLON.Scene(engine);
     scene.clearColor = new BABYLON.Color4(0.05, 0.04, 0.07, 1.0); // dark gothic
@@ -10576,7 +10585,7 @@ export class Renderer3D {
     ctx.lineWidth = 4;
     ctx.beginPath(); ctx.arc(32, 32, 26, 0, Math.PI * 2); ctx.stroke();
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 30px sans-serif';
+    ctx.font = 'bold 30px BrimstoneIcons, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(`+${overflow}`, 32, 34);
@@ -12723,7 +12732,7 @@ export class Renderer3D {
 
     const isAtk = side === 'attacker' || side === 'atk';
     const sideColor = isAtk ? COMBAT_CARD_ATK_COLOR : COMBAT_CARD_DEF_COLOR;
-    const sideIcon  = isAtk ? '⚔' : '🛡';
+    const sideIcon  = isAtk ? '\uE000' : '\uE042';
 
     const entity = (this.state?.entities ?? []).find(e => e && e.id === allyId) ?? null;
     const portraitSource = (entity && this._tilemapImg && this._spriteRects)
@@ -14164,7 +14173,7 @@ export class Renderer3D {
         ctx.lineWidth = 4;
         ctx.beginPath(); ctx.arc(32, 32, 26, 0, Math.PI * 2); ctx.stroke();
         ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 36px sans-serif';
+        ctx.font = 'bold 36px BrimstoneIcons, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(badgeLabel, 32, 34);
@@ -18872,8 +18881,8 @@ export const DISCOVERY_CARD_BG_ALPHA     = 0.72;
 /** Side glyphs keyed by entity type — mirrors the GLYPHS map the 2D Encounter
  *  Dialog uses (src/ui.js `_showEncounterDialog`) so 3D and 2D agree. */
 export const DISCOVERY_GLYPHS = Object.freeze({
-  hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟',
-  zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙',
+  hero: ICON.hero, witch: ICON.witch, survivor: ICON.survivor, soldier: ICON.soldier,
+  zombie: ICON.zombie, minion: ICON.minion, wood_golem: ICON.woodGolem, iron_golem: ICON.ironGolem,
 });
 
 /** Compute the local-space XZ offset for a combat card so attacker and
@@ -19148,7 +19157,7 @@ export function countAttacksPerTarget(steps) {
  * path: a single attack uses the ⚔ glyph; ≥2 collapse into `×N`.
  */
 export function attackBadgeLabel(count) {
-  return count > 1 ? `×${count}` : '⚔';
+  return count > 1 ? `×${count}` : '\uE000';
 }
 
 /**
@@ -19626,7 +19635,7 @@ export function paintFloaterText(ctx, opts) {
 
   // Font: heavy weight + large pixel size so the label reads at zoom-out.
   const fontPx = Math.round(96 * fontScale);
-  ctx.font = `900 ${fontPx}px sans-serif`;
+  ctx.font = `900 ${fontPx}px BrimstoneIcons, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
@@ -19699,12 +19708,12 @@ export function paintSpeechBubble(ctx, opts) {
   ctx.textBaseline = 'top';
   let ty = SPEECH_BUBBLE_PAD_PX;
   if (name) {
-    ctx.font = `700 ${SPEECH_BUBBLE_NAME_PX - 8}px Georgia, serif`;
+    ctx.font = `700 ${SPEECH_BUBBLE_NAME_PX - 8}px BrimstoneIcons, Georgia, serif`;
     ctx.fillStyle = '#e8c558';
     ctx.fillText(name, SPEECH_BUBBLE_PAD_PX, ty);
     ty += SPEECH_BUBBLE_NAME_PX;
   }
-  ctx.font = `400 ${SPEECH_BUBBLE_LINE_PX - 8}px Georgia, serif`;
+  ctx.font = `400 ${SPEECH_BUBBLE_LINE_PX - 8}px BrimstoneIcons, Georgia, serif`;
   ctx.fillStyle = '#f2e8d8';
   for (const line of lines) {
     ctx.fillText(line, SPEECH_BUBBLE_PAD_PX, ty);
@@ -19779,7 +19788,7 @@ export function combatReadoutModel(result, side) {
   const won = isAtk ? !!result?.hit : !result?.hit;
   const sideKey = isAtk ? 'atk' : 'def';
   const sideColor = isAtk ? COMBAT_CARD_ATK_COLOR : COMBAT_CARD_DEF_COLOR;
-  const sideIcon  = isAtk ? '⚔' : '🛡';
+  const sideIcon  = isAtk ? '\uE000' : '\uE042';
 
   // Per-ally dice from the side's gang-up pool. The first die in atkPool /
   // defPool is the combatant's own; subsequent dice belong to allies in the
@@ -19818,14 +19827,14 @@ export function paintReadoutNumber(ctx, opts) {
   // comfortably inside its plane (≈15-20% padding all round) and never
   // clips at the texture edge for wide combinations like "⚔ 12".
   let fontPx = Math.round(height * 0.40);
-  ctx.font = `900 ${fontPx}px sans-serif`;
+  ctx.font = `900 ${fontPx}px BrimstoneIcons, sans-serif`;
   // Defensive width fit — emoji + 2-digit values can still overflow on
   // narrow canvases, so shrink to fit within 82% of texture width.
   const maxTextWidth = width * 0.82;
   const measured = ctx.measureText ? ctx.measureText(text).width : 0;
   if (measured > maxTextWidth && measured > 0) {
     fontPx = Math.max(1, Math.floor(fontPx * (maxTextWidth / measured)));
-    ctx.font = `900 ${fontPx}px sans-serif`;
+    ctx.font = `900 ${fontPx}px BrimstoneIcons, sans-serif`;
   }
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -19848,14 +19857,14 @@ export function paintReadoutFloater(ctx, opts) {
   ctx.clearRect(0, 0, width, height);
   // ~60% of canvas height keeps floaters legible against busy terrain.
   let fontPx = Math.round(height * 0.60);
-  ctx.font = `800 ${fontPx}px sans-serif`;
+  ctx.font = `800 ${fontPx}px BrimstoneIcons, sans-serif`;
   // Defensive width fit — long labels ("+2 ⚔ allies") shouldn't clip the
   // wide floater canvas either.
   const maxTextWidth = width * 0.90;
   let measured = ctx.measureText ? ctx.measureText(label).width : 0;
   if (measured > maxTextWidth && measured > 0) {
     fontPx = Math.max(1, Math.floor(fontPx * (maxTextWidth / measured)));
-    ctx.font = `800 ${fontPx}px sans-serif`;
+    ctx.font = `800 ${fontPx}px BrimstoneIcons, sans-serif`;
     measured = ctx.measureText ? ctx.measureText(label).width : measured;
   }
 
@@ -19936,12 +19945,12 @@ export function paintIconCombatReadout(ctx, opts) {
   const text = String(value);
   void icon;
   let fontPx = Math.round(size * COMBAT_READOUT_ICON_NUMBER_FONT_FRAC);
-  ctx.font = `900 ${fontPx}px sans-serif`;
+  ctx.font = `900 ${fontPx}px BrimstoneIcons, sans-serif`;
   const maxTextWidth = size * 0.82;
   const measured = ctx.measureText ? ctx.measureText(text).width : 0;
   if (measured > maxTextWidth && measured > 0) {
     fontPx = Math.max(1, Math.floor(fontPx * (maxTextWidth / measured)));
-    ctx.font = `900 ${fontPx}px sans-serif`;
+    ctx.font = `900 ${fontPx}px BrimstoneIcons, sans-serif`;
   }
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -20152,9 +20161,9 @@ export function paintUnitIconBadge(ctx, opts) {
       let f = fontPx;
       const widthOf = (fpx) => {
         if (!ctx.measureText) return 0;
-        ctx.font = `900 ${fpx}px sans-serif`;
+        ctx.font = `900 ${fpx}px BrimstoneIcons, sans-serif`;
         const numW = ctx.measureText(numText).width;
-        ctx.font = `900 ${Math.round(fpx * UNIT_INFO_PCT_SUFFIX_FRAC)}px sans-serif`;
+        ctx.font = `900 ${Math.round(fpx * UNIT_INFO_PCT_SUFFIX_FRAC)}px BrimstoneIcons, sans-serif`;
         return numW + ctx.measureText('%').width;
       };
       const total = widthOf(f);
@@ -20162,11 +20171,11 @@ export function paintUnitIconBadge(ctx, opts) {
         f = Math.max(1, Math.floor(f * ((marginW - 4) / total)));
       }
       const suffixF = Math.round(f * UNIT_INFO_PCT_SUFFIX_FRAC);
-      ctx.font = `900 ${suffixF}px sans-serif`;
+      ctx.font = `900 ${suffixF}px BrimstoneIcons, sans-serif`;
       const suffixW = ctx.measureText ? ctx.measureText('%').width : 0;
 
       const paintGlyph = (text, fpx, x) => {
-        ctx.font = `900 ${fpx}px sans-serif`;
+        ctx.font = `900 ${fpx}px BrimstoneIcons, sans-serif`;
         ctx.strokeStyle = '#000000';
         ctx.lineWidth = Math.max(4, Math.round(fpx * 0.18));
         ctx.strokeText(text, x, y);
@@ -20214,7 +20223,7 @@ export function paintAttackCountMarker(ctx, cx, cy, r, count) {
   ctx.lineWidth = Math.max(2, Math.round(r * 0.1));
   ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
   ctx.fillStyle = '#ffffff';
-  ctx.font = `bold ${Math.round(r * (count > 1 ? 1.0 : 1.16))}px sans-serif`;
+  ctx.font = `bold ${Math.round(r * (count > 1 ? 1.0 : 1.16))}px BrimstoneIcons, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(attackBadgeLabel(count), cx, cy + r * 0.08);
@@ -20328,7 +20337,7 @@ export function paintDiscoveryCard(ctx, opts) {
     ctx.fillStyle = accentColor;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = `${Math.round(discR * 1.3)}px sans-serif`;
+    ctx.font = `${Math.round(discR * 1.3)}px BrimstoneIcons, sans-serif`;
     ctx.fillText(glyph ?? '?', discCx, discCy + discR * 0.05);
   }
   ctx.restore();
@@ -20345,35 +20354,35 @@ export function paintDiscoveryCard(ctx, opts) {
 
   // Name (glyph + name), accent-tinted.
   ctx.fillStyle = accentColor;
-  ctx.font = `bold ${Math.round(H * 0.075)}px sans-serif`;
+  ctx.font = `bold ${Math.round(H * 0.075)}px BrimstoneIcons, sans-serif`;
   ctx.fillText(`${glyph} ${name}`.trim(), W / 2, y);
   y += Math.round(H * 0.06);
 
   // Title (italic, muted).
   if (title) {
     ctx.fillStyle = '#9a8a7a';
-    ctx.font = `italic ${Math.round(H * 0.048)}px sans-serif`;
+    ctx.font = `italic ${Math.round(H * 0.048)}px BrimstoneIcons, sans-serif`;
     ctx.fillText(title, W / 2, y);
     y += Math.round(H * 0.055);
   }
 
   // Stat line.
   ctx.fillStyle = '#c8b89a';
-  ctx.font = `${Math.round(H * 0.052)}px sans-serif`;
+  ctx.font = `${Math.round(H * 0.052)}px BrimstoneIcons, sans-serif`;
   ctx.fillText(statLine, W / 2, y);
   y += Math.round(H * 0.06);
 
   // Ability label (cyan), if any.
   if (abilityLabel) {
     ctx.fillStyle = '#88eeff';
-    ctx.font = `${Math.round(H * 0.045)}px sans-serif`;
-    ctx.fillText(`✦ ${abilityLabel}`, W / 2, y);
+    ctx.font = `${Math.round(H * 0.045)}px BrimstoneIcons, sans-serif`;
+    ctx.fillText(`\uE062 ${abilityLabel}`, W / 2, y);
     y += Math.round(H * 0.055);
   }
 
   // Discovery sentence — wrapped, muted parchment colour.
   ctx.fillStyle = '#b8a88a';
-  ctx.font = `${Math.round(H * 0.05)}px sans-serif`;
+  ctx.font = `${Math.round(H * 0.05)}px BrimstoneIcons, sans-serif`;
   const lines = wrapDiscoveryText(ctx, text, W - pad * 2);
   const lineH = Math.round(H * 0.062);
   y += Math.round(H * 0.02);

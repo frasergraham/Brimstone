@@ -2,6 +2,7 @@
 // Extracted from main.js to reduce its size and colocate campaign logic.
 
 import { Renderer } from '../renderer.js';
+import { ICON } from '../icons.js';
 import { ENTITY_COLOR, EntityType, getEquippedWeaponIdOf } from '../entities.js';
 import { xpForLevel } from '../balance.js';
 import { ITEMS } from '../items.js';
@@ -40,7 +41,7 @@ export function deleteCampaignMissionSave(campaignId, missionId, slotIndex = 1) 
 // ── Resource display ────────────────────────────────────────────────────────
 
 export const RESOURCE_ICONS = {
-  wood: '🪵', metal: '⚙', herbs: '🌿', food: '🍞', silver: '⚔', scripture: '📜',
+  wood: '\uE010', metal: '\uE011', herbs: '\uE015', food: '\uE012', silver: '\uE013', scripture: '\uE014',
 };
 
 // ── HP color helper ─────────────────────────────────────────────────────────
@@ -94,7 +95,7 @@ export function campaignCardHTML(name, title, assetId, color, hp, maxHp, attack,
   const portrait = getCampaignPortrait(assetId, 48);
   const iconHtml = portrait
     ? `<img class="cp-portrait" src="${portrait}" style="border-color:${color}" alt="">`
-    : `<span class="cp-glyph" style="background:${color}">${isHero ? '⚔' : '☺'}</span>`;
+    : `<span class="cp-glyph" style="background:${color}">${isHero ? '\uE000' : '\uE002'}</span>`;
   return `<div class="${cls}">
     ${iconHtml}
     <div class="cp-info">
@@ -180,7 +181,7 @@ export function fallenSectionHTML(fallen, missionTitleResolver = (id) => id) {
     const level = f.level ? `<span class="fallen-level">Lv ${f.level}</span>` : '';
     const where = _esc(missionTitleResolver(f.diedInMission));
     return `<div class="fallen-card" data-name="${name}">
-      <span class="fallen-glyph">⚰</span>
+      <span class="fallen-glyph">${ICON.coffin}</span>
       <div class="fallen-info">
         <div class="fallen-name">${name}${title}</div>
         <div class="fallen-where">fell in ${where}</div>
@@ -189,7 +190,7 @@ export function fallenSectionHTML(fallen, missionTitleResolver = (id) => id) {
     </div>`;
   }).join('');
   return `<div class="fallen-section">
-    <h3 class="fallen-heading">⚰ Fallen</h3>
+    <h3 class="fallen-heading">${ICON.coffin} Fallen</h3>
     <div class="fallen-list">${cards}</div>
   </div>`;
 }
@@ -201,7 +202,7 @@ export function fallenSectionHTML(fallen, missionTitleResolver = (id) => id) {
  *     roster/party use, so the reward card matches the roster cards exactly
  *     (icon + ATK/DEF/HP + ability label). A small NEW badge flags the fresh
  *     ally. The granted objects ARE roster snapshots (see grantRewardSurvivors).
- *   • Resource gains: a single line of "✦ +N <resource>" chips for the positive
+ *   • Resource gains: a single line of "\uE001 +N <resource>" chips for the positive
  *     deltas the mission's `rewards.*` numeric keys applied.
  * Returns '' when there is nothing to show — a loss grants nothing, and the
  * caller already gates on the WIN, so the section simply vanishes when empty.
@@ -227,12 +228,12 @@ export function rewardsSectionHTML(rewards) {
   }
   if (resEntries.length) {
     const chips = resEntries.map(([k, v]) =>
-      `<span class="reward-resource"><span class="reward-res-icon">${RESOURCE_ICONS[k] || '🎒'}</span>+${v} ${k}</span>`
+      `<span class="reward-resource"><span class="reward-res-icon">${RESOURCE_ICONS[k] || '\uE016'}</span>+${v} ${k}</span>`
     ).join('');
-    body += `<div class="reward-resources">✦ ${chips}</div>`;
+    body += `<div class="reward-resources">\uE09F ${chips}</div>`;
   }
   return `<div class="reward-section">
-    <h3 class="reward-heading">✦ Rewards</h3>
+    <h3 class="reward-heading">\uE09F Rewards</h3>
     ${body}
   </div>`;
 }
@@ -262,7 +263,7 @@ export function xpProgress(level, xp) {
 function itemGlyph(id) {
   const label = ITEMS[id]?.label || WEAPON_LABEL[id] || '';
   const first = String(label).trim().split(/\s+/)[0];
-  return first || '🎒';
+  return first || '\uE016';
 }
 
 /** True when an id names a weapon in the ITEMS registry. */
@@ -310,7 +311,7 @@ function resourceGridHTML(resources) {
   for (const [k, v] of Object.entries(resources || {})) {
     if (!(v > 0)) continue;
     slots.push(`<div class="cprog-slot is-resource" title="${k}">`
-      + `<span class="cprog-slot-glyph">${RESOURCE_ICONS[k] || '🎒'}</span>`
+      + `<span class="cprog-slot-glyph">${RESOURCE_ICONS[k] || '\uE016'}</span>`
       + `<span class="cprog-slot-n">×${v}</span>`
       + `<span class="cprog-slot-name">${k}</span></div>`);
   }
@@ -377,7 +378,7 @@ function weaponSlotsHTML(unit, idx) {
         + `<span class="cprog-wslot-glyph">${itemGlyph(id)}</span>`
         + `<span class="cprog-wslot-info">`
         + `<span class="cprog-wslot-name">${weaponName(id)}${count > 1 ? ` ×${count}` : ''}`
-        + (eq ? ' <span class="cprog-wslot-eq" title="Equipped">✓</span>' : '') + `</span>`
+        + (eq ? ' <span class="cprog-wslot-eq" title="Equipped">\uE071</span>' : '') + `</span>`
         + (stat ? `<span class="cprog-wslot-stats">${stat}</span>` : '')
         + `</span></div>`);
     } else {
@@ -408,12 +409,12 @@ function unitStatsHTML(unit) {
   const abilities = (unit.abilities || []).map((id) => ABILITIES[id]).filter(Boolean);
   if (abilities.length) {
     html += `<div class="cprog-uabilities">${abilities.map((a) =>
-      `<span class="cprog-uability" data-tip="${String(a.description || '').replace(/"/g, '&quot;')}">✦ ${a.label}</span>`).join('')}</div>`;
+      `<span class="cprog-uability" data-tip="${String(a.description || '').replace(/"/g, '&quot;')}">\uE062 ${a.label}</span>`).join('')}</div>`;
   }
   return html;
 }
 
-/** Row for a unit's carried non-weapon items — icon + name (e.g. "📯 Horn"). */
+/** Row for a unit's carried non-weapon items — icon + name (e.g. "Horn"). */
 function itemRowHTML(items) {
   const rows = [];
   for (const [id, entry] of Object.entries(items || {})) {
@@ -448,13 +449,13 @@ export function progressUnitCardHTML(unit, opts = {}) {
   const portrait = getCampaignPortrait(unit.assetId, 56);
   const iconHtml = portrait
     ? `<img class="cprog-portrait" src="${portrait}" style="border-color:${unit.color}" alt="">`
-    : `<span class="cprog-glyph" style="background:${unit.color}">${isHero ? '⚔' : '☺'}</span>`;
+    : `<span class="cprog-glyph" style="background:${unit.color}">${isHero ? '\uE000' : '\uE002'}</span>`;
 
   const controlHtml = control
     ? `<button class="cprog-ctrl ${control.cls}" data-idx="${idx}" title="${control.title}">${control.label}</button>`
     : '';
   const healHtml = canHeal
-    ? `<button class="cprog-heal-btn" data-idx="${idx}">🌿 Use 1 herb</button>`
+    ? `<button class="cprog-heal-btn" data-idx="${idx}">${ICON.herb} Use 1 herb</button>`
     : '';
 
   return `<div class="${cls.join(' ')}" data-idx="${idx}" data-drop="unit">
@@ -624,10 +625,10 @@ export function debriefPartyHTML(heroStats, survivors) {
 }
 
 /**
- * The debrief's ✦ Rewards section, rendered with the party-management card UX.
+ * The debrief's Rewards section, rendered with the party-management card UX.
  * Granted survivors use progressUnitCardHTML (same rich card as the surviving
  * roster + the party screen), each wrapped so a NEW badge hangs over the corner.
- * Resource gains keep the "✦ +N <resource>" chip line. Returns '' when there is
+ * Resource gains keep the "+N <resource>" chip line. Returns '' when there is
  * nothing granted (a loss, or a win that granted nothing).
  *
  * @param {{survivors?:object[], resources?:Object<string,number>}} rewards
@@ -651,12 +652,12 @@ export function debriefRewardsSectionHTML(rewards) {
   }
   if (resEntries.length) {
     const chips = resEntries.map(([k, v]) =>
-      `<span class="reward-resource"><span class="reward-res-icon">${RESOURCE_ICONS[k] || '🎒'}</span>+${v} ${k}</span>`
+      `<span class="reward-resource"><span class="reward-res-icon">${RESOURCE_ICONS[k] || '\uE016'}</span>+${v} ${k}</span>`
     ).join('');
-    body += `<div class="reward-resources">✦ ${chips}</div>`;
+    body += `<div class="reward-resources">\uE09F ${chips}</div>`;
   }
   return `<div class="reward-section">
-    <h3 class="reward-heading">✦ Rewards</h3>
+    <h3 class="reward-heading">\uE09F Rewards</h3>
     ${body}
   </div>`;
 }
@@ -704,7 +705,7 @@ export function missionListPaneHTML(chapterTitle, rows) {
     html += '<div class="cprog-empty">No missions available.</div>';
   }
   for (const r of rows) {
-    const icon = r.status === 'completed' ? '✓' : r.status === 'available' ? '→' : '🔒';
+    const icon = r.status === 'completed' ? ICON.check : r.status === 'available' ? '→' : ICON.lock;
     const desc = r.status === 'locked'
       ? (r.lockedHint || 'Locked')
       : (r.briefing || '');

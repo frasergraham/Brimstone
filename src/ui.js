@@ -1,5 +1,6 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
 import { hexKey, hexToPixel, hexDistance, MAP_COLS, MAP_ROWS } from './hex.js';
+import { ICON } from './icons.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, FORTIFY_HP_PER_LEVEL, getFortifyCombatBonus, legacyTileType } from './tiles.js';
 import { ITEMS, lootDisplayLabel } from './items.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf, rangeOf, getEquippedWeaponIdOf, getItemCountOf, totalItemCount, applyProjectedEquip } from './entities.js';
@@ -482,7 +483,7 @@ export class UIController {
     // Sound toggle — label reflects persisted mute state on first open.
     const soundBtn = this._el('menu-sound-btn');
     const _syncSoundLabel = () => {
-      if (soundBtn) soundBtn.textContent = audio.isMuted() ? '🔇 Sound: Off' : '🔊 Sound: On';
+      if (soundBtn) soundBtn.textContent = audio.isMuted() ? '\uE077 Sound: Off' : '\uE076 Sound: On';
     };
     _syncSoundLabel();
     soundBtn?.addEventListener('click', () => {
@@ -1169,7 +1170,7 @@ export class UIController {
     this._startUndoBtnTracking();
     if (this._selectedEntity) this._selectEntity(this._selectedEntity);
     this.onRedraw();
-    this._showPlanToast(`🛡 Auto-Guard: ${added} guard action${added === 1 ? '' : 's'} queued.`);
+    this._showPlanToast(`${ICON.shield} Auto-Guard: ${added} guard action${added === 1 ? '' : 's'} queued.`);
   }
 
   /**
@@ -1201,7 +1202,7 @@ export class UIController {
       return 0;
     }
     if (!plan || plan.length === 0) {
-      if (!autorun) this._showPlanToast('🤖 AI had no actions to plan this round.');
+      if (!autorun) this._showPlanToast('\uE07F AI had no actions to plan this round.');
       return 0;
     }
     this._unitPlans = groupPlanByEntity(plan);
@@ -1212,8 +1213,8 @@ export class UIController {
     if (this._selectedEntity) this._selectEntity(this._selectedEntity);
     this.onRedraw();
     this._showPlanToast(autorun
-      ? `🤖 Autorun: ${plan.length} action${plan.length === 1 ? '' : 's'} — submitting…`
-      : `🤖 AI queued ${plan.length} action${plan.length === 1 ? '' : 's'} — review, then Submit.`);
+      ? `${ICON.bot} Autorun: ${plan.length} action${plan.length === 1 ? '' : 's'} — submitting…`
+      : `${ICON.bot} AI queued ${plan.length} action${plan.length === 1 ? '' : 's'} — review, then Submit.`);
     return plan.length;
   }
 
@@ -2346,7 +2347,7 @@ export class UIController {
         case ActionType.SOUND_HORN:
           arcItems.push({ group: 'scout', label: 'Sound Horn', fullLabel: 'Sound Horn — call hidden survivors within 4 hexes, but reveal your position this round (1 action, 1 food)',
             desc: 'Calls hidden survivors within 4 hexes, but reveals your position this round.',
-            color: '#7eccd6', dis: !action.affordable || dis, cost: 1, resCost: '1🍞', attrs: 'data-action="sound_horn"' });
+            color: '#7eccd6', dis: !action.affordable || dis, cost: 1, resCost: '1\uE012', attrs: 'data-action="sound_horn"' });
           break;
         case ActionType.GUARD: {
           const charges = action.currentCharges || 0;
@@ -2369,7 +2370,7 @@ export class UIController {
           const doublerGain = Math.min(MAX_FORTIFY_LEVEL, cur + 2) - cur;
           const woodGain    = Math.min(MAX_FORTIFY_LEVEL, cur + 1) - cur;
           const shortLbl = hasMetal ? 'Reinforce Hex' : 'Fortify Hex';
-          const fortRes = hasMetal ? '1⚙' : '1🪵';
+          const fortRes = hasMetal ? '1\uE011' : '1\uE010';
           const fullLbl = hasMetal
             ? `Reinforce +${metalGain} lvl (1 metal)`
             : hasDoubler
@@ -2397,7 +2398,7 @@ export class UIController {
           }
           arcItems.push({ group: 'items', label: 'Heal', fullLabel: action.atFullHp ? 'Already at full HP' : 'Herbs (heal 2D10 HP)',
             desc: action.atFullHp ? 'Already at full HP.' : 'Spend 1 herb to heal this unit 2D10 HP. (1 action)',
-            color: '#55cc55', dis: healDis, cost: 1, resCost: '1🌿',
+            color: '#55cc55', dis: healDis, cost: 1, resCost: '1\uE015',
             attrs: 'data-action="heal"' });
           break;
         }
@@ -2475,8 +2476,8 @@ export class UIController {
           .map(o => o.summonType)
       );
       const ALL_SUMMONS = [
-        { st: EntityType.IRON_GOLEM, label: 'Summon Iron Golem',  full: 'Summon Iron Golem (2 metal)',  afford: projMetal >= 2, res: '2⚙' },
-        { st: EntityType.WOOD_GOLEM, label: 'Summon Wood Golem', full: 'Summon Wood Golem (2 wood)',   afford: projWood >= 2, res: '2🪵' },
+        { st: EntityType.IRON_GOLEM, label: 'Summon Iron Golem',  full: 'Summon Iron Golem (2 metal)',  afford: projMetal >= 2, res: '2\uE011' },
+        { st: EntityType.WOOD_GOLEM, label: 'Summon Wood Golem', full: 'Summon Wood Golem (2 wood)',   afford: projWood >= 2, res: '2\uE010' },
         { st: EntityType.MINION,     label: 'Summon Minion',      full: 'Summon Minion (2 any resource)', afford: projTotal >= 2, res: '2 res' },
       ];
       for (const s of ALL_SUMMONS) {
@@ -2839,10 +2840,10 @@ export class UIController {
       const nodeBadge = buildNodeBadgeHtml(this.state.witchObjectives, this.state.entities, displayCol, displayRow);
       const terrainBadge = _buildTerrainBadge(tile, nodeBadge);
       const TERRAIN_ICON = {
-        [TileType.GRASS]: '🌿', [TileType.FOREST]: '🌲', [TileType.DIRT]: '🪨',
-        [TileType.ROAD]: '🛤', [TileType.RIVER]: '💧', [TileType.BRIDGE]: '🌉',
+        [TileType.GRASS]: ICON.grass, [TileType.FOREST]: ICON.forest, [TileType.DIRT]: ICON.dirt,
+        [TileType.ROAD]: ICON.road, [TileType.RIVER]: ICON.river, [TileType.BRIDGE]: ICON.bridge,
       };
-      const icon = tile.building ? (BUILDING_ICON[tile.building] ?? '🏠') : (TERRAIN_ICON[legacyTileType(tile)] ?? '🌿');
+      const icon = tile.building ? (BUILDING_ICON[tile.building] ?? ICON.shelter) : (TERRAIN_ICON[legacyTileType(tile)] ?? ICON.grass);
       const label = tile.building ? (BUILDING_LABEL[tile.building] ?? 'Building') : (legacyTileType(tile) ?? 'terrain');
       const tileSrc = this.renderer.getTileDataURL(tile, displayCol, displayRow, 56);
       const tileImgHtml = tileSrc
@@ -2857,7 +2858,7 @@ export class UIController {
             <span class="usb-tile-name">${label}</span>
             <span class="usb-tile-details">${terrainBadge}</span>
           </span>
-          <button class="usb-deselect-btn" title="Deselect">✕</button>
+          <button class="usb-deselect-btn" title="Deselect">${ICON.close}</button>
         </div>
       `;
       bar.querySelector('.usb-deselect-btn').addEventListener('click', () => {
@@ -2874,8 +2875,8 @@ export class UIController {
     }
 
     const GLYPHS = {
-      hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟',
-      zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙',
+      hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003',
+      zombie: '\uE005', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007',
     };
     const COLORS = {
       hero: '#d4a72c', witch: '#9b59b6', survivor: '#4caf7d', soldier: '#3f78c4',
@@ -2892,7 +2893,7 @@ export class UIController {
     const equippedWeaponId = getEquippedWeaponIdOf(entity.items);
     const weaponLabel = equippedWeaponId
       ? (WEAPON_LABEL[equippedWeaponId] || equippedWeaponId)
-      : '👊 Unarmed';
+      : '\uE08C Unarmed';
     const effectsHtml = buildEffectsHtml(entity);
 
     // XP bar — campaign veterancy progress, shown beneath the HP bar. Gated on
@@ -2951,7 +2952,7 @@ export class UIController {
     // Expanded block: ATK, DEF, and any ability description — toggled by the (i) glyph
     const expanded = !!this._unitStatsExpanded;
     const abilityHtml = entity.abilityLabel
-      ? `<span class="usb-ability">✦ ${entity.abilityLabel}</span>`
+      ? `<span class="usb-ability">\uE062 ${entity.abilityLabel}</span>`
       : '';
     const expandedBlockHtml = expanded
       ? `<span class="usb-extra">
@@ -2987,7 +2988,7 @@ export class UIController {
           ${xpRowHtml}
           ${expandedBlockHtml}
         </span>
-        <button class="usb-deselect-btn" title="Deselect unit">✕</button>
+        <button class="usb-deselect-btn" title="Deselect unit">${ICON.close}</button>
       </div>
       ${terrainBoxHtml}
     `;
@@ -3040,7 +3041,7 @@ export class UIController {
     // During planning phase, show planning info
     if (this._planMode) {
       const faction = this._planFaction;
-      const glyph   = faction === 'hero' ? '⚔' : '✦';
+      const glyph   = faction === 'hero' ? '\uE000' : '\uE001';
       const budget  = this._planBudget;
       const used    = interleavePlan(this._unitPlans).filter(a => actionCosts(a.type)).length;
       const capped  = Math.min(used, budget); // don't render more diamonds than budget
@@ -3099,7 +3100,7 @@ export class UIController {
     }
 
     // Offline / local mode: show legacy sequential-turn display
-    const glyph  = state.activePlayer === 'hero' ? '⚔' : '✦';
+    const glyph  = state.activePlayer === 'hero' ? '\uE000' : '\uE001';
     const player = state.activePlayer === 'hero' ? 'Hero' : 'Witch';
     const isAI   = (state.activePlayer === 'witch' && state.witchIsAI) ||
                    (state.activePlayer === 'hero'  && state.heroIsAI);
@@ -3290,7 +3291,7 @@ export class UIController {
       btn.classList.add('planning-active');
       btn.dataset.tip = 'Lock in your plan — it resolves alongside your opponent’s';
       if (!this._countdownTimer && !this._graceActive) {
-        btn.textContent = '✓ Submit';
+        btn.textContent = '\uE071 Submit';
       }
       btn.classList.toggle('plan-open', !!panelOpen);
       if (returnBtn) returnBtn.style.display = 'none';
@@ -3802,16 +3803,16 @@ export class UIController {
     if (!container) return;
 
     const outcome = result.killed
-      ? '💀 slain'
+      ? '\uE097 slain'
       : result.hit
-        ? result.damage >= 2 ? `💥 crush −${result.damage}HP` : `⚔ hit −${result.damage}HP`
-        : result.counterDmg > 0 ? '🛡 counter' : 'miss';
+        ? result.damage >= 2 ? `${ICON.crush} crush −${result.damage}HP` : `${ICON.hero} hit −${result.damage}HP`
+        : result.counterDmg > 0 ? '\uE042 counter' : 'miss';
 
     const toast = document.createElement('div');
     toast.className = 'battle-toast' +
       (result.killed ? ' kill' : result.damage >= 2 ? ' crush' : '');
     const splashNote = result.splashHits?.length
-      ? ` +💢${result.splashHits.length} splashed`
+      ? ` +${ICON.splash}${result.splashHits.length} splashed`
       : '';
     toast.textContent =
       `${actorSnap.name} → ${targetSnap.name}  [${result.attackRoll}v${result.defenseRoll}]  ${outcome}${splashNote}`;
@@ -3834,10 +3835,10 @@ export class UIController {
       ? 'Exposed survivors suffer 1 damage each night.'
       : `Exposed survivors now suffer ${level} damage each night.`;
     this._showResultDialog([
-      `🌑 The curse deepens — Caleb's Hollow's mystical energy grows stronger!`,
+      `${ICON.newMoon} The curse deepens — Caleb's Hollow's mystical energy grows stronger!`,
       ``,
       desc,
-      `🌙 Night: survivors in the open take ${level} damage`,
+      `${ICON.night} Night: survivors in the open take ${level} damage`,
     ], () => {});
   }
 
@@ -3884,14 +3885,14 @@ export class UIController {
       const survivorBonus = Math.min(survivorCount, 5);
       rows.push({ label: 'Base', value: 3 });
       if (timeBonus)     rows.push({ label: `${phaseIcon} ${phaseLabel} bonus`, value: timeBonus });
-      if (survivorBonus) rows.push({ label: `☺ Survivor${survivorBonus !== 1 ? 's' : ''} (${survivorCount})`, value: survivorBonus });
+      if (survivorBonus) rows.push({ label: `${ICON.survivor} Survivor${survivorBonus !== 1 ? 's' : ''} (${survivorCount})`, value: survivorBonus });
     } else {
       const timeBonus = phase === 'night' ? 1 : 0;
       const unitCount = entities.filter(e => e.alive && e.owner === 'witch' && e.type !== 'witch').length;
       const unitBonus = Math.min(unitCount, 3);
       rows.push({ label: 'Base', value: 3 });
       if (timeBonus) rows.push({ label: `${phaseIcon} ${phaseLabel} bonus`, value: timeBonus });
-      if (unitBonus) rows.push({ label: `☠ Minion${unitBonus !== 1 ? 's' : ''} (${unitCount})`, value: unitBonus });
+      if (unitBonus) rows.push({ label: `${ICON.minion} Minion${unitBonus !== 1 ? 's' : ''} (${unitCount})`, value: unitBonus });
     }
     const nodeBonus = countHeldNodes(faction, this.state.witchObjectives ?? [], entities);
     if (nodeBonus) {
@@ -3905,7 +3906,7 @@ export class UIController {
     html += `<hr class="abkd-divider">`;
     html += `<div class="abkd-row abkd-total"><span class="abkd-label">Total</span><span class="abkd-val">${actions}</span></div>`;
     if (foodCount > 0) {
-      html += `<div class="abkd-row abkd-food"><span class="abkd-label">🍞 Food ×${foodCount}</span><span class="abkd-val">(extra actions)</span></div>`;
+      html += `<div class="abkd-row abkd-food"><span class="abkd-label">${ICON.food} Food ×${foodCount}</span><span class="abkd-val">(extra actions)</span></div>`;
     }
     html += '</div>';
     el.innerHTML = html;
@@ -3978,8 +3979,8 @@ export class UIController {
       const wrapper = this._el('canvas-wrapper');
       if (wrapper) wrapper.appendChild(toast);
     }
-    const icon = change === 'completed' ? '✓'
-      : change === 'added' ? '🗒'
+    const icon = change === 'completed' ? '\uE071'
+      : change === 'added' ? '\uE07A'
       : '•';
     const verb = change === 'completed' ? 'Objective complete'
       : change === 'added' ? 'New objective'
@@ -4057,7 +4058,7 @@ export class UIController {
     const dialog = this._el('encounter-dialog');
     const card   = this._el('encounter-card');
 
-    const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
+    const GLYPHS = { hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003', zombie: '\uE005', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007' };
     const glyph  = GLYPHS[encounterUnit.type] ?? '?';
     const color  = encounterUnit.color || '#d4c9b0';
 
@@ -4075,7 +4076,7 @@ export class UIController {
       : '';
 
     const abilityHtml = encounterUnit.abilityLabel
-      ? `<div style="font-size:0.72rem;color:#88eeff;margin-top:0.3rem;">✦ ${encounterUnit.abilityLabel}</div>`
+      ? `<div style="font-size:0.72rem;color:#88eeff;margin-top:0.3rem;">\uE062 ${encounterUnit.abilityLabel}</div>`
       : '';
 
     const hpPct   = encounterUnit.maxHp > 0 ? (encounterUnit.hp / encounterUnit.maxHp) * 100 : 100;
@@ -4372,7 +4373,7 @@ export class UIController {
     footer.innerHTML    = (this.autoplay || this.speedMode !== 'cinematic')
       ? ''
       : '<div class="result-dismiss">— click to skip —</div>' +
-        '<button class="battle-enable-fast" type="button">⏩ Click to enable fast mode and skip battle dialogs</button>';
+        '<button class="battle-enable-fast" type="button">\uE086 Click to enable fast mode and skip battle dialogs</button>';
 
     // Reset breakdown columns (rendered muted upfront; glow as anim progresses)
     const atkBkd = this._el('battle-atk-breakdown');
@@ -4452,7 +4453,7 @@ export class UIController {
     const revealOutcome = () => {
       if (result.killed) {
         const dmgNote = result.damage > 0 ? ` (${result.damage} damage)` : '';
-        outcome.textContent = `💀 ${targetSnap.name} is slain!${dmgNote}`;
+        outcome.textContent = `${ICON.defeat} ${targetSnap.name} is slain!${dmgNote}`;
         outcome.className   = 'battle-outcome kill';
       } else if (result.hit) {
         const fortNote = result.fortHpDamage
@@ -4461,17 +4462,17 @@ export class UIController {
         const tier = result.breakdown?.dmgTier ?? 1;
         if (tier >= 2) {
           const word = tier >= 3 ? 'Great crushing hit!' : 'Crushing hit!';
-          outcome.textContent = `💥💥 ${word} ${targetSnap.name} takes ${result.damage} damage!${fortNote}`;
+          outcome.textContent = `${ICON.crush}${ICON.crush} ${word} ${targetSnap.name} takes ${result.damage} damage!${fortNote}`;
           outcome.className   = 'battle-outcome kill';
         } else {
-          outcome.textContent = `💥 Hit! ${targetSnap.name} takes ${result.damage} damage${fortNote}`;
+          outcome.textContent = `${ICON.crush} Hit! ${targetSnap.name} takes ${result.damage} damage${fortNote}`;
           outcome.className   = 'battle-outcome hit';
         }
       } else if (result.counterDmg > 0) {
-        outcome.textContent = `⚔ Counter! ${actorSnap.name} takes ${result.counterDmg} damage!`;
+        outcome.textContent = `${ICON.hero} Counter! ${actorSnap.name} takes ${result.counterDmg} damage!`;
         outcome.className   = 'battle-outcome kill';
       } else {
-        outcome.textContent = `🛡 ${targetSnap.name} defends!`;
+        outcome.textContent = `${ICON.shield} ${targetSnap.name} defends!`;
         outcome.className   = 'battle-outcome miss';
       }
       outcome.classList.add('battle-outcome-pulse');
@@ -4481,7 +4482,7 @@ export class UIController {
         const splashEl = document.createElement('div');
         splashEl.className = 'battle-splash';
         const lines = result.splashHits.map(h =>
-          h.killed ? `💢 ${h.name} is slain by splash!` : `💢 ${h.name} takes −${h.damage ?? 1} splash damage`
+          h.killed ? `${ICON.splash} ${h.name} is slain by splash!` : `${ICON.splash} ${h.name} takes −${h.damage ?? 1} splash damage`
         );
         splashEl.textContent = lines.join('  ·  ');
         outcome.insertAdjacentElement('afterend', splashEl);
@@ -4510,7 +4511,7 @@ export class UIController {
         const hasActs = this.state.actionsAvailable > 0;
         const rematchBtn = document.createElement('button');
         rematchBtn.className = 'action-btn battle rematch-btn';
-        rematchBtn.textContent = '⚔ Battle Again';
+        rematchBtn.textContent = '\uE000 Battle Again';
         rematchBtn.disabled = !hasActs;
         rematchBtn.addEventListener('click', e => {
           e.stopPropagation();
@@ -4662,7 +4663,7 @@ export class UIController {
     const redoBtn  = this._el('battle-redo-btn');
     const setPauseLabel = () => {
       if (!pauseBtn) return;
-      pauseBtn.textContent = _dismissPaused ? '▶' : '⏸';
+      pauseBtn.textContent = _dismissPaused ? '\uE0B8' : '\uE0B7';
       pauseBtn.title = _dismissPaused ? 'Resume' : 'Pause';
       pauseBtn.setAttribute('aria-label', _dismissPaused ? 'Resume' : 'Pause');
     };
@@ -4704,12 +4705,12 @@ export class UIController {
       [TileType.BUILDING]: '#6e6e6e',
     };
     const TERRAIN_ICON = {
-      [TileType.GRASS]:  '🌿',
-      [TileType.FOREST]: '🌲',
-      [TileType.DIRT]:   '🪨',
-      [TileType.ROAD]:   '🛤',
-      [TileType.RIVER]:  '💧',
-      [TileType.BRIDGE]: '🌉',
+      [TileType.GRASS]:  ICON.grass,
+      [TileType.FOREST]: ICON.forest,
+      [TileType.DIRT]:   ICON.dirt,
+      [TileType.ROAD]:   ICON.road,
+      [TileType.RIVER]:  ICON.river,
+      [TileType.BRIDGE]: ICON.bridge,
     };
 
     // ── SVG hex elements ──
@@ -4721,7 +4722,7 @@ export class UIController {
     if (polyEl) polyEl.setAttribute('fill', fillColor);
 
     // Icon: building emoji or terrain fallback
-    const icon = tile.building ? (BUILDING_ICON[tile.building] ?? '🏠')
+    const icon = tile.building ? (BUILDING_ICON[tile.building] ?? '\uE03C')
                                 : (TERRAIN_ICON[legacyTileType(tile)] ?? '');
     if (iconEl) iconEl.textContent = icon;
 
@@ -4752,11 +4753,11 @@ export class UIController {
 
     if (obj) {
       const ctrl = nodeController(obj, state.entities);
-      const ctrlStr = ctrl === 'hero'      ? '🔵 Hero'
-                    : ctrl === 'witch'     ? '🔴 Witch'
-                    : ctrl === 'contested' ? '⚡ Contested'
-                    : '⭕ Uncontrolled';
-      linesHtml += `<div class="tile-zoom-info-line node">⚔ Power Node (${obj.label}) — ${ctrlStr}</div>`;
+      const ctrlStr = ctrl === 'hero'      ? '\uE099 Hero'
+                    : ctrl === 'witch'     ? '\uE09A Witch'
+                    : ctrl === 'contested' ? '\uE091 Contested'
+                    : '\uE09B Uncontrolled';
+      linesHtml += `<div class="tile-zoom-info-line node">${ICON.hero} Power Node (${obj.label}) — ${ctrlStr}</div>`;
     }
     if (tile.explored && tile.fortifyLevel) {
       const { attack: fAtk, defense: fDef } = getFortifyCombatBonus(tile.fortifyLevel);
@@ -4764,10 +4765,10 @@ export class UIController {
       const hp     = tile.fortifyHP ?? tile.fortifyLevel * FORTIFY_HP_PER_LEVEL;
       const lvlMax = tile.fortifyLevel * FORTIFY_HP_PER_LEVEL;
       const hpStr  = `${hp}/${lvlMax} HP`;
-      const fl = tile.fortifyLevel >= 5 ? `⚙⚙⚙ Bastion (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`
-               : tile.fortifyLevel >= 3 ? `⚙⚙ Heavily Reinforced (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`
-               : tile.fortifyLevel >= 2 ? `⚙ Metal Reinforced (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`
-               : `🪵 Fortified (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`;
+      const fl = tile.fortifyLevel >= 5 ? `${ICON.metal}${ICON.metal}${ICON.metal} Bastion (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`
+               : tile.fortifyLevel >= 3 ? `${ICON.metal}${ICON.metal} Heavily Reinforced (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`
+               : tile.fortifyLevel >= 2 ? `${ICON.metal} Metal Reinforced (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`
+               : `${ICON.wood} Fortified (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`;
       linesHtml += `<div class="tile-zoom-info-line fortified">${fl}</div>`;
     }
     if (!tile.explored) linesHtml += `<div class="tile-zoom-info-line">— unexplored —</div>`;
@@ -4865,7 +4866,7 @@ export class UIController {
     const isHero  = faction === 'hero';
     const inv     = state.inventory;
     const stash   = isHero ? inv.hero : inv.witch;
-    const label   = isHero ? '⚔ Supplies' : '🕯 Stores';
+    const label   = isHero ? '\uE000 Supplies' : '\uE067 Stores';
 
     const entries = Object.entries(stash).filter(([, v]) => (v?.count ?? 0) > 0);
 
@@ -4968,7 +4969,7 @@ export class UIController {
       const foundRes   = {}; // icon → count  (from explore loot)
       const usedRes   = {}; // icon → count  (from summon/fortify/use-item)
       const _addRes = (map, icon, n = 1) => { map[icon] = (map[icon] || 0) + n; };
-      const RES_ICON_MAP = { wood: '🪵', metal: '⚙', food: '🍞', silver: '🥈', scripture: '📜', herbs: '🌿' };
+      const RES_ICON_MAP = { wood: '\uE010', metal: '\uE011', food: '\uE012', silver: '\uE013', scripture: '\uE014', herbs: '\uE015' };
 
       for (const step of steps ?? []) {
         // Tag each event with its faction for fog filtering
@@ -5065,10 +5066,10 @@ export class UIController {
                 for (const item of icons) {
                   if (!item.startsWith('+')) continue;
                   const icon = item.slice(1);
-                  if (icon === '🐴' || icon === '⚔') {
-                    const keyword = icon === '🐴' ? 'horse' : 'Found a ';
+                  if (icon === '\uE048' || icon === '\uE0A2') {
+                    const keyword = icon === '\uE048' ? 'horse' : 'Found a ';
                     const logLine = (ev.result.log ?? []).find(l => l.toLowerCase().includes(keyword));
-                    equipFinds.push({ icon, log: logLine || (icon === '🐴' ? 'Found a horse!' : 'Found a weapon!') });
+                    equipFinds.push({ icon, log: logLine || (icon === '\uE048' ? 'Found a horse!' : 'Found a weapon!') });
                   } else {
                     _addRes(foundRes, icon);
                   }
@@ -5085,7 +5086,7 @@ export class UIController {
             // Resources spent: fortify
             if (ev.action?.type === 'fortify') {
               const log0 = ev.result?.log?.[0] ?? '';
-              _addRes(usedRes, log0.includes('metal') ? '⚙' : '🪵');
+              _addRes(usedRes, log0.includes('metal') ? '\uE011' : '\uE010');
             }
             // Resources spent: use-item (only trackable consumables)
             if (ev.action?.type === 'use_item') {
@@ -5177,7 +5178,7 @@ export class UIController {
         }
 
         for (const n of kills) {
-          html += `<div class="summary-kill">☠ ${n} slain</div>`;
+          html += `<div class="summary-kill">${ICON.defeat} ${n} slain</div>`;
         }
 
         // Campaign veterancy: per-unit "+N XP" lines beneath the kills/combat
@@ -5187,25 +5188,25 @@ export class UIController {
         if (isCampaign) {
           for (const xp of compileTurnXpSummary(steps ?? [], this.state.entities, ResEventType)) {
             const cls = xp.leveledUp ? 'summary-xp leveled' : 'summary-xp';
-            html += `<div class="${cls}">✨ ${xp.text}</div>`;
+            html += `<div class="${cls}">${ICON.sparkle} ${xp.text}</div>`;
           }
         }
         for (const s of survivors) {
           if (s.type === 'zombie') {
-            html += `<div class="summary-summon">† Zombie raised</div>`;
+            html += `<div class="summary-summon">${ICON.zombie} Zombie raised</div>`;
           } else {
             const label = s.title ? `${s.name} the ${s.title}` : s.name;
-            html += `<div class="summary-survivor">☺ ${label} joined</div>`;
+            html += `<div class="summary-survivor">${ICON.survivor} ${label} joined</div>`;
           }
         }
         for (const s of summons) {
-          html += `<div class="summary-summon">✦ ${s}</div>`;
+          html += `<div class="summary-summon">${ICON.witch} ${s}</div>`;
         }
 
         for (const eq of equipFinds) {
           // New path: `label` already carries emoji + name + stats. Legacy path:
           // generic icon + parsed log line.
-          const body = eq.label ?? `${eq.icon === '🐴' ? '🐴' : '⚔'} ${eq.log}`;
+          const body = eq.label ?? `${eq.icon === '\uE048' ? '\uE048' : '\uE0A2'} ${eq.log}`;
           html += `<div class="summary-equip">${body}</div>`;
         }
 
@@ -5214,23 +5215,23 @@ export class UIController {
         const usedEntries  = Object.entries(usedRes);
         if (foundEntries.length > 0) {
           const foundStr = foundEntries.map(([icon, n]) => `${n}${icon}`).join(' ');
-          html += `<div class="summary-resources found">📦 Found: ${foundStr}</div>`;
+          html += `<div class="summary-resources found">${ICON.storehouse} Found: ${foundStr}</div>`;
         }
         if (usedEntries.length > 0) {
           const usedStr = usedEntries.map(([icon, n]) =>
             icon === 'res' ? `${n} res` : `${n}${icon}`
           ).join(' ');
-          html += `<div class="summary-resources used">📤 Spent: ${usedStr}</div>`;
+          html += `<div class="summary-resources used">${ICON.sentTo} Spent: ${usedStr}</div>`;
         }
 
         // Node control changes
         for (const nc of nodeChanges) {
           if (nc.to === 'hero') {
-            html += `<div class="summary-node hero-text">⚔ Hero now controls ${nc.label}</div>`;
+            html += `<div class="summary-node hero-text">${ICON.hero} Hero now controls ${nc.label}</div>`;
           } else if (nc.to === 'witch') {
-            html += `<div class="summary-node witch-text">✦ Witch has seized ${nc.label}</div>`;
+            html += `<div class="summary-node witch-text">${ICON.witch} Witch has seized ${nc.label}</div>`;
           } else if (nc.to === 'contested') {
-            html += `<div class="summary-node">⚡ ${nc.label} is now contested</div>`;
+            html += `<div class="summary-node">${ICON.join} ${nc.label} is now contested</div>`;
           } else {
             html += `<div class="summary-node">◇ ${nc.label} is no longer controlled</div>`;
           }
@@ -5247,19 +5248,19 @@ export class UIController {
           && (ev.type === 'kill' || !myId || !ev.ownerId || ev.ownerId === myId)
         );
         if (visiblePostEvents.length) {
-          html += `<div class="summary-hazard-header">🌙 Night Attrition</div>`;
+          html += `<div class="summary-hazard-header">${ICON.night} Night Attrition</div>`;
           for (const ev of visiblePostEvents) {
             if (ev.type === 'kill') {
               const cause = ev.text
-                ? String(ev.text).replace(/^💀\s*/, '')
+                ? String(ev.text).replace(/^\uE097\s*/, '')
                 : `${ev.entityName} −${ev.amount} HP (unsheltered at night) — killed`;
-              html += `<div class="summary-hazard">💀 ${cause}</div>`;
+              html += `<div class="summary-hazard">${ICON.defeat} ${cause}</div>`;
             } else if (ev.type === 'damage') {
-              html += `<div class="summary-hazard">🌙 ${ev.entityName} −${ev.amount} HP (unsheltered at night)</div>`;
+              html += `<div class="summary-hazard">${ICON.night} ${ev.entityName} −${ev.amount} HP (unsheltered at night)</div>`;
             } else if (ev.type === 'shelter') {
-              const isBuilding = ev.text.startsWith('🏠');
+              const isBuilding = ev.text.startsWith('\uE03C');
               const desc = isBuilding ? 'sheltered in building' : 'sheltered by fortifications';
-              html += `<div class="summary-shelter">${isBuilding ? '🏠' : '🏰'} ${ev.entityName} ${desc}</div>`;
+              html += `<div class="summary-shelter">${isBuilding ? '\uE03C' : '\uE03B'} ${ev.entityName} ${desc}</div>`;
             }
           }
         }
@@ -5274,7 +5275,7 @@ export class UIController {
           const heroCount = state.witchObjectives.filter(obj =>
             nodeController(obj, state.entities) === 'hero').length;
 
-          const phaseLabel = state.phase === 'dawn' ? '🌅 Dawn Reckoning' : '🌇 Dusk Reckoning';
+          const phaseLabel = state.phase === 'dawn' ? '\uE020 Dawn Reckoning' : '\uE022 Dusk Reckoning';
 
           let reckoningLine;
           if (witchDelta > 0) {
@@ -5293,7 +5294,7 @@ export class UIController {
           html += `<div class="summary-reckoning">
             <div class="summary-reckoning-title">${phaseLabel}</div>
             <div class="summary-reckoning-result">${reckoningLine}</div>
-            <div class="summary-score-track">⚔ ${heroPips}&nbsp;&nbsp;${witchPips} ✦</div>
+            <div class="summary-score-track">${ICON.hero} ${heroPips}&nbsp;&nbsp;${witchPips} ${ICON.witch}</div>
           </div>`;
         }
 
@@ -5302,7 +5303,7 @@ export class UIController {
         // AI takeover messages (from consecutive timeout)
         const takeoverMsgs = this.state._takeoverMessages || [];
         for (const msg of takeoverMsgs) {
-          html += `<div class="summary-takeover">🤖 ${msg}</div>`;
+          html += `<div class="summary-takeover">${ICON.bot} ${msg}</div>`;
         }
         // Clear after showing
         if (this.state._takeoverMessages) this.state._takeoverMessages = [];
@@ -5315,12 +5316,12 @@ export class UIController {
       // Game-over dialog has no speed controls.
       const speedRowEl = gameOver ? null : this._el('round-summary-speed-row');
       if (speedRowEl) {
-        const SPEED_ICONS = { cinematic: '🎬', fast: '⏩', vfast: '⏭' };
+        const SPEED_ICONS = { cinematic: '\uE085', fast: '\uE086', vfast: '\uE087' };
         const SPEED_DESCS = { cinematic: 'Dialog for important battles', fast: 'Cinematic pace, no popups', vfast: '1.5× speed, no popups' };
         const modes = Object.entries(UIController.SPEED_LABELS);
 
         speedRowEl.innerHTML =
-          `<button class="summary-speed-toggle" title="Battle speed">⚡ ${UIController.SPEED_LABELS[this.speedMode]}</button>` +
+          `<button class="summary-speed-toggle" title="Battle speed">${ICON.join} ${UIController.SPEED_LABELS[this.speedMode]}</button>` +
           `<div class="summary-speed-popup" style="display:none">` +
           modes.map(([mode, label]) =>
             `<button class="speed-option${this.speedMode === mode ? ' active' : ''}" data-mode="${mode}">` +
@@ -5349,7 +5350,7 @@ export class UIController {
           if (!btn) return;
           e.stopPropagation();
           this._setSpeed(btn.dataset.mode);
-          toggleBtn.textContent = `⚡ ${UIController.SPEED_LABELS[this.speedMode]}`;
+          toggleBtn.textContent = `${ICON.join} ${UIController.SPEED_LABELS[this.speedMode]}`;
           popup.querySelectorAll('.speed-option').forEach(b =>
             b.classList.toggle('active', b.dataset.mode === this.speedMode)
           );
@@ -5934,7 +5935,7 @@ export class UIController {
       // gate (NEXT) advances past it like any turn card (see _presentStoryBeatCard).
       return `<div class="replay-step-col replay-beat-col" data-step="${col.stepIndex}">`
            + `<div class="replay-step-header">`
-           +   `<div class="replay-step-label">✦ ${esc(col.title)}</div>`
+           +   `<div class="replay-step-label">${ICON.witch} ${esc(col.title)}</div>`
            + `</div>`
            + `<div class="replay-beat-text">${esc(col.text)}</div>`
            + `</div>`;
@@ -5954,7 +5955,7 @@ export class UIController {
       }
       return `<div class="replay-step-col replay-conv-col" data-step="${col.stepIndex}">`
            + `<div class="replay-step-header">`
-           +   `<div class="replay-step-label">💬 ${esc(col.title)}</div>`
+           +   `<div class="replay-step-label">${ICON.conversation} ${esc(col.title)}</div>`
            +   muteBtnHtml
            + `</div>`
            + rows
@@ -6407,18 +6408,18 @@ export class UIController {
           // DOT deaths carry their cause in `text` ("🩸 X succumbs to
           // bleeding!"); night-attrition kills keep the classic copy.
           const note = a.text
-            ? esc(String(a.text).replace(/^💀\s*/, ''))
+            ? esc(String(a.text).replace(/^\uE097\s*/, ''))
             : `${esc(a.name)} <span class="wrapup-attr-note">consumed by the night</span>`;
-          return `<div class="wrapup-attr-row hurt">💀 ${note}</div>`;
+          return `<div class="wrapup-attr-row hurt">${ICON.defeat} ${note}</div>`;
         }
         if (a.kind === 'damage') {
-          return `<div class="wrapup-attr-row hurt">🌙 ${esc(a.name)} <span class="wrapup-attr-dmg">−${a.amount} HP</span> <span class="wrapup-attr-note">exposed</span></div>`;
+          return `<div class="wrapup-attr-row hurt">${ICON.night} ${esc(a.name)} <span class="wrapup-attr-dmg">−${a.amount} HP</span> <span class="wrapup-attr-note">exposed</span></div>`;
         }
-        const icon = a.shelter === 'building' ? '🏠' : '🏰';
+        const icon = a.shelter === 'building' ? '\uE03C' : '\uE03B';
         const desc = a.shelter === 'building' ? 'sheltered in building' : 'sheltered by fort';
         return `<div class="wrapup-attr-row safe">${icon} ${esc(a.name)} <span class="wrapup-attr-note">${desc}</span></div>`;
       }).join('');
-      attritionListHtml = `<div class="wrapup-attr"><div class="wrapup-found-label">🌙 Night Attrition</div>`
+      attritionListHtml = `<div class="wrapup-attr"><div class="wrapup-found-label">${ICON.night} Night Attrition</div>`
         + `<div class="wrapup-attr-rows">${rows}</div></div>`;
     }
 
@@ -6432,7 +6433,7 @@ export class UIController {
     // Night-attrition escalation warning, folded in from its old modal.
     let attritionHtml = '';
     if (attritionLevel > 0) {
-      attritionHtml = `<div class="wrapup-attrition">🌙 The curse deepens — exposed survivors `
+      attritionHtml = `<div class="wrapup-attrition">${ICON.night} The curse deepens — exposed survivors `
         + `now take <b>${attritionLevel}</b> damage each night.</div>`;
     }
     return attritionHtml + combatHtml + foundHtml + lootHtml + attritionListHtml + scoreHtml;
@@ -6555,7 +6556,7 @@ function _buildTerrainBadge(tile, nodeBadge = '') {
     const lvl    = tile.fortifyLevel;
     const hp     = tile.fortifyHP ?? lvl * FORTIFY_HP_PER_LEVEL;
     const lvlMax = lvl * FORTIFY_HP_PER_LEVEL;
-    parts.push(`<span class="usb-terrain-fort">⚙ Fort L${lvl} · ${hp}/${lvlMax} HP</span>`);
+    parts.push(`<span class="usb-terrain-fort">${ICON.metal} Fort L${lvl} · ${hp}/${lvlMax} HP</span>`);
   }
   if (nodeBadge) {
     parts.push(nodeBadge);
@@ -6617,7 +6618,7 @@ function _entityPortraitId(snap) {
  * @param {number}  [opts.portraitSize] Portrait diameter in px (default 36).
  */
 function _unitCardHTML(entity, { renderer = null, selectable = false, showStats = true, portraitSize = 36 } = {}) {
-  const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
+  const GLYPHS = { hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003', zombie: '\uE005', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007' };
   const color  = ENTITY_COLOR[entity.type] || '#888';
   const glyph  = GLYPHS[entity.type] ?? '?';
   const label  = (entity.type === 'survivor' && entity.name) ? entity.name
@@ -6636,7 +6637,7 @@ function _unitCardHTML(entity, { renderer = null, selectable = false, showStats 
   const hpMax  = entity.maxHp ?? entity.hp ?? 0;
   const fullHearts  = Math.round(hpNow / DAMAGE_SCALE);
   const totalHearts = Math.max(fullHearts, Math.round(hpMax / DAMAGE_SCALE));
-  const hearts = '♥'.repeat(fullHearts) + '♡'.repeat(Math.max(0, totalHearts - fullHearts));
+  const hearts = '\uE088'.repeat(fullHearts) + '\uE089'.repeat(Math.max(0, totalHearts - fullHearts));
   let statsHtml = hearts;
   if (showStats && entity.attack !== undefined) {
     const atk = attackOf(entity);
@@ -6657,7 +6658,7 @@ function _snapEntity(e) {
 }
 
 function _combatantHTML(snap, role, portraitSrc = null) {
-  const label      = role === 'atk' ? '⚔ Attacker' : '🛡 Defender';
+  const label      = role === 'atk' ? '\uE000 Attacker' : '\uE042 Defender';
   const color      = ENTITY_COLOR[snap.type] || '#888';
   const hpPct      = (snap.hp / snap.maxHp) * 100;
   const hpColor    = hpPct > 50 ? '#4caf50' : hpPct > 25 ? '#ff9800' : '#f44336';
@@ -6692,28 +6693,28 @@ function _breakdownData(snap, bd, side, total) {
   const add = (label, val, sign, tip = null) => rows.push({ label, val, sign, tip });
   if (side === 'atk') {
     add(`${snap.name} ATK`, snap.attack, 'base', 'Base attack stat (including equipped weapon).');
-    if (snap.attackBonus)    add('🪙 Silver',          snap.attackBonus,    'pos', 'Silver weapon bonus.');
-    if (bd.phaseBonus)       add('🌙 Night',           bd.phaseBonus,       'pos', 'Phase bonus — the night favors the witch’s forces.');
-    if (bd.atkStaffBonus)    add('⚕ Staff (undead)',   bd.atkStaffBonus,    'pos', 'Weapon trigger — the staff is potent against undead defenders.');
-    if (bd.atkFortAtkBonus)  add('🏰 Fort ATT',        bd.atkFortAtkBonus,  'pos', 'Attacking from a fortified tile.');
+    if (snap.attackBonus)    add('\uE013 Silver',          snap.attackBonus,    'pos', 'Silver weapon bonus.');
+    if (bd.phaseBonus)       add('\uE023 Night',           bd.phaseBonus,       'pos', 'Phase bonus — the night favors the witch’s forces.');
+    if (bd.atkStaffBonus)    add('\uE08A Staff (undead)',   bd.atkStaffBonus,    'pos', 'Weapon trigger — the staff is potent against undead defenders.');
+    if (bd.atkFortAtkBonus)  add('\uE03B Fort ATT',        bd.atkFortAtkBonus,  'pos', 'Attacking from a fortified tile.');
     const atkAllyNames = bd.atkAllyNames ?? [];
     const atkAllyContrib = Math.min(atkAllyNames.length, bd.atkGangupFlat || 0);
     if (atkAllyContrib > 0) {
-      for (let i = 0; i < atkAllyContrib; i++) add(`👥 ${atkAllyNames[i]}`, 1, 'pos', GANGUP_TIP);
+      for (let i = 0; i < atkAllyContrib; i++) add(`${ICON.players} ${atkAllyNames[i]}`, 1, 'pos', GANGUP_TIP);
     } else if (bd.atkGangupFlat) {
-      add('👥 Gang-up flat', bd.atkGangupFlat, 'pos', GANGUP_TIP);
+      add('\uE080 Gang-up flat', bd.atkGangupFlat, 'pos', GANGUP_TIP);
     }
   } else {
     add(`${snap.name} DEF`, snap.defense, 'base', 'Base defense stat (including equipped weapon).');
-    if (snap.defenseBonus)  add('🛡 Bonus DEF',   snap.defenseBonus,  'pos', 'Temporary defense bonus.');
-    if (bd.fortBonus)       add('🏰 Fort DEF',    bd.fortBonus,       'pos', 'Fortification — each fort level on the defender’s tile adds defense.');
-    if (bd.fatiguePenalty)  add('😓 Fatigue',     -bd.fatiguePenalty, 'neg', 'Fatigue — defending repeatedly in one round wears the defender down.');
+    if (snap.defenseBonus)  add('\uE042 Bonus DEF',   snap.defenseBonus,  'pos', 'Temporary defense bonus.');
+    if (bd.fortBonus)       add('\uE03B Fort DEF',    bd.fortBonus,       'pos', 'Fortification — each fort level on the defender’s tile adds defense.');
+    if (bd.fatiguePenalty)  add('\uE08B Fatigue',     -bd.fatiguePenalty, 'neg', 'Fatigue — defending repeatedly in one round wears the defender down.');
     const defAllyNames = bd.defAllyNames ?? [];
     const defAllyContrib = Math.min(defAllyNames.length, bd.defGangupFlat || 0);
     if (defAllyContrib > 0) {
-      for (let i = 0; i < defAllyContrib; i++) add(`👥 ${defAllyNames[i]}`, 1, 'pos', GANGUP_TIP);
+      for (let i = 0; i < defAllyContrib; i++) add(`${ICON.players} ${defAllyNames[i]}`, 1, 'pos', GANGUP_TIP);
     } else if (bd.defGangupFlat) {
-      add('👥 Allies flat', bd.defGangupFlat, 'pos', GANGUP_TIP);
+      add('\uE080 Allies flat', bd.defGangupFlat, 'pos', GANGUP_TIP);
     }
   }
   return { pool, picked, advantage, rows, total };

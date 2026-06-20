@@ -19,8 +19,8 @@
   --lg-dim:       #9b9180;
   --lg-label:     #8a7a5a;   /* uppercase section labels */
   --lg-faint:     #7a7060;
-  --lg-serif:     'EB Garamond', 'Georgia', serif;
-  --lg-display:   'Cormorant Garamond', 'Georgia', serif;
+  --lg-serif:     'BrimstoneIcons', 'EB Garamond', 'Georgia', serif;
+  --lg-display:   'BrimstoneIcons', 'Cormorant Garamond', 'Georgia', serif;
 }
 
 #ledger-screen {

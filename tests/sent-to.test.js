@@ -28,6 +28,7 @@ import {
 import { createSurvivor, createMinion, EntityType } from '../src/entities.js';
 import { resolvePlansMP, resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType, actionCosts, validatePlanAction } from '../src/planner.js';
+import { ICON } from '../src/icons.js';
 
 function freshState() {
   return new GameState(true, true);
@@ -583,12 +584,12 @@ describe('replay-timeline — SENT_TO sender + SURVIVOR_RECEIVED recipient cards
     const allEntries = digest.flatMap(d => d.entries);
     const recvEntry = allEntries.find(e => e.actionType === 'survivor-received');
     assert.ok(recvEntry, 'expected a survivor-received digest entry');
-    assert.match(recvEntry.note?.text ?? '', /📥/);
+    assert.match(recvEntry.note?.text ?? '', new RegExp(ICON.receivedFrom));
     assert.match(recvEntry.note?.text ?? '', new RegExp(h1.displayName));
 
     const sendEntry = allEntries.find(e => e.actionType === PlanActionType.SENT_TO);
     assert.ok(sendEntry, 'expected a sent-to (sender) digest entry');
-    assert.match(sendEntry.note?.text ?? '', /📤/);
+    assert.match(sendEntry.note?.text ?? '', new RegExp(ICON.sentTo));
     assert.equal(sendEntry.label, 'SEND', 'sender label should read SEND, not generic SENT-TO');
   });
 
@@ -635,7 +636,7 @@ describe('describePlanAction — SENT_TO', () => {
       destOwnerId: h2.ownerId,
     };
     const desc = describePlanAction(action, state.entities, 0);
-    assert.match(desc, /📤/);
+    assert.match(desc, new RegExp(ICON.sentTo));
     assert.match(desc, /Send/i);
     assert.match(desc, new RegExp(survivor.displayName));
     // h2 is the destination — its displayName must appear.

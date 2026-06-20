@@ -1,5 +1,19 @@
 /* ── Brimstone — Caleb's Hollow Hex Game ────────────────────────────────── */
 
+/* Monochrome icon font (replaces all color emoji). Scoped by unicode-range to the
+   Private-Use-Area block it occupies (U+E000–E0FF), so it can sit FIRST in any font
+   stack and only ever renders icon glyphs — normal text falls through to the serif
+   per-glyph. See scripts/icon-manifest.mjs + src/icons.js. font-display:block avoids
+   a flash of tofu while the woff2 loads. */
+@font-face {
+  font-family: 'BrimstoneIcons';
+  font-style: normal;
+  font-weight: normal;
+  font-display: block;
+  src: url('assets/fonts/brimstone-icons.woff2') format('woff2');
+  unicode-range: U+E000-E0FF;
+}
+
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
@@ -16,9 +30,13 @@
   --night:        #7b4fbb;
   --green:        #4caf7d;
   --red:          #c0392b;
-  --font-serif:   "Georgia", "Times New Roman", serif;
-  --font-mono:    "Courier New", monospace;
+  --font-icons:   'BrimstoneIcons';
+  --font-serif:   'BrimstoneIcons', "Georgia", "Times New Roman", serif;
+  --font-mono:    'BrimstoneIcons', "Courier New", monospace;
 }
+
+/* Explicit icon span (when an icon needs its own element, e.g. sizing/tinting). */
+.bi { font-family: var(--font-icons); font-style: normal; font-weight: normal; line-height: 1; -webkit-font-smoothing: antialiased; }
 
 html, body {
   height: 100%;
@@ -1353,7 +1371,7 @@ input, textarea, select, [contenteditable], [contenteditable] * {
   color: var(--text-dim);
   font-size: 0.78rem;
   font-style: italic;
-  font-family: serif;
+  font-family: 'BrimstoneIcons', serif;
   line-height: 1;
   cursor: pointer;
   padding: 0;
@@ -1643,7 +1661,7 @@ input, textarea, select, [contenteditable], [contenteditable] * {
   color: #d4b8ff;
 }
 .zoom-btn.view-locked::after {
-  content: '🔒';
+  content: '\ee081';
   font-size: 0.6rem;
   position: absolute;
   bottom: 1px;
@@ -1734,7 +1752,7 @@ body.renderer-3d #rotate-right {
   border: 1px solid rgba(180, 150, 80, 0.35);
   border-radius: 4px;
   color: #fff;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: 'BrimstoneIcons', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px;
   line-height: 1.2;
   pointer-events: none;
@@ -1754,7 +1772,7 @@ body.renderer-3d.show-fps #fps-counter { display: block; }
   border: 1px solid rgba(180, 150, 80, 0.35);
   border-radius: 4px;
   color: #fff;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: 'BrimstoneIcons', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px;
   line-height: 1.2;
   pointer-events: none;
@@ -1772,7 +1790,7 @@ body.renderer-3d.debug-counters #poly-counter { display: block; }
   border: 1px solid rgba(180, 150, 80, 0.35);
   border-radius: 4px;
   color: #fff;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: 'BrimstoneIcons', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px;
   line-height: 1.2;
   pointer-events: none;
@@ -6445,7 +6463,7 @@ body.spectator-mode #game-screen   { display: flex !important; }
 }
 
 .tut-title {
-  font-family: 'Cinzel', 'Palatino Linotype', serif;
+  font-family: 'BrimstoneIcons', 'Cinzel', 'Palatino Linotype', serif;
   font-size: 1rem;
   font-weight: 700;
   color: #d4a72c;
@@ -7817,7 +7835,7 @@ body.spectator-mode #game-screen   { display: flex !important; }
   border: 2px solid var(--border);
   border-radius: 4px;
   padding: 0.6rem 1.2rem;
-  font-family: monospace;
+  font-family: 'BrimstoneIcons', monospace;
   margin: 0.75rem auto;
   display: inline-block;
 }

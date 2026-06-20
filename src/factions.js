@@ -7,6 +7,7 @@
 // AI personalities, and unit roster within a side. See `src/sides.js`.
 
 import { Phase } from './game.js';
+import { ICON } from './icons.js';
 import { EntityType, SurvivorAbility, createHero, createWitch, createSurvivor, createZombie, createMinion, createWoodGolem, createIronGolem, createRogue, createCaptain, createNecromancer, createBrute, isLeaderType, getItemCountOf, totalItemCount } from './entities.js';
 import { ResourceType, BuildingType, rollLoot, hasBuilding, isRiver, isBuildingTile, isFortWall, tileCapacityRemaining } from './tiles.js';
 import { hexKey, getNeighbors } from './hex.js';
@@ -415,15 +416,15 @@ export class HeroFaction extends Faction {
         if (b === BuildingType.INN) {
           const amt = 3 * DAMAGE_SCALE;
           hero.heal(amt);
-          state.addLog(`🏨 ${hero.displayName} rests at the inn. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
+          state.addLog(`${ICON.inn} ${hero.displayName} rests at the inn. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
         } else if (b === BuildingType.CHURCH) {
           const amt = 3 * DAMAGE_SCALE;
           hero.heal(amt);
-          state.addLog(`⛪ ${hero.displayName} prays at the chapel. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
+          state.addLog(`${ICON.church} ${hero.displayName} prays at the chapel. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
         } else {
           const amt = 1 * DAMAGE_SCALE;
           hero.heal(amt);
-          state.addLog(`🏠 ${hero.displayName} rests in shelter. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
+          state.addLog(`${ICON.shelter} ${hero.displayName} rests in shelter. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
         }
       }
     }
@@ -441,7 +442,7 @@ export class HeroFaction extends Faction {
         if (onNode) {
           const amt = 1 * DAMAGE_SCALE;
           hero.heal(amt);
-          state.addLog(`✨ ${hero.displayName} draws power from the node. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
+          state.addLog(`${ICON.sparkle} ${hero.displayName} draws power from the node. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
         }
       }
     }
@@ -485,7 +486,7 @@ export class HeroFaction extends Faction {
               if (Math.random() < 0.5) s.addItem('horse');
               state.entities.push(s);
               const horseNote = s.hasItem('horse') ? ' (arrives on horseback!)' : '';
-              state.addLog(`✨ The node calls to the living — a survivor emerges!${horseNote}`, 'hero', state.playerColorFor(hero));
+              state.addLog(`${ICON.sparkle} The node calls to the living — a survivor emerges!${horseNote}`, 'hero', state.playerColorFor(hero));
               state.nodeSpawnedSurvivors.push({
                 id: s.id,
                 type: 'survivor',
@@ -503,10 +504,10 @@ export class HeroFaction extends Faction {
             } else {
               // No passable, unoccupied hex around the node — fail loudly
               // rather than place a survivor on impassable terrain.
-              state.addLog(`✨ The node calls to the living… but there is no safe ground for one to emerge.`, 'hero', state.playerColorFor(hero));
+              state.addLog(`${ICON.sparkle} The node calls to the living… but there is no safe ground for one to emerge.`, 'hero', state.playerColorFor(hero));
             }
           } else {
-            state.addLog(`✨ The node pulses faintly… no one answers the call tonight.`, 'hero');
+            state.addLog(`${ICON.sparkle} The node pulses faintly… no one answers the call tonight.`, 'hero');
           }
         }
       }
@@ -524,7 +525,7 @@ export class HeroFaction extends Faction {
     const abilityNote = entity.abilityLabel ? ` · ${entity.abilityLabel}` : '';
     return {
       encounterLog: [
-        `☺ ${entity.name} the ${entity.title} steps out of hiding and joins the party! (HP ${entity.hp}/${entity.maxHp} · ATK ${entity.getAttack()} · DEF ${entity.getDefense()}${abilityNote})`
+        `${ICON.survivor} ${entity.name} the ${entity.title} steps out of hiding and joins the party! (HP ${entity.hp}/${entity.maxHp} · ATK ${entity.getAttack()} · DEF ${entity.getDefense()}${abilityNote})`
       ],
       encounterSurvivor: {
         id: entity.id,
@@ -635,7 +636,7 @@ export class WitchFaction extends Faction {
       });
       const zombie = createZombie(spawn.col, spawn.row, leader.ownerId, state);
       state.entities.push(zombie);
-      state.addLog('🪦 The graveyard stirs — a zombie claws free of the earth!', 'witch');
+      state.addLog('\uE034 The graveyard stirs — a zombie claws free of the earth!', 'witch');
     }
   }
 
@@ -702,7 +703,7 @@ export class WitchFaction extends Faction {
   buildDiscoveryResult(entity) {
     return {
       encounterLog: [
-        `† A cowering survivor is found… raised as a zombie! (HP ${entity.hp}/${entity.maxHp} · ATK ${entity.getAttack()} · DEF ${entity.getDefense()})`
+        `${ICON.zombie} A cowering survivor is found… raised as a zombie! (HP ${entity.hp}/${entity.maxHp} · ATK ${entity.getAttack()} · DEF ${entity.getDefense()})`
       ],
       encounterSurvivor: {
         id: entity.id,
@@ -827,7 +828,7 @@ export class RogueFaction extends HeroFaction {
     for (const h of hits) {
       const enc = triggerSurvivorEncounter(state, actor, h.col, h.row);
       if (enc) {
-        encounterLog.push(`👁 ${actor.displayName} senses someone hiding nearby!`);
+        encounterLog.push(`${ICON.eye} ${actor.displayName} senses someone hiding nearby!`);
         encounterLog.push(...enc.encounterLog);
         encounterSurvivor = enc.encounterSurvivor;
       }
@@ -923,7 +924,7 @@ export class BruteFaction extends WitchFaction {
     for (const h of hits) {
       const enc = triggerSurvivorEncounter(state, actor, h.col, h.row);
       if (enc) {
-        encounterLog.push(`👹 ${actor.displayName} drags a cowering survivor from hiding!`);
+        encounterLog.push(`${ICON.ogre} ${actor.displayName} drags a cowering survivor from hiding!`);
         encounterLog.push(...enc.encounterLog);
         encounterSurvivor = enc.encounterSurvivor;
       }

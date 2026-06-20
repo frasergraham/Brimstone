@@ -1,5 +1,6 @@
 // Lobby: room lifecycle, server-side AI, action dispatch
 import { randomUUID } from 'crypto';
+import { ICON } from '../src/icons.js';
 import { GameState, Player, GameMode, computeActionsForPlayer, countHeldNodes } from '../src/game.js';
 import { HERO_PERSONALITIES, WITCH_PERSONALITIES, AI_DIFFICULTIES } from '../src/ai.js';
 import { WitchAIEngine } from '../src/ai-engine.js';
@@ -1283,7 +1284,7 @@ function _checkTimeoutTakeovers(room) {
       room.state.players = room.state.players.filter(p => p.id !== playerId);
       room.players = room.players.filter(s => s.playerId !== playerId);
 
-      room.state.addLog(`💨 ${playerName} was removed from the battle for inactivity.`);
+      room.state.addLog(`${ICON.wind} ${playerName} was removed from the battle for inactivity.`);
       _appendChronicle(room, {
         round: room.state.round, phase: room.state.phase,
         event: 'playerKicked', playerName, faction, timestamp: Date.now(),
@@ -2314,7 +2315,7 @@ export function resignGame(playerId, roomId, ws) {
     broadcastState(room, 'resign');
     _broadcastPresence(room);
 
-    room.state.addLog(`💨 ${playerName} has left the battle.`);
+    room.state.addLog(`${ICON.wind} ${playerName} has left the battle.`);
     _appendChronicle(room, {
       round:    room.state.round,
       phase:    room.state.phase,
@@ -3200,7 +3201,7 @@ export function adminKickPlayer(roomId, playerId) {
 
   room.players = room.players.filter(s => s.playerId !== playerId);
 
-  room.state.addLog(`💨 ${playerName} was removed from the battle by an admin.`);
+  room.state.addLog(`${ICON.wind} ${playerName} was removed from the battle by an admin.`);
   _appendChronicle(room, {
     round: room.state.round, phase: room.state.phase,
     event: 'playerKicked', playerName, faction, timestamp: Date.now(),
@@ -3584,7 +3585,7 @@ export function joinBattle(playerId, playerName, ws, roomId) {
 
   // Log and chronicle the join
   const factionLabel = faction === 'hero' ? 'Hero' : 'Witch';
-  room.state.addLog(`⚡ ${playerName} has joined the battle as ${factionLabel}!`);
+  room.state.addLog(`${ICON.join} ${playerName} has joined the battle as ${factionLabel}!`);
   _appendChronicle(room, {
     round:    room.state.round,
     phase:    room.state.phase,

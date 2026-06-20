@@ -1,6 +1,7 @@
 // Entry point: wires all modules, setup screen flow, resize
 import { onInactiveChange, tryGameCenterAuth, isNativeMobile, refreshPushToken, loadGameCenterFriends, shareInvite } from './platform.js'; // must be first — sets server globals for Capacitor builds
 import { AppMode, getMode, setMode, isInGame, isAnimating, shouldBufferMessages, onModeChange } from './app-mode.js';
+import { ICON } from './icons.js';
 import { GameState, phaseForRound, getCycleLength } from './game.js';
 import { DAMAGE_SCALE } from './balance.js';
 import { Renderer3D, BLOCK_WORD_VARIANTS } from './renderer-3d.js';
@@ -1759,7 +1760,7 @@ function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
   if (result?.fortHpDamage) {
     // Floater shows HP chipped; if the hit also dropped a level, note that.
     const lvlNote = result.fortDamaged ? ` (-${result.fortDamaged} lvl)` : '';
-    renderer.addFlash(tgtCol, tgtRow, `🏰-${result.fortHpDamage}${lvlNote}`,
+    renderer.addFlash(tgtCol, tgtRow, `${ICON.fort}-${result.fortHpDamage}${lvlNote}`,
       'rgba(120,120,140,0.15)', 1600, 0.65, 'rgba(180,180,200,1)');
     // Apply the fort-HP delta now so the hex ring visibly thins out in sync with
     // the floater (fortifyHP was rewound at the start of _animateResolutionSteps
@@ -2340,7 +2341,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         ? step.entitySnapshot?.find(e => e.id === actionEv.action.entityId)
         : null;
       if (actorSnap) {
-        renderer.addFlash(actorSnap.col, actorSnap.row, '-1\u00a0🍞', 'rgba(200,140,40,0.1)', 1600, 0.72, '#e8c84a');
+        renderer.addFlash(actorSnap.col, actorSnap.row, '-1\u00a0\uE012', 'rgba(200,140,40,0.1)', 1600, 0.72, '#e8c84a');
         redrawFn();
       }
     }
@@ -2484,7 +2485,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               bumpSlot, true, // start in slot, stop at the hex boundary
             );
             if (ev.result.blockedByFort) {
-              renderer.addFlash(bumpTo.col, bumpTo.row, '🏰',
+              renderer.addFlash(bumpTo.col, bumpTo.row, '\uE03B',
                 'rgba(170,170,175,0.15)', 900, 0.75, 'rgba(200,200,210,1)');
             }
           }
@@ -2535,7 +2536,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
           preSnap.slot ?? 0,
         );
         if (ev.blockedByFort) {
-          renderer.addFlash(bumpTo.col, bumpTo.row, '🏰',
+          renderer.addFlash(bumpTo.col, bumpTo.row, '\uE03B',
             'rgba(170,170,175,0.15)', 900, 0.75, 'rgba(200,200,210,1)');
         }
         hadMove = true;
@@ -2886,7 +2887,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         await playbackDelay(speed === 'vfast' ? 140 : 280);
 
         if (r.hit) {
-          const label = r.crush ? '💥 🏰-2' : '🏰-1';
+          const label = r.crush ? '\uE096 \uE03B-2' : '\uE03B-1';
           renderer.addFlash(tCol, tRow, label,
             'rgba(180,100,100,0.18)', 1600, 0.75, 'rgba(230,180,180,1)');
         } else {
@@ -3152,7 +3153,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (!_evVisible(ev, step.entitySnapshot, postEntities)) continue;
       await _actionGate();
       const gain = result.defGain ?? 1;
-      renderer.addFlash(actor.col, actor.row, `🛡+${gain}`,
+      renderer.addFlash(actor.col, actor.row, `${ICON.shield}+${gain}`,
         'rgba(100,180,255,0.1)', 1800, 0.72, 'rgba(130,200,255,1)');
       _presentedSinceGate = true;
     }
@@ -4279,8 +4280,8 @@ function _showMissionBriefing(missionId) {
   const winDesc = _objectiveDescription(missionDef.objectives?.win) || 'Complete the mission';
   const loseDesc = _objectiveDescription(missionDef.objectives?.lose) || 'The hero falls';
   (objEl || _legacyEl).innerHTML = `
-    <div class="campaign-obj"><span class="campaign-obj-icon">☀</span> <strong>Victory:</strong> ${winDesc}</div>
-    <div class="campaign-obj"><span class="campaign-obj-icon">💀</span> <strong>Defeat:</strong> ${loseDesc}</div>
+    <div class="campaign-obj"><span class="campaign-obj-icon">${ICON.day}</span> <strong>Victory:</strong> ${winDesc}</div>
+    <div class="campaign-obj"><span class="campaign-obj-icon">${ICON.defeat}</span> <strong>Defeat:</strong> ${loseDesc}</div>
   `;
 
   // Switch roster summary into Active/Reserve deploy mode. The deploy cap is the
@@ -4896,8 +4897,8 @@ function _initCampaignMission(missionDef) {
   const winDesc = _objectiveDescription(missionDef.objectives?.win);
   const loseDesc = _objectiveDescription(missionDef.objectives?.lose);
   state.addLog(`═══ ${missionDef.title} ═══`);
-  state.addLog(`☀ Victory: ${winDesc}`);
-  state.addLog(`💀 Defeat: ${loseDesc}`);
+  state.addLog(`${ICON.day} Victory: ${winDesc}`);
+  state.addLog(`${ICON.defeat} Defeat: ${loseDesc}`);
 
   redraw();
   _enterGameView();
@@ -5064,7 +5065,7 @@ function _handleCampaignMissionEnd() {
     document.getElementById('debrief-overlay')?.querySelectorAll('.debrief-heal').forEach(el => el.remove());
     if (won && missionDef.healBonus) {
       statsEl.insertAdjacentHTML('afterend',
-        `<div class="debrief-heal">✦ Rest bonus: all survivors healed +${missionDef.healBonus} HP</div>`);
+        `<div class="debrief-heal">\uE09F Rest bonus: all survivors healed +${missionDef.healBonus} HP</div>`);
     }
   }
 
@@ -5384,7 +5385,7 @@ function _renderSpSaves() {
     emptyHtml: '',
     actionsFor: (row) => [
       {
-        icon: '✕',
+        icon: '\uE070',
         title: 'Delete save',
         className: 'mm-action-delete',
         onClick: () => {
@@ -5462,7 +5463,7 @@ async function _fetchActiveSaves() {
       actionsFor: (row) => {
         if (row.kind === 'game' && row.room_id) {
           return [{
-            icon: '✕',
+            icon: '\uE070',
             title: 'Resign',
             className: 'mm-action-delete',
             onClick: () => _confirmResign(row.room_id),
@@ -5470,7 +5471,7 @@ async function _fetchActiveSaves() {
         }
         if (row.kind === 'battle' && row.room_id) {
           return [{
-            icon: '✕',
+            icon: '\uE070',
             title: 'Quit battle',
             className: 'mm-action-delete',
             onClick: () => {
@@ -5686,7 +5687,7 @@ function _renderAsyncGames(games) {
 
   (list || _legacyEl).innerHTML = '';
   for (const g of games) {
-    const factionSymbol = g.my_faction === 'hero' ? '⚔' : '✦';
+    const factionSymbol = g.my_faction === 'hero' ? '\uE000' : '\uE001';
     const phaseLabel = { dawn: 'Dawn', day: 'Day', dusk: 'Dusk', night: 'Night' }[g.phase] ?? g.phase;
     const entry = document.createElement('div');
     entry.className = 'save-entry';
@@ -5744,7 +5745,7 @@ function _renderAsyncGames(games) {
     // Add delete button to every entry
     const delBtn = document.createElement('button');
     delBtn.className = 'setup-btn secondary async-del-btn';
-    delBtn.textContent = '✕';
+    delBtn.textContent = '\uE070';
     delBtn.title = 'Delete game';
     delBtn.addEventListener('click', (e) => { e.stopPropagation(); _deleteAsyncGame(g.room_id); });
     entry.appendChild(delBtn);
@@ -5905,7 +5906,7 @@ function _mmGameListActions(row) {
   switch (row.kind) {
     case 'local-sp':
       return [{
-        icon: '✕',
+        icon: '\uE070',
         title: 'Delete save',
         className: 'mm-action-delete',
         onClick: () => {
@@ -5916,7 +5917,7 @@ function _mmGameListActions(row) {
       }];
     case 'local-campaign':
       return [{
-        icon: '✕',
+        icon: '\uE070',
         title: 'Abandon mission progress',
         className: 'mm-action-delete',
         onClick: () => {
@@ -5930,7 +5931,7 @@ function _mmGameListActions(row) {
     case 'game':
       if (row.room_id) {
         return [{
-          icon: '✕',
+          icon: '\uE070',
           title: 'Resign',
           className: 'mm-action-delete',
           onClick: () => { _confirmResignFromMenu(row.room_id); },
@@ -5940,7 +5941,7 @@ function _mmGameListActions(row) {
     case 'battle':
       if (row.room_id) {
         return [{
-          icon: '✕',
+          icon: '\uE070',
           title: 'Quit battle',
           className: 'mm-action-delete',
           onClick: () => {
@@ -5962,9 +5963,9 @@ function _mmGameListActions(row) {
 function _localSpRows() {
   const saves = _loadSpSaves().filter(s => s.id); // skip stale null-id campaign ghosts
   const modeLabels = {
-    hero: '⚔ vs AI (Hero)',
-    witch: '✦ vs AI (Witch)',
-    'two-players': '👥 Two Players',
+    hero: '\uE000 vs AI (Hero)',
+    witch: '\uE001 vs AI (Witch)',
+    'two-players': '\uE080 Two Players',
   };
   return saves.map(s => ({
     kind: 'local-sp',
@@ -6018,7 +6019,7 @@ function _localCampaignRows() {
         rows.push({
           kind: 'local-campaign',
           room_id: campaignMissionRowId(camp.id, slot, m.id),
-          title: `📖 ${m.title || m.id}`,
+          title: `${ICON.book} ${m.title || m.id}`,
           round: null,
           phase: null,
           action_needed: false,
@@ -6049,7 +6050,7 @@ function _localCampaignRows() {
       rows.push({
         kind: 'campaign-next',
         room_id: campaignMissionRowId(camp.id, slot, nextId),
-        title: `📖 ${camp.title}`,
+        title: `${ICON.book} ${camp.title}`,
         action_needed: false,
         turn_deadline: null,
         updated_at: c.updatedAt ? Math.floor(c.updatedAt / 1000) : 0,
@@ -6121,7 +6122,7 @@ async function _fetchAllGames() {
     if (pps <= 1) {
       const myFaction = s.hero_player_id === session?.id ? 'hero' : 'witch';
       const oppName = myFaction === 'hero' ? (s.witch_name || 'Witch') : (s.hero_name || 'Hero');
-      const sym = myFaction === 'hero' ? '⚔' : '✦';
+      const sym = myFaction === 'hero' ? '\uE000' : '\uE001';
       title = `${sym} vs ${oppName}`;
     } else {
       title = `${pps}v${pps} Game`;
@@ -6151,7 +6152,7 @@ async function _fetchAllGames() {
     rows.push({
       kind: 'battle',
       room_id: b.roomId,
-      title: '⚔✦ Battle for Caleb\'s Hollow',
+      title: '\uE000\uE001 Battle for Caleb\'s Hollow',
       round: b.round,
       action_needed: !b.mySubmitted,
       turn_deadline: b.turnDeadline ?? null,
@@ -6167,7 +6168,7 @@ async function _fetchAllGames() {
     rows.push({
       kind: 'battle-invite',
       room_id: null,
-      title: '⚔✦ Battle for Caleb\'s Hollow',
+      title: '\uE000\uE001 Battle for Caleb\'s Hollow',
       round: null,
       action_needed: false,
       turn_deadline: null,
@@ -6263,13 +6264,13 @@ async function _renderReplaysList() {
   try {
     _pruneCompletedSpGames();
     const index = _loadCompletedSpIndex();
-    const modeLabels = { hero: '⚔ vs AI', witch: '✦ vs AI', 'two-players': '👥 Two Players' };
+    const modeLabels = { hero: '\uE000 vs AI', witch: '\uE001 vs AI', 'two-players': '\uE080 Two Players' };
     for (const g of index) {
       const winnerLabel = g.winner === 'hero' ? 'Hero wins' : 'Witch wins';
       rows.push({
         kind: 'completed-sp',
         room_id: g.id,
-        title: `${modeLabels[g.mode] ?? g.mode} — ${winnerLabel}${g.pinned ? ' 📌' : ''}`,
+        title: `${modeLabels[g.mode] ?? g.mode} — ${winnerLabel}${g.pinned ? ' \uE07C' : ''}`,
         win_reason: g.winReason,
         total_rounds: g.totalRounds,
         action_needed: false,
@@ -6301,14 +6302,14 @@ async function _renderReplaysList() {
             myFaction = g.hero_player_id === session?.id ? 'hero' : 'witch';
           }
           const resultLabel = g.winner === myFaction ? 'Victory' : 'Defeat';
-          const winnerIcon  = g.winner === 'hero' ? '⚔' : '✦';
+          const winnerIcon  = g.winner === 'hero' ? '\uE000' : '\uE001';
           const title = pps > 1
             ? `${winnerIcon} ${pps}v${pps} — ${resultLabel}`
             : `${winnerIcon} ${g.hero_name} vs ${g.witch_name} — ${resultLabel}`;
           rows.push({
             kind: 'completed-mp',
             room_id: g.game_id,
-            title: title + (g.pinned ? ' 📌' : ''),
+            title: title + (g.pinned ? ' \uE07C' : ''),
             win_reason: g.win_reason,
             total_rounds: g.total_rounds,
             action_needed: false,
@@ -6328,12 +6329,12 @@ async function _renderReplaysList() {
         const meta = row._completedMeta;
         return [
           {
-            icon: meta.pinned ? '📌' : '📎',
+            icon: meta.pinned ? '\uE07C' : '\uE07D',
             title: meta.pinned ? 'Unpin' : 'Pin to keep',
             onClick: () => { _pinCompletedSpGame(meta.id, !meta.pinned); _renderReplaysList(); },
           },
           {
-            icon: '✕',
+            icon: '\uE070',
             title: 'Delete',
             className: 'mm-action-delete',
             onClick: () => { _deleteCompletedSpGame(meta.id); _renderReplaysList(); },
@@ -6346,7 +6347,7 @@ async function _renderReplaysList() {
         const token = session?.token;
         return [
           {
-            icon: meta.pinned ? '📌' : '📎',
+            icon: meta.pinned ? '\uE07C' : '\uE07D',
             title: meta.pinned ? 'Unpin' : 'Pin to keep',
             onClick: async () => {
               await fetch(
@@ -6361,7 +6362,7 @@ async function _renderReplaysList() {
             },
           },
           {
-            icon: '✕',
+            icon: '\uE070',
             title: 'Delete',
             className: 'mm-action-delete',
             onClick: async () => {
@@ -6422,7 +6423,7 @@ function _fetchMainMenuAsyncGames() {
       (box || _legacyEl).style.display = '';
       (list || _legacyEl).innerHTML = '';
       for (const g of actionable) {
-        const factionSymbol = g.my_faction === 'hero' ? '⚔' : '✦';
+        const factionSymbol = g.my_faction === 'hero' ? '\uE000' : '\uE001';
         const item = document.createElement('div');
         item.className = 'menu-async-item';
 
@@ -6952,22 +6953,22 @@ function _renderCompletedSpGames() {
     (list || _legacyEl).innerHTML = '<p class="saves-empty">No completed games yet.</p>';
     return;
   }
-  const modeLabels = { hero: '⚔ vs AI', witch: '✦ vs AI', 'two-players': '👥 Two Players' };
+  const modeLabels = { hero: '\uE000 vs AI', witch: '\uE001 vs AI', 'two-players': '\uE080 Two Players' };
   (list || _legacyEl).innerHTML = '';
   for (const g of index) {
-    const winnerLabel = g.winner === 'hero' ? '⚔ Hero wins' : '✦ Witch wins';
+    const winnerLabel = g.winner === 'hero' ? '\uE000 Hero wins' : '\uE001 Witch wins';
     const ago = _timeAgo(g.createdAt);
     const entry = document.createElement('div');
     entry.className = 'save-entry';
     entry.innerHTML = `
       <div class="save-entry-info">
         <div class="save-entry-title">${modeLabels[g.mode] ?? g.mode} — ${winnerLabel}</div>
-        <div class="save-entry-meta">${_esc(g.winReason)} · ${g.totalRounds} rounds · ${ago}${g.pinned ? ' 📌' : ''}</div>
+        <div class="save-entry-meta">${_esc(g.winReason)} · ${g.totalRounds} rounds · ${ago}${g.pinned ? ' \uE07C' : ''}</div>
       </div>
       <div style="display:flex;gap:0.4rem">
         <button class="setup-btn primary sp-completed-replay-btn">Replay</button>
-        <button class="setup-btn sp-completed-pin-btn"   title="${g.pinned ? 'Unpin' : 'Pin to keep'}">${g.pinned ? '📌' : '📎'}</button>
-        <button class="setup-btn sp-completed-delete-btn" title="Delete">✕</button>
+        <button class="setup-btn sp-completed-pin-btn"   title="${g.pinned ? 'Unpin' : 'Pin to keep'}">${g.pinned ? '\uE07C' : '\uE07D'}</button>
+        <button class="setup-btn sp-completed-delete-btn" title="Delete">${ICON.close}</button>
       </div>
     `;
     entry.querySelector('.sp-completed-replay-btn').addEventListener('click', async () => {
@@ -7105,19 +7106,19 @@ function _renderCompletedGames(games, session) {
     }
 
     const winnerLabel = g.winner === myFaction ? 'Victory' : 'Defeat';
-    const winnerIcon  = g.winner === 'hero' ? '⚔' : '✦';
+    const winnerIcon  = g.winner === 'hero' ? '\uE000' : '\uE001';
     const ago = _timeAgo(g.created_at);
     const entry = document.createElement('div');
     entry.className = 'save-entry';
     entry.innerHTML = `
       <div class="save-entry-info">
         <div class="save-entry-title">${winnerIcon} ${title} — ${winnerLabel}</div>
-        <div class="save-entry-meta">${_esc(g.win_reason)} · ${g.total_rounds} rounds · ${ago}${g.pinned ? ' 📌' : ''}</div>
+        <div class="save-entry-meta">${_esc(g.win_reason)} · ${g.total_rounds} rounds · ${ago}${g.pinned ? ' \uE07C' : ''}</div>
       </div>
       <div style="display:flex;gap:0.4rem">
         <button class="setup-btn primary mp-completed-replay-btn">Replay</button>
-        <button class="setup-btn mp-completed-pin-btn"   title="${g.pinned ? 'Unpin' : 'Pin to keep'}">${g.pinned ? '📌' : '📎'}</button>
-        <button class="setup-btn mp-completed-delete-btn" title="Delete">✕</button>
+        <button class="setup-btn mp-completed-pin-btn"   title="${g.pinned ? 'Unpin' : 'Pin to keep'}">${g.pinned ? '\uE07C' : '\uE07D'}</button>
+        <button class="setup-btn mp-completed-delete-btn" title="Delete">${ICON.close}</button>
       </div>
     `;
     entry.querySelector('.mp-completed-replay-btn').addEventListener('click', async () => {
@@ -7293,21 +7294,21 @@ async function _showBattleScreen() {
       // Your status box
       const myBox = document.getElementById('battle-my-status');
       (myBox || _legacyEl).style.display = '';
-      const fIcon = my.myFaction === 'hero' ? '⚔' : '✦';
+      const fIcon = my.myFaction === 'hero' ? '\uE000' : '\uE001';
       const fName = my.myFaction === 'hero' ? 'Hero' : 'Witch';
       (document.getElementById('battle-my-faction') || _legacyEl).innerHTML =
         `<span style="color:var(--${my.myFaction})">${fIcon} Fighting as ${fName}</span>`;
       if (my.mySubmitted) {
         (document.getElementById('battle-my-plan-status') || _legacyEl).innerHTML =
-          '<span style="color:var(--green)">✓ Plan submitted</span>';
+          '<span style="color:var(--green)">\uE071 Plan submitted</span>';
       } else {
         (document.getElementById('battle-my-plan-status') || _legacyEl).innerHTML =
-          '<span style="color:var(--day)">⚠ Plan not yet submitted</span>';
+          '<span style="color:var(--day)">\uE083 Plan not yet submitted</span>';
       }
       if (my.turnDeadline) {
         const deadlineEl = document.getElementById('battle-my-deadline');
         const secsLeft = my.turnDeadline - Math.floor(Date.now() / 1000);
-        (deadlineEl || _legacyEl).textContent = '⏱ Deadline in ' + _formatTimeRemaining(my.turnDeadline);
+        (deadlineEl || _legacyEl).textContent = '\uE0B6 Deadline in ' + _formatTimeRemaining(my.turnDeadline);
         (deadlineEl || _legacyEl).style.color = secsLeft <= 1800 ? 'var(--red)' : 'var(--text-dim)';
       }
 
@@ -7623,7 +7624,7 @@ function _renderPublicLobbies(rooms) {
     entry.className = 'save-entry save-entry-joinable';
     entry.innerHTML = `
       <div class="save-entry-info">
-        <div class="save-entry-title">⚔ ${_esc(host)}'s game</div>
+        <div class="save-entry-title">${ICON.hero} ${_esc(host)}'s game</div>
         <div class="save-entry-meta">${pps}v${pps} · ${_esc(mapLabel)} · ${modeLabel} · ${statusLabel}</div>
       </div>
     `;
@@ -7741,7 +7742,7 @@ function _renderLobby(lobby) {
   const container = document.createElement('div');
   container.className = 'lobby-factions';
 
-  for (const [label, icon, slots] of [['Day Side', '☀', daySlots], ['Night Side', '🌙', nightSlots]]) {
+  for (const [label, icon, slots] of [['Day Side', '\uE021', daySlots], ['Night Side', '\uE023', nightSlots]]) {
     const col = document.createElement('div');
     col.className = 'lobby-faction-col';
     col.innerHTML = `<div class="lobby-faction-label">${icon} ${label}</div>`;
@@ -7756,12 +7757,12 @@ function _renderLobby(lobby) {
                         _lobbyFactionTag(slot, isMe);
         if (isMe) row.appendChild(_buildLobbyFactionPicker(lobby, slot));
       } else if (slot.status === 'ai') {
-        row.innerHTML = `<span class="lobby-slot-name ai-slot">🤖 ${_esc(slot.name ?? 'AI')}</span>` +
+        row.innerHTML = `<span class="lobby-slot-name ai-slot">${ICON.bot} ${_esc(slot.name ?? 'AI')}</span>` +
                         _lobbyFactionTag(slot, false);
         if (isHost) {
           const removeBtn = document.createElement('button');
           removeBtn.className = 'setup-btn secondary lobby-slot-btn';
-          removeBtn.textContent = '✕';
+          removeBtn.textContent = '\uE070';
           removeBtn.addEventListener('click', () => {
             mp.removeSlotAI(lobby.id, slot.seatIndex + (slot.faction === 'witch' ? pps : 0));
           });
@@ -7788,7 +7789,7 @@ function _renderLobby(lobby) {
           // Invite button
           const inviteBtn = document.createElement('button');
           inviteBtn.className = 'setup-btn secondary lobby-slot-btn';
-          inviteBtn.textContent = '✉ Invite';
+          inviteBtn.textContent = '\uE082 Invite';
           inviteBtn.addEventListener('click', () => {
             const slotIdx = lobby.slots.indexOf(slot);
             _showSlotInvitePopup(lobby, slotIdx, slot.faction, inviteBtn);
@@ -8641,12 +8642,12 @@ function _createMpClient() {
       showStep('waiting');
       if (resumed) {
         (document.getElementById('waiting-subtitle') || _legacyEl).textContent =
-          `Resuming as ${faction === 'hero' ? 'Hero ⚔' : 'Witch ✦'}`;
+          `Resuming as ${faction === 'hero' ? 'Hero \uE000' : 'Witch \uE001'}`;
         (document.getElementById('waiting-message') || _legacyEl).textContent =
           `Restored! Starting game…`;
       } else {
         (document.getElementById('waiting-subtitle') || _legacyEl).textContent =
-          `Game starting as ${faction === 'hero' ? 'Hero ⚔' : 'Witch ✦'}`;
+          `Game starting as ${faction === 'hero' ? 'Hero \uE000' : 'Witch \uE001'}`;
         (document.getElementById('waiting-message') || _legacyEl).textContent =
           `Starting game…`;
       }
@@ -9270,8 +9271,8 @@ function _updateSpectatorInfoBar(players, st) {
   if (players) {
     const heroNames  = players.filter(p => p.faction === 'hero').map(p => p.name).join(', ');
     const witchNames = players.filter(p => p.faction === 'witch').map(p => p.name).join(', ');
-    document.getElementById('sp-hero').textContent  = `⚔ ${heroNames  || 'Hero'}`;
-    document.getElementById('sp-witch').textContent = `✦ ${witchNames || 'Witch'}`;
+    document.getElementById('sp-hero').textContent  = `${ICON.hero} ${heroNames  || 'Hero'}`;
+    document.getElementById('sp-witch').textContent = `${ICON.witch} ${witchNames || 'Witch'}`;
   }
   _updateSpectatorRoundLabel(st);
 }
@@ -9301,7 +9302,7 @@ function _renderSpectatorReadyList(players, submittedIds) {
     const submitted = submittedIds.has(p.playerId);
     const fCls      = `sp-ready-faction-${p.faction}`;
     const dotCls    = submitted ? 'sp-ready-dot submitted' : 'sp-ready-dot';
-    const status    = submitted ? '✓' : '…';
+    const status    = submitted ? '\uE071' : '…';
     const safeName  = String(p.name).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     return `<div class="sp-ready-row">
       <span class="${dotCls}"></span>
@@ -9361,11 +9362,11 @@ async function _collectReplayRows() {
   const rows = [];
   try {
     _pruneCompletedSpGames();
-    const modeLabels = { hero: '⚔ vs AI', witch: '✦ vs AI', 'two-players': '👥 Two Players' };
+    const modeLabels = { hero: '\uE000 vs AI', witch: '\uE001 vs AI', 'two-players': '\uE080 Two Players' };
     for (const g of _loadCompletedSpIndex()) {
       const winnerLabel = g.winner === 'hero' ? 'Hero wins' : 'Witch wins';
       rows.push({ kind: 'completed-sp', room_id: g.id, win_reason: g.winReason,
-        title: `${modeLabels[g.mode] ?? g.mode} — ${winnerLabel}${g.pinned ? ' 📌' : ''}`,
+        title: `${modeLabels[g.mode] ?? g.mode} — ${winnerLabel}${g.pinned ? ' \uE07C' : ''}`,
         total_rounds: g.totalRounds, action_needed: false, turn_deadline: null,
         updated_at: g.createdAt ?? 0, is_local: true, _completedMeta: g });
     }
@@ -9382,9 +9383,9 @@ async function _collectReplayRows() {
           ? (players.find(p => p.playerId === session?.id)?.faction ?? 'hero')
           : (g.hero_player_id === session?.id ? 'hero' : 'witch');
         const resultLabel = g.winner === myFaction ? 'Victory' : 'Defeat';
-        const icon = g.winner === 'hero' ? '⚔' : '✦';
+        const icon = g.winner === 'hero' ? '\uE000' : '\uE001';
         rows.push({ kind: 'completed-mp', room_id: g.game_id, win_reason: g.win_reason,
-          title: (pps > 1 ? `${icon} ${pps}v${pps} — ${resultLabel}` : `${icon} ${g.hero_name} vs ${g.witch_name} — ${resultLabel}`) + (g.pinned ? ' 📌' : ''),
+          title: (pps > 1 ? `${icon} ${pps}v${pps} — ${resultLabel}` : `${icon} ${g.hero_name} vs ${g.witch_name} — ${resultLabel}`) + (g.pinned ? ' \uE07C' : ''),
           total_rounds: g.total_rounds, action_needed: false, turn_deadline: null,
           updated_at: g.created_at ?? 0, _replayMeta: g });
       }

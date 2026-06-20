@@ -17,6 +17,7 @@
  */
 
 import { MAP_SIZES } from './map.js';
+import { ICON } from './icons.js';
 import { toggleAllyLunge } from './debug-flags.js';
 
 // AppModes during which the camera / unit controls are meaningful. MENU is
@@ -84,9 +85,9 @@ export const COMMANDS = Object.freeze({
                  : (arg === 'auto' || arg === 'autorun') ? 'auto'
                  : true;
       const { enabled, autorun } = ctx.ui.setAIAssistMode(mode);
-      if (autorun) return '🤖 Autorun ON — the AI plans & submits every round. /aiassist off to stop.';
-      if (enabled) return '🤖 AI-assist ON — each round, click the "🤖 AI Plan" button then Submit. (/aiassist auto to autorun.)';
-      return '🤖 AI-assist off.';
+      if (autorun) return '\uE07F Autorun ON — the AI plans & submits every round. /aiassist off to stop.';
+      if (enabled) return '\uE07F AI-assist ON — each round, click the "\uE07F AI Plan" button then Submit. (/aiassist auto to autorun.)';
+      return '\uE07F AI-assist off.';
     },
   },
   seed: {
@@ -98,8 +99,8 @@ export const COMMANDS = Object.freeze({
     run: () => {
       const on = toggleAllyLunge();
       return on
-        ? '🤺 Ally lunge ON — gang-up allies slide in during battle replays.'
-        : '🚫 Ally lunge OFF — gang-up allies stay put (presentation only).';
+        ? '\uE093 Ally lunge ON — gang-up allies slide in during battle replays.'
+        : '\uE092 Ally lunge OFF — gang-up allies stay put (presentation only).';
     },
   },
 });
@@ -119,7 +120,7 @@ export function formatSeedLine(state) {
   const seed = (state.mapSeed === null || state.mapSeed === undefined)
     ? 'n/a (pre-built map)'
     : state.mapSeed;
-  return `🌱 seed: ${seed} · size: ${size} (${dims})`;
+  return `${ICON.seed} seed: ${seed} · size: ${size} (${dims})`;
 }
 
 /**

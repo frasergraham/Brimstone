@@ -3,6 +3,7 @@
 // and constant tests — Babylon mesh wiring is exercised in-browser.
 
 import { describe, test } from 'node:test';
+import { ICON } from '../src/icons.js';
 import assert from 'node:assert/strict';
 
 import {
@@ -174,7 +175,7 @@ describe('Renderer3D attack arrow — countAttacksPerTarget()', () => {
 
 describe('Renderer3D attack arrow — attackBadgeLabel()', () => {
   test('1 attack renders the ⚔ glyph (single-attack hint, no ×1)', () => {
-    assert.equal(attackBadgeLabel(1), '⚔');
+    assert.equal(attackBadgeLabel(1), ICON.hero);
   });
 
   test('2+ attacks collapse into ×N for stack-aware readout', () => {

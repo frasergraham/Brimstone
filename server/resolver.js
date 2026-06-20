@@ -12,6 +12,7 @@ import {
   hasLineOfSight,
 } from '../src/actions.js';
 import { FORT_IMPASSABLE_THRESHOLD } from '../src/tiles.js';
+import { ICON } from '../src/icons.js';
 import { EntityType, isLeaderType, normalizeItems, rangeOf, getItemCountOf, removeItemInItems } from '../src/entities.js';
 import { hexDistance, hexKey } from '../src/hex.js';
 import { PlanActionType, snapEntity, groupPlanByEntity } from '../src/planner.js';
@@ -457,7 +458,7 @@ function drainOneStep(state, queue, budget) {
     if (getItemCountOf(heroInv, ResourceType.FOOD) > 0) {
       removeItemInItems(heroInv, ResourceType.FOOD, 1);
       budget.remaining += 1;
-      state.addLog(`🍞 Rations consumed — pressing on beyond the action limit.`, budget.faction);
+      state.addLog(`${ICON.food} Rations consumed — pressing on beyond the action limit.`, budget.faction);
       subEvents.push({ type: ResEventType.FOOD_CONSUMED, faction: budget.faction });
     } else {
       subEvents.push({ type: ResEventType.BUDGET_CAP, faction: budget.faction, action: queue[0] });

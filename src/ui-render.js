@@ -3,6 +3,7 @@
 // Imported by UIController to keep rendering logic separate from DOM wiring.
 
 import { PlanActionType } from './planner.js';
+import { ICON } from './icons.js';
 import { ITEMS } from './items.js';
 import { EntityType, ENTITY_COLOR, getEquippedWeaponIdOf, getItemCountOf, removeItemInItems, normalizeItems, isLeaderType } from './entities.js';
 import { ResourceType, WEAPON_LABEL, RESOURCE_LABEL } from './tiles.js';
@@ -98,7 +99,7 @@ export function describePlanAction(action, entities, index = 0) {
         ? entities.find(e => e.ownerId === action.destOwnerId && isLeaderType(e.type))
         : null;
       const destName = destLeader?.displayName ?? 'another leader';
-      return `📤 Send ${survivorName} to ${destName}`;
+      return `\uE08F Send ${survivorName} to ${destName}`;
     }
     default:
       return `Step ${index + 1}`;
@@ -206,12 +207,12 @@ export function computeFadeFlags({ scrollTop = 0, clientHeight = 0, scrollHeight
 // ── Plan steps list HTML ──────────────────────────────────────────────────────
 
 const RES_ICON = {
-  [ResourceType.WOOD]:      '🪵',
-  [ResourceType.METAL]:     '⚙',
-  [ResourceType.HERBS]:     '🌿',
-  [ResourceType.FOOD]:      '🍞',
-  [ResourceType.SILVER]:    '🥈',
-  [ResourceType.SCRIPTURE]: '📜',
+  [ResourceType.WOOD]:      ICON.wood,
+  [ResourceType.METAL]:     ICON.metal,
+  [ResourceType.HERBS]:     ICON.herb,
+  [ResourceType.FOOD]:      ICON.food,
+  [ResourceType.SILVER]:    ICON.silver,
+  [ResourceType.SCRIPTURE]: ICON.scripture,
 };
 
 /**
@@ -257,13 +258,13 @@ function _stepCostLabel(action, projShared, projWitch, projEntityItems) {
  */
 export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entities, initialInv) {
   const ENTITY_GLYPH = {
-    [EntityType.HERO]:       '⚔',
-    [EntityType.WITCH]:      '✦',
-    [EntityType.SURVIVOR]:   '☺',
-    [EntityType.ZOMBIE]:     '†',
-    [EntityType.MINION]:     '☠',
-    [EntityType.WOOD_GOLEM]: '🪵',
-    [EntityType.IRON_GOLEM]: '⚙',
+    [EntityType.HERO]:       '\uE000',
+    [EntityType.WITCH]:      '\uE001',
+    [EntityType.SURVIVOR]:   '\uE002',
+    [EntityType.ZOMBIE]:     '\uE005',
+    [EntityType.MINION]:     '\uE004',
+    [EntityType.WOOD_GOLEM]: '\uE006',
+    [EntityType.IRON_GOLEM]: '\uE007',
   };
 
   // Projected inventory — updated as we walk through steps. Deep-clone the
@@ -291,10 +292,10 @@ export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entit
     if (foodPowered) foodUsed++;
 
     const desc      = describePlanAction(a, entities, i);
-    const foodTag   = foodPowered ? ` <span class="plan-food-tag">🍞</span>` : '';
+    const foodTag   = foodPowered ? ` <span class="plan-food-tag">\uE012</span>` : '';
     const rmBtn     = submitted
       ? ''
-      : `<button class="plan-step-remove" data-plan-idx="${i}" title="Remove">✕</button>`;
+      : `<button class="plan-step-remove" data-plan-idx="${i}" title="Remove">\uE070</button>`;
     const cls       = foodPowered ? ' food-powered' : overBudget ? ' over-budget' : '';
 
     const stepEntity = entities.find(e => e.id === a.entityId);
@@ -325,13 +326,13 @@ export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entit
 // ── Per-unit plan blocks HTML ────────────────────────────────────────────────
 
 const UNIT_GLYPH = {
-  [EntityType.HERO]:       '⚔',
-  [EntityType.WITCH]:      '✦',
-  [EntityType.SURVIVOR]:   '☺',
-  [EntityType.ZOMBIE]:     '†',
-  [EntityType.MINION]:     '☠',
-  [EntityType.WOOD_GOLEM]: '🪵',
-  [EntityType.IRON_GOLEM]: '⚙',
+  [EntityType.HERO]:       '\uE000',
+  [EntityType.WITCH]:      '\uE001',
+  [EntityType.SURVIVOR]:   '\uE002',
+  [EntityType.ZOMBIE]:     '\uE005',
+  [EntityType.MINION]:     '\uE004',
+  [EntityType.WOOD_GOLEM]: '\uE006',
+  [EntityType.IRON_GOLEM]: '\uE007',
 };
 
 /**
@@ -360,9 +361,9 @@ export function buildUnitDetailHtml(entity, items) {
     : getEquippedWeaponIdOf(entity.items);
   const weaponLabel = equippedId
     ? (WEAPON_LABEL[equippedId] || equippedId)
-    : '👊 Unarmed';
+    : '\uE08C Unarmed';
   const abilityHtml = entity.abilityLabel
-    ? `<span class="usb-ability">✦ ${entity.abilityLabel}</span>`
+    ? `<span class="usb-ability">\uE062 ${entity.abilityLabel}</span>`
     : '';
   const effectsHtml = buildEffectsHtml(entity);
 
@@ -542,10 +543,10 @@ export function buildUnitPlanBlocksHtml(
         const bst  = budgetState.get(key) ?? 'ok';
         const cls  = bst === 'food' ? ' food-powered' : bst === 'over' ? ' over-budget' : '';
         const desc = describePlanAction(a, entities, idx);
-        const foodTag = bst === 'food' ? ` <span class="plan-food-tag">🍞</span>` : '';
+        const foodTag = bst === 'food' ? ` <span class="plan-food-tag">\uE012</span>` : '';
         const rmBtn   = submitted
           ? ''
-          : `<button class="plan-step-remove" data-entity-id="${entityId}" data-step-idx="${idx}" title="Remove">✕</button>`;
+          : `<button class="plan-step-remove" data-entity-id="${entityId}" data-step-idx="${idx}" title="Remove">\uE070</button>`;
         const costLbl = costLabels.get(key) ?? '';
         const costTag = costLbl ? ` <span class="plan-step-cost">${costLbl}</span>` : '';
 
@@ -629,7 +630,7 @@ export function buildPlayerStatusHtml(players, nudgeCtx) {
   for (const p of players) {
     const pid       = p.playerId ?? p.id;
     const submitted = p._submitted ?? false;
-    const icon      = submitted ? '✓' : '⋯';
+    const icon      = submitted ? '\uE071' : '⋯';
     const cls       = submitted ? 'player-ready' : 'player-waiting';
     const label     = p.name;
     const fCls      = p.faction === 'hero' ? 'faction-hero' : 'faction-witch';
@@ -656,7 +657,7 @@ export function buildPlayerStatusHtml(players, nudgeCtx) {
     }
 
     html += `<div class="plan-player-row ${cls}">
-        <span class="plan-player-icon ${fCls}"${colorStyle}>${p.faction === 'hero' ? '⚔' : '✦'}</span>
+        <span class="plan-player-icon ${fCls}"${colorStyle}>${p.faction === 'hero' ? '\uE000' : '\uE001'}</span>
         ${presenceDot}<span class="plan-player-name"${colorStyle}>${safeName}</span>
         ${nudgeBtn}<span class="plan-player-status">${icon}</span>
       </div>`;
@@ -752,9 +753,9 @@ export function buildMissionLogHtml(objectives) {
   return objs.map((o) => {
     const done = !!o.completed;
     const hasTarget = o.target != null;
-    const marker = done ? '✓'
+    const marker = done ? '\uE071'
       : hasTarget ? `${Math.max(0, o.current ?? 0)}/${o.target}`
-      : '☐';
+      : '\uE09C';
     return `<li class="mission-log-item${done ? ' done' : ''}">`
       + `<span class="mission-log-marker">${marker}</span>`
       + `<span class="mission-log-label">${_escHtml(o.label ?? o.id ?? '')}</span>`
@@ -785,7 +786,7 @@ export function buildNodeBadgeHtml(witchObjectives, entities, col, row) {
 
   const nodeColor = node.color ?? '#c89dff';
   const name = node.label ?? 'Power Node';
-  return `<span class="usb-terrain-node" style="color:${nodeColor}">⬡ ${name}</span>` +
+  return `<span class="usb-terrain-node" style="color:${nodeColor}">\uE08E ${name}</span>` +
     ` · <span style="color:${disp.color}">${disp.label}</span>`;
 }
 
@@ -863,7 +864,7 @@ export function buildCycleInfoHtml(state, icons = {}) {
   };
   const nodes = (state.witchObjectives ?? []).map(o => {
     const c = CTRL[nodeController(o, state.entities ?? [])] ?? CTRL.neutral;
-    return `<div class="cip-node"><span class="cip-node-name" style="color:${o.color ?? '#c89dff'}">⬡ ${o.label ?? 'Power Node'}</span>`
+    return `<div class="cip-node"><span class="cip-node-name" style="color:${o.color ?? '#c89dff'}">\uE08E ${o.label ?? 'Power Node'}</span>`
       + `<span class="cip-node-ctrl ${c.cls}">${c.label}</span></div>`;
   }).join('');
   if (nodes) {
@@ -874,14 +875,14 @@ export function buildCycleInfoHtml(state, icons = {}) {
   if (scoringOn) {
     const score = state.nodeScore ?? { hero: 0, witch: 0 };
     if (state.gameMode === 'battle') {
-      html += `<div class="cip-score">⚔ ${score.hero} — ${score.witch} ✦</div>`;
+      html += `<div class="cip-score">\uE000 ${score.hero} — ${score.witch} \uE001</div>`;
     } else {
       const pips = (cls, n) => Array.from({ length: threshold }, (_, i) =>
         `<span class="score-pip ${cls}${i < n ? ' filled' : ''}"></span>`).join('');
       html += `<div class="cip-score">`
-        + `<span class="cip-score-glyph">⚔</span>${pips('hero', score.hero)}`
+        + `<span class="cip-score-glyph">\uE000</span>${pips('hero', score.hero)}`
         + `<span class="cip-score-sep">—</span>`
-        + `${pips('witch', score.witch)}<span class="cip-score-glyph">✦</span></div>`;
+        + `${pips('witch', score.witch)}<span class="cip-score-glyph">\uE001</span></div>`;
     }
   }
   return html;
@@ -953,8 +954,8 @@ export function buildRollRowsTipHtml(rows, entry = {}, { portraitFor = null } = 
   const padTo = Math.max(rows.atk.terms.length, rows.def.terms.length);
   let html = `<div class="gtt-bkd">`;
   html += `<div class="gtt-cols">`
-    + column('⚔ ATTACK', 'gtt-atk', rows.atk, padTo, combatantHead(entry.actor))
-    + column('🛡 DEFENSE', 'gtt-def', rows.def, padTo, combatantHead(entry.target))
+    + column('\uE000 ATTACK', 'gtt-atk', rows.atk, padTo, combatantHead(entry.actor))
+    + column('\uE042 DEFENSE', 'gtt-def', rows.def, padTo, combatantHead(entry.target))
     + `</div>`;
 
   // Outcome: what happened, why, and the damage dealt.

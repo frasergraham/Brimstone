@@ -1,5 +1,6 @@
 // Tile types, building types, resources, weapons, and their visual properties
 import { LOOT_CONFIG } from './loot.config.js';
+import { ICON } from './icons.js';
 
 export const TileType = Object.freeze({
   GRASS:    'grass',
@@ -113,19 +114,19 @@ export const BUILDING_COLOR = {
 
 // Icons shown on every building tile, always visible
 export const BUILDING_ICON = {
-  [BuildingType.TOWN_HALL]:  '🏛',
-  [BuildingType.CHURCH]:     '⛪',
-  [BuildingType.INN]:        '🏨',
-  [BuildingType.BLACKSMITH]: '⚒',
-  [BuildingType.GRAVEYARD]:  '🪦',
-  [BuildingType.MILL]:       '⚙',
-  [BuildingType.DOCK]:       '⚓',
-  [BuildingType.HOUSE]:      '🏠',
-  [BuildingType.BARN]:       '🌾',
-  [BuildingType.WATCHTOWER]: '🗼',
-  [BuildingType.APOTHECARY]: '⚗',
-  [BuildingType.STOREHOUSE]: '📦',
-  [BuildingType.STABLE]:     '🐎',
+  [BuildingType.TOWN_HALL]:  ICON.townhall,
+  [BuildingType.CHURCH]:     ICON.church,
+  [BuildingType.INN]:        ICON.inn,
+  [BuildingType.BLACKSMITH]: ICON.blacksmith,
+  [BuildingType.GRAVEYARD]:  ICON.graveyard,
+  [BuildingType.MILL]:       ICON.mill,
+  [BuildingType.DOCK]:       ICON.dock,
+  [BuildingType.HOUSE]:      ICON.shelter,
+  [BuildingType.BARN]:       ICON.barn,
+  [BuildingType.WATCHTOWER]: ICON.watchtower,
+  [BuildingType.APOTHECARY]: ICON.apothecary,
+  [BuildingType.STOREHOUSE]: ICON.storehouse,
+  [BuildingType.STABLE]:     ICON.stable,
 };
 
 export const BUILDING_LABEL = {
@@ -145,14 +146,14 @@ export const BUILDING_LABEL = {
 };
 
 export const RESOURCE_LABEL = {
-  [ResourceType.HERBS]:     '🌿 Herbs',
-  [ResourceType.SILVER]:    '⚔ Silver',
-  [ResourceType.WOOD]:      '🪵 Wood',
-  [ResourceType.METAL]:     '⚙ Metal',
-  [ResourceType.FOOD]:      '🍞 Food',
-  [ResourceType.SCRIPTURE]: '📜 Scripture',
-  'horse':                  '🐴 Horse',
-  'horn':                   '📯 Horn',
+  [ResourceType.HERBS]:     '\uE015 Herbs',
+  [ResourceType.SILVER]:    '\uE013 Silver',
+  [ResourceType.WOOD]:      '\uE010 Wood',
+  [ResourceType.METAL]:     '\uE011 Metal',
+  [ResourceType.FOOD]:      '\uE012 Food',
+  [ResourceType.SCRIPTURE]: '\uE014 Scripture',
+  'horse':                  '\uE048 Horse',
+  'horn':                   '\uE049 Horn',
 };
 
 // Loot tables — sourced from loot.config.js (edit that file to tune rates).
