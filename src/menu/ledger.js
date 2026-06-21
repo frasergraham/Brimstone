@@ -16,11 +16,11 @@ import { isModeAvailable, isFactionAvailable, COMING_SOON_LABEL } from '../demo-
 
 /** The six rail destinations, top to bottom (mirrors the mock). */
 const DESTINATIONS = [
-  { id: 'continue', icon: '▶',  label: 'Continue',         title: 'Continue',         tag: '— the night is not over',            accent: 'gold' },
-  { id: 'campaign', icon: '\uE021',  label: 'Campaign',         title: 'The Campaign',     tag: '— six nights to break the curse',    accent: 'gold' },
-  { id: 'skirmish', icon: '\uE061', label: 'Skirmish',         title: 'Skirmish',         tag: '— choose a champion, set the night', accent: 'gold' },
-  { id: 'others',   icon: '\uE023', label: 'Play Online',       title: 'Play Online',      tag: '— a single battle, or the war',      accent: 'purple' },
-  { id: 'replays',  icon: '\uE014', label: 'Replays',          title: 'Replays',          tag: '— games already told',               accent: 'gold' },
+  { id: 'continue', icon: '▶',  label: 'Continue',         title: 'Continue',         tag: 'Games in Progress',            accent: 'gold' },
+  { id: 'campaign', icon: '\uE021',  label: 'Campaign',         title: 'The Campaign',     tag: 'Assemble a party of survivors and follow the story of Ishmael and the Witch',    accent: 'gold' },
+  { id: 'skirmish', icon: '\uE061', label: 'Skirmish',         title: 'Skirmish',         tag: 'Single player battle vs. AI - hold the majority of power nodes to win', accent: 'gold' },
+  { id: 'others',   icon: '\uE023', label: 'Play Online',       title: 'Play Online',      tag: 'Multiplayer single battles, or join the persistent two-week long async battle for Caleb\'s Hollow',      accent: 'purple' },
+  { id: 'replays',  icon: '\uE014', label: 'Replays',          title: 'Replays',          tag: 'Revisit past games',               accent: 'gold' },
   { id: 'account',  icon: '\uE0A1',  label: 'Account',          title: 'Account',          tag: '',                                   accent: 'gold' },
 ];
 
@@ -576,12 +576,7 @@ function _panelSkirmish(body) {
     if (!isFactionAvailable(_skFaction)) return;   // never launch a demo-blocked champion
     _data?.startSkirmish?.(_skFaction, { ..._skOpts });
   }));
-  const summ = document.createElement('span');
-  summ.className = 'lg-skirmish-summary';
-  summ.id = 'lg-sk-summary';
-  startRow.appendChild(summ);
   body.appendChild(startRow);
-  _updateSkirmishSummary();
 }
 
 function _champCard(f) {
@@ -620,16 +615,8 @@ function _champCard(f) {
 }
 
 function _optSelect(key, label, options, parse) {
-  const dd = _dropdown(options, String(_skOpts[key]), (v) => { _skOpts[key] = parse(v); _updateSkirmishSummary(); });
+  const dd = _dropdown(options, String(_skOpts[key]), (v) => { _skOpts[key] = parse(v); });
   return _optWrap(label, dd);
-}
-
-function _updateSkirmishSummary() {
-  const el = document.getElementById('lg-sk-summary');
-  if (!el) return;
-  const f = (_data?.skirmishFactions?.() ?? []).find((x) => x.id === _skFaction);
-  const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
-  el.textContent = [f?.name, cap(_skOpts.mapSize), `${_skOpts.nodeCount} nodes`, cap(_skOpts.aiDifficulty)].filter(Boolean).join(' · ');
 }
 
 /** Play With Others — landing (rhythms + Battle + games), Find-a-Game, and the

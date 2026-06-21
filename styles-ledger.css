@@ -85,9 +85,10 @@
   flex:1; min-width:0; padding:36px 42px; display:flex; flex-direction:column; overflow:auto;
   background:linear-gradient(90deg, rgba(8,9,13,.55), rgba(8,9,13,.2));
 }
-.ledger-pane-head { display:flex; align-items:baseline; gap:14px; }
+.ledger-pane-head { display:flex; flex-direction:column; align-items:flex-start; gap:6px; }
 .ledger-pane-title { font-family:var(--lg-display); font-weight:600; font-size:40px; color:var(--lg-ink); line-height:1; }
-.ledger-pane-tag { font-size:13px; color:#9b8a6a; font-style:italic; }
+/* Help text under the page title — a readable one-line description, not a flavour tag. */
+.ledger-pane-tag { font-size:15px; color:#9b8a6a; line-height:1.4; max-width:640px; }
 .ledger-rule { height:1px; background:linear-gradient(90deg, rgba(212,167,44,.5), transparent); margin:14px 0 22px; }
 .ledger-rule.is-purple { background:linear-gradient(90deg, rgba(155,89,182,.5), transparent); }
 .ledger-placeholder { color:var(--lg-dim); font-size:15px; font-style:italic; }
@@ -290,7 +291,6 @@
 .lg-fac-dd { min-width:118px; }
 .lg-fac-dd .lg-dd-cap { font-size:13px; padding:4px 8px; }
 .lg-skirmish-start { display:flex; align-items:center; gap:14px; margin-top:18px; }
-.lg-skirmish-summary { font-size:13px; color:var(--lg-faint); font-style:italic; }
 
 /* ── Demo "Coming Soon" gating (modes + champions) ────────────────────────────
    Disabled-but-visible content: dimmed, not interactive, badged. */
