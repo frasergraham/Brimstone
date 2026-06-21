@@ -106,6 +106,109 @@ export function describePlanAction(action, entities, index = 0) {
   }
 }
 
+/**
+ * Compact plan-step label split into a verb line and an optional target line.
+ *
+ * The plan panel groups steps under a per-unit header, so the actor name and
+ * hex coordinates are redundant — a step reads as just its action (MOVE, GUARD,
+ * EXPLORE…). Only actions aimed at something carry a `target` (attacks, sends),
+ * which the panel renders on a second line so a long target name wraps instead
+ * of truncating. `entity` (the actor) drives melee-vs-ranged attack wording.
+ *
+ * Distinct from {@link describePlanAction}, which keeps the verbose, actor-
+ * prefixed phrasing used by the AI-debug overlay.
+ *
+ * @param {{ type: string, entityId: string, [key: string]: * }} action
+ * @param {Array<{ id: string, displayName?: string }>} entities
+ * @param {number} index  Zero-based step index (fallback label only).
+ * @returns {{ verb: string, target: string|null }}
+ */
+export function describePlanActionParts(action, entities, index = 0) {
+  const entity = entities.find(e => e.id === action.entityId);
+  // Mirror planner.js: range is weapon-derived (getRange) with a plain `range`
+  // fallback for snapshot entities that don't carry the method.
+  const rangeOf = e => (typeof e?.getRange === 'function' ? e.getRange() : (e?.range ?? 1));
+  switch (action.type) {
+    case PlanActionType.MOVE:         return { verb: 'Move',       target: null };
+    case PlanActionType.EXPLORE:      return { verb: 'Explore',    target: null };
+    case PlanActionType.FORTIFY:      return { verb: 'Fortify',    target: null };
+    case PlanActionType.GUARD:        return { verb: 'Guard',      target: null };
+    case PlanActionType.SUMMON:       return { verb: 'Summon',     target: null };
+    case PlanActionType.HEAL:         return { verb: 'Heal',       target: null };
+    case PlanActionType.SOUND_HORN:   return { verb: 'Sound Horn', target: null };
+    case PlanActionType.USE_ABILITY:  return { verb: 'Use Ability', target: null };
+    case PlanActionType.USE_ITEM:     return { verb: `Use ${action.item}`,     target: null };
+    case PlanActionType.EQUIP_WEAPON: return { verb: `Equip ${action.weapon}`, target: null };
+    case PlanActionType.BATTLE_UNIT: {
+      const target = entities.find(e => e.id === action.targetId);
+      return { verb: rangeOf(entity) > 1 ? 'Ranged Attack' : 'Attack', target: target?.displayName ?? '?' };
+    }
+    case PlanActionType.BATTLE_HEX:
+      return {
+        verb: rangeOf(entity) > 1 ? 'Ranged Attack' : 'Attack',
+        target: `(${action.targetCol},${action.targetRow})`,
+      };
+    case PlanActionType.SENT_TO: {
+      const destLeader = action.destOwnerId
+        ? entities.find(e => e.ownerId === action.destOwnerId && isLeaderType(e.type))
+        : null;
+      return { verb: 'Send', target: destLeader?.displayName ?? 'another leader' };
+    }
+    default:
+      return { verb: `Step ${index + 1}`, target: null };
+  }
+}
+
+// ── Action budget pips + breakdown ────────────────────────────────────────────
+//
+// The top-bar ACTION BUDGET shows one diamond per earned action, tinted by where
+// it came from (shades of yellow — see .act-pip--* in styles.css). The same
+// shades colour the breakdown tooltip. `parts` is the faction's budget breakdown
+// ({ key:'base'|'phase'|'unit'|'node', value }); `used` is how many budget
+// actions are queued; `foodOverflow` is actions taken beyond the budget (each
+// powered by a spare ration).
+
+/**
+ * Flatten budget `parts` into colour-coded pips. The first `total - used` pips
+ * render filled (◆, available); the rest render hollow (◇, spent). Food-powered
+ * actions taken beyond the budget append as spent food-shade pips.
+ */
+export function buildActionPipsHtml(parts, used = 0) {
+  const keys = [];
+  for (const p of (parts || [])) for (let i = 0; i < p.value; i++) keys.push(p.key);
+  const total = keys.length;
+  const remaining = Math.max(0, total - Math.min(used, total));
+  let html = keys.map((key, i) => {
+    const spent = i >= remaining;
+    return `<span class="act-pip act-pip--${key}${spent ? ' act-pip--spent' : ''}">${spent ? '◇' : '◆'}</span>`;
+  }).join('');
+  for (let i = 0; i < Math.max(0, used - total); i++) {
+    html += `<span class="act-pip act-pip--food act-pip--spent">◇</span>`;
+  }
+  return html;
+}
+
+/**
+ * Breakdown tooltip — each source row tinted with its pip shade. `rows` is
+ * [{ key, label, value }] (only positive rows); `foodLabel` (optional) adds a
+ * trailing food row.
+ */
+export function buildActionBudgetTooltipHtml(rows, total, foodLabel = '') {
+  let html = '<div class="action-breakdown-table">';
+  for (const r of (rows || [])) {
+    html += `<div class="abkd-row act-src--${r.key}"><span class="abkd-label">${r.label}</span>`
+          + `<span class="abkd-val">+${r.value}</span></div>`;
+  }
+  html += `<hr class="abkd-divider">`;
+  html += `<div class="abkd-row abkd-total"><span class="abkd-label">Total</span><span class="abkd-val">${total}</span></div>`;
+  if (foodLabel) {
+    html += `<div class="abkd-row act-src--food abkd-food"><span class="abkd-label">${foodLabel}</span>`
+          + `<span class="abkd-val">extra</span></div>`;
+  }
+  html += '</div>';
+  return html;
+}
+
 // ── Turn-card auto-scroll (replay timeline) ───────────────────────────────────
 //
 // A long turn card (a big game's busy resolution step) overflows the screen.
@@ -344,7 +447,7 @@ const UNIT_GLYPH = {
  * @param {object} [items] key→count pack map (projected); falls back to entity.items.
  * @returns {string} HTML for the `.plan-unit-detail` block.
  */
-export function buildUnitDetailHtml(entity, items) {
+export function buildUnitDetailHtml(entity, items, expanded = false) {
   if (!entity) return '';
   const pack = items ?? entity.items ?? {};
 
@@ -401,17 +504,23 @@ export function buildUnitDetailHtml(entity, items) {
     ? `<div class="plan-unit-vline">${abilityHtml}${effectsHtml}</div>`
     : '';
 
+  // Compact line mirrors the Unit Stats Bar: HP bar + weapon + the (i) toggle.
+  // The (i) reveals the rest (ATK/DEF/RNG/AGI + abilities + pack), kept ABOVE
+  // the action list so a unit's vitals always sit at the top of its block.
+  const infoBtn = `<button class="usb-info-btn plan-stats-btn ${expanded ? 'usb-info-btn-active' : ''}" `
+    + `title="${expanded ? 'Hide stats & pack' : 'Show stats & pack'}">i</button>`;
+  const expandedHtml = expanded
+    ? `<div class="plan-unit-vline">${statsHtml}</div>`
+      + extraLine
+      + `<div class="plan-unit-pack">`
+      +   (packRows || `<div class="inv-empty">No spare items</div>`)
+      + `</div>`
+    : '';
+
   return `<div class="plan-unit-detail">`
-    + `<div class="plan-unit-vitals">`
-    +   `<div class="plan-unit-vline">${hpHtml}</div>`
-    +   `<div class="plan-unit-vline"><span class="usb-weapon">${weaponLabel}</span></div>`
-    +   `<div class="plan-unit-vline">${statsHtml}</div>`
-    +   extraLine
-    + `</div>`
-    + `<div class="plan-unit-pack">`
-    +   `<div class="plan-unit-pack-title">Pack (spare)</div>`
-    +   (packRows || `<div class="inv-empty">No spare items</div>`)
-    + `</div>`
+    + `<div class="plan-unit-vitalrow">${hpHtml}`
+    +   `<span class="usb-weapon">${weaponLabel}</span>${infoBtn}</div>`
+    + expandedHtml
     + `</div>`;
 }
 
@@ -438,7 +547,7 @@ export function buildUnitDetailHtml(entity, items) {
  */
 export function buildUnitPlanBlocksHtml(
   unitPlans, budget, foodAvailable, submitted, entities, initialInv,
-  controllableUnits, selectedEntityId, portraitMap,
+  controllableUnits, selectedEntityId, portraitMap, statsExpanded = false,
 ) {
   // Pre-compute budget state and cost labels by walking actions in interleaved
   // order (matching resolution execution order).  Store results keyed by
@@ -533,6 +642,15 @@ export function buildUnitPlanBlocksHtml(
     html += `<span class="plan-unit-name">${name}</span>`;
     html += `<span class="plan-unit-count">${count} action${count !== 1 ? 's' : ''}</span>`;
     html += `</div>`;
+
+    // Read-only vitals for the selected unit, ABOVE its action list: HP + weapon
+    // + an (i) toggle (mirrors the Unit Stats Bar). Uses projected per-unit items
+    // so queued equips/uses are reflected.
+    if (isSelected && entity) {
+      const items = projEntityItems[entityId] ?? entity.items ?? {};
+      html += buildUnitDetailHtml(entity, items, statsExpanded);
+    }
+
     html += `<div class="plan-unit-steps">`;
 
     if (actions.length === 0) {
@@ -542,7 +660,13 @@ export function buildUnitPlanBlocksHtml(
         const key  = `${entityId}:${idx}`;
         const bst  = budgetState.get(key) ?? 'ok';
         const cls  = bst === 'food' ? ' food-powered' : bst === 'over' ? ' over-budget' : '';
-        const desc = describePlanAction(a, entities, idx);
+        // Compact label: just the verb (the unit name lives in the block header
+        // above, hex coords are noise). Targeted actions (attack/send) carry the
+        // target onto a second line so a long name wraps instead of truncating.
+        const { verb, target } = describePlanActionParts(a, entities, idx);
+        const title   = target ? `${verb} \u2192 ${target}` : verb;
+        const verbHtml   = `<span class="plan-step-verb">${verb}</span>`;
+        const targetHtml = target ? `<span class="plan-step-target">\u2192 ${target}</span>` : '';
         const foodTag = bst === 'food' ? ` <span class="plan-food-tag">\uE012</span>` : '';
         const rmBtn   = submitted
           ? ''
@@ -552,20 +676,13 @@ export function buildUnitPlanBlocksHtml(
 
         html += `<div class="plan-step${cls}">
             <span class="plan-step-num">${idx + 1}</span>
-            <span class="plan-step-desc" title="${desc}">${desc}${foodTag}${costTag}</span>
+            <span class="plan-step-desc" title="${title}">${verbHtml}${foodTag}${costTag}${targetHtml}</span>
             ${rmBtn}
           </div>`;
       });
     }
 
     html += `</div>`; // close .plan-unit-steps
-
-    // Read-only detail for the selected unit (HP/weapon/stats + pack). Uses the
-    // projected per-unit items so queued equips/uses are reflected.
-    if (isSelected && entity) {
-      const items = projEntityItems[entityId] ?? entity.items ?? {};
-      html += buildUnitDetailHtml(entity, items);
-    }
 
     html += `</div>`; // close .plan-unit-block
   }

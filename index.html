@@ -19,7 +19,7 @@
 
   <!-- Update notification — Electron desktop app only -->
   <div id="electron-update-bar" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;
-    background:var(--accent,#c9a227);color:#000;text-align:center;padding:6px 12px;font-size:0.85rem;cursor:pointer">
+    background:var(--accent,#c9a227);color:#000;text-align:center;padding:6px 12px;font-size:var(--fs-xs);cursor:pointer">
     <span id="electron-update-msg">A new version is available.</span>
     <b style="margin-left:8px">Click to restart and update.</b>
   </div>
@@ -240,13 +240,8 @@
       <div id="plan-panel" class="plan-panel" style="display:none">
         <!-- Collapse tab — always visible so the panel can be reopened -->
         <button id="plan-tab" class="plan-tab" title="Toggle plan panel">
-          <span class="plan-tab-label">Action Plan</span><span id="plan-tab-toggle" class="plan-tab-toggle">+</span><span id="plan-tab-count" class="plan-tab-count"></span>
+          <span class="plan-tab-label">Action Plan</span><span id="plan-tab-toggle" class="plan-tab-toggle">+</span>
         </button>
-        <div class="plan-panel-header">
-          <span class="plan-panel-title">&#xE078; Your Plan</span>
-          <span id="plan-budget-badge" class="plan-budget-badge"></span>
-          <button id="plan-toggle-btn" class="plan-toggle-btn" title="Hide panel">◀</button>
-        </div>
         <div id="plan-steps" class="plan-steps"></div>
         <div id="plan-food-row" class="plan-food-row"></div>
         <div class="plan-panel-footer">
@@ -354,8 +349,6 @@
   <!-- ── Battle toast container ───────────────────────────────────── -->
   <div id="battle-toast-container" class="battle-toast-container"></div>
 
-  <!-- ── Budget breakdown popup (triggered by tapping action pips) ── -->
-  <div id="budget-breakdown"></div>
 
   <!-- ── Story modal (campaign narrative triggers) ────────────────── -->
   <div id="story-modal">

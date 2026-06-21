@@ -64,11 +64,34 @@ export class Faction {
    * @returns {number}
    */
   computeBudget(phase, unitCount, nodeBonus) {
+    return this.computeBudgetBreakdown(phase, unitCount, nodeBonus).total;
+  }
+
+  /**
+   * Itemized action-budget breakdown — the same math as {@link computeBudget},
+   * but returning the contributing parts so the UI can show and colour where
+   * each action came from. `parts` always sum to `total` (the capped budget):
+   * when the action cap trims the budget, later parts (node, then unit, …) are
+   * reduced first so the visible parts never add up to more than the total.
+   * @returns {{ parts: Array<{key:'base'|'phase'|'unit'|'node', value:number, count?:number}>, total:number }}
+   */
+  computeBudgetBreakdown(phase, unitCount, nodeBonus) {
     const timeBonus = this.isFavorablePhase(phase) ? 1 : 0;
-    return Math.min(
-      this.baseBudget + timeBonus + Math.min(unitCount, this.unitBonusCap) + nodeBonus,
-      this.actionCap
-    );
+    const parts = [
+      { key: 'base',  value: this.baseBudget },
+      { key: 'phase', value: timeBonus },
+      { key: 'unit',  value: Math.min(unitCount, this.unitBonusCap), count: unitCount },
+      { key: 'node',  value: nodeBonus },
+    ];
+    // Apply the action cap by trimming the last contributing parts first, so the
+    // parts always sum to the actual (capped) total.
+    let over = Math.max(0, parts.reduce((s, p) => s + p.value, 0) - this.actionCap);
+    for (let i = parts.length - 1; i >= 0 && over > 0; i--) {
+      const cut = Math.min(parts[i].value, over);
+      parts[i].value -= cut;
+      over -= cut;
+    }
+    return { parts, total: parts.reduce((s, p) => s + p.value, 0) };
   }
 
   // ── Available Actions ──

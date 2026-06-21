@@ -8,7 +8,7 @@ import { DAMAGE_SCALE } from './balance.js';
 import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
 import { makeOverlay } from './overlays.js';
-import { concreteFactionOf } from './factions.js';
+import { concreteFactionOf, getFaction } from './factions.js';
 import {
   ActionType, getValidActions, getVisiblePositions, computeCombatOdds,
 } from './actions.js';
@@ -21,7 +21,7 @@ import { compileTurnBattleSummary, compileTurnXpSummary } from './battle-utils.j
 import { buildWrapupCombatsHtml, wrapupIconHtml } from './wrapup-summary.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
-import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildMissionLogHtml, buildMissionLogDescriptionHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos, TurnCardAutoScroll, shouldAutoScrollToActive, computeFadeFlags } from './ui-render.js';
+import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildMissionLogHtml, buildMissionLogDescriptionHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos, TurnCardAutoScroll, shouldAutoScrollToActive, computeFadeFlags, buildActionPipsHtml, buildActionBudgetTooltipHtml } from './ui-render.js';
 import {
   hideActionPopup, getEntityScreenPos, computeArcPositions,
   positionArcPopup, startArcTracking, positionPopup,
@@ -121,6 +121,8 @@ export class UIController {
     this._chronicleOpen    = false;
     // Unit stats bar: collapsed by default; clicking the (i) glyph expands to reveal ATK/DEF + abilities
     this._unitStatsExpanded = false;
+    // Plan panel: same (i) glyph on the selected unit toggles its stats + pack detail (hidden by default)
+    this._planStatsExpanded = false;
     // When true, disable all planning/action UI — used for spectator mode
     this.spectator         = false;
     // When true, suppress phase modals and auto-select — used for tutorial mode
@@ -629,7 +631,6 @@ export class UIController {
     });
     _tap(this._el('plan-autoguard-btn'), () => this._autoFillGuard());
     _tap(this._el('plan-aiassist-btn'),  () => this._fillAIAssistPlan());
-    _tap(this._el('plan-toggle-btn'), () => this._togglePlanPanel());
     _tap(this._el('plan-tab'),        () => this._togglePlanPanel());
 
     // Delegated click handler for nudge buttons inside the player list
@@ -1495,16 +1496,8 @@ export class UIController {
   /** Render the plan panel steps list (per-unit blocks). */
   _renderPlanPanel() {
     const stepsEl  = this._el('plan-steps');
-    const budgeEl  = this._el('plan-budget-badge');
     const statusEl = this._el('plan-status');
     if (!stepsEl) return;
-
-    // Count budget-consuming actions across all unit queues
-    const flatPlan = interleavePlan(this._unitPlans);
-    const budgetCost = flatPlan.filter(a => actionCosts(a.type)).length;
-    const remaining = this._planBudget - budgetCost;
-
-    if (budgeEl) budgeEl.textContent = `${Math.max(0, remaining)} left`;
 
     // Food is auto-applied to over-budget actions until exhausted.
     const foodAvailable = getItemCountOf(this.state.inventory?.hero, ResourceType.FOOD);
@@ -1527,6 +1520,7 @@ export class UIController {
       this._unitPlans, this._planBudget, foodAvailable,
       this._planSubmitted, this.state.entities ?? [], initialInv,
       controllable, this._selectedEntity?.id ?? null, portraitMap,
+      this._planStatsExpanded,
     );
     // The rebuilt HTML drops any `.plan-unit-selected` class — re-apply it from
     // the single subscriber so selection highlight survives the rebuild.
@@ -1552,11 +1546,20 @@ export class UIController {
       });
     });
 
+    // (i) glyph on the selected unit → toggle its stats + pack detail.
+    stepsEl.querySelectorAll('.plan-stats-btn').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        this._planStatsExpanded = !this._planStatsExpanded;
+        this._renderPlanPanel();
+      });
+    });
+
     // Click on a unit block → select that unit on the map.
     stepsEl.querySelectorAll('.plan-unit-block').forEach(block => {
       block.addEventListener('click', e => {
-        // Don't steal clicks meant for the per-step remove ✕.
-        if (e.target.closest('.plan-step-remove')) return;
+        // Don't steal clicks meant for the per-step remove ✕ or the (i) toggle.
+        if (e.target.closest('.plan-step-remove') || e.target.closest('.plan-stats-btn')) return;
         const id = block.dataset.entityId;
         const entity = this.state.entities.find(x => x.id === id && x.alive);
         if (!entity) return;
@@ -1573,27 +1576,10 @@ export class UIController {
 
     if (statusEl && !this._planSubmitted) statusEl.textContent = '';
 
-    // Keep the collapse-tab count badge in sync — show count and color by budget state
-    const tabCount = this._el('plan-tab-count');
-    if (tabCount) {
-      tabCount.textContent = budgetCost;
-      const foodAvail = getItemCountOf(this.state?.inventory?.hero, ResourceType.FOOD);
-      if (budgetCost > this._planBudget + foodAvail) {
-        tabCount.className = 'plan-tab-count plan-tab-over';
-      } else if (budgetCost > this._planBudget) {
-        tabCount.className = 'plan-tab-count plan-tab-food';
-      } else {
-        tabCount.className = 'plan-tab-count plan-tab-ok';
-      }
-    }
-
-    // Update collapse-button arrow direction
+    // Update the side-tab +/- affordance to match collapsed state. (The action
+    // count + collapse arrow that used to live in the panel header were removed —
+    // the action budget now lives only in the top-bar ACTION BUDGET pips.)
     const panel = this._el('plan-panel');
-    const toggleBtn = this._el('plan-toggle-btn');
-    if (toggleBtn && panel) {
-      toggleBtn.textContent = panel.classList.contains('collapsed') ? '▶' : '◀';
-    }
-    // Update the side-tab +/- affordance to match collapsed state
     const tabToggle = this._el('plan-tab-toggle');
     if (tabToggle && panel) {
       tabToggle.textContent = panel.classList.contains('collapsed') ? '+' : '\u2212';
@@ -1637,8 +1623,6 @@ export class UIController {
     if (!panel) return;
     panel.classList.toggle('collapsed');
     const isCollapsed = panel.classList.contains('collapsed');
-    const toggleBtn = this._el('plan-toggle-btn');
-    if (toggleBtn) toggleBtn.textContent = isCollapsed ? '▶' : '◀';
     const tabToggle = this._el('plan-tab-toggle');
     if (tabToggle) tabToggle.textContent = isCollapsed ? '+' : '\u2212';
     // On mobile, plan and chronicle are mutually exclusive \u2014 close chronicle when opening plan.
@@ -2631,7 +2615,7 @@ export class UIController {
 
       const imgHtml = src
         ? `<img class="arc-portrait-img" src="${src}">`
-        : `<div class="arc-portrait-img" style="display:flex;align-items:center;justify-content:center;font-size:1.2rem;background:rgba(20,16,32,0.8);">${u.displayName.charAt(0)}</div>`;
+        : `<div class="arc-portrait-img" style="display:flex;align-items:center;justify-content:center;font-size:var(--fs-md);background:rgba(20,16,32,0.8);">${u.displayName.charAt(0)}</div>`;
 
       const atkCount = attacksPerTarget.get(u.id) ?? 0;
       const badgeHtml = atkCount > 0
@@ -2848,7 +2832,7 @@ export class UIController {
       const tileSrc = this.renderer.getTileDataURL(tile, displayCol, displayRow, 56);
       const tileImgHtml = tileSrc
         ? `<img class="usb-terrain-hex" src="${tileSrc}" alt="">`
-        : `<span class="usb-icon" style="background:#3a4a3a;font-size:1.1rem">${icon}</span>`;
+        : `<span class="usb-icon" style="background:#3a4a3a;font-size:var(--fs-md)">${icon}</span>`;
       bar.style.display = 'flex';
       bar.classList.remove('usb-expanded');
       bar.innerHTML = `
@@ -2858,7 +2842,7 @@ export class UIController {
             <span class="usb-tile-name">${label}</span>
             <span class="usb-tile-details">${terrainBadge}</span>
           </span>
-          <button class="usb-deselect-btn" title="Deselect">${ICON.close}</button>
+          <button class="usb-deselect-btn" title="Deselect">×</button>
         </div>
       `;
       bar.querySelector('.usb-deselect-btn').addEventListener('click', () => {
@@ -2988,7 +2972,7 @@ export class UIController {
           ${xpRowHtml}
           ${expandedBlockHtml}
         </span>
-        <button class="usb-deselect-btn" title="Deselect unit">${ICON.close}</button>
+        <button class="usb-deselect-btn" title="Deselect unit">×</button>
       </div>
       ${terrainBoxHtml}
     `;
@@ -3042,23 +3026,27 @@ export class UIController {
     if (this._planMode) {
       const faction = this._planFaction;
       const glyph   = faction === 'hero' ? '\uE000' : '\uE001';
-      const budget  = this._planBudget;
-      const used    = interleavePlan(this._unitPlans).filter(a => actionCosts(a.type)).length;
-      const capped  = Math.min(used, budget); // don't render more diamonds than budget
-      const diamonds = '◆'.repeat(Math.max(0, budget - capped)) + '◇'.repeat(capped);
       if (this._planSubmitted) {
         el.innerHTML = `
           <span class="turn-faction player-${faction}">${glyph}</span>
           <span class="turn-line">Waiting for opponent…</span>
         `;
       } else {
+        const used = interleavePlan(this._unitPlans).filter(a => actionCosts(a.type)).length;
+        const { parts, rows, total, foodLabel } = this._computeActionBudget();
+        const pips = buildActionPipsHtml(parts, used);
+        const tip  = buildActionBudgetTooltipHtml(rows, total, foodLabel);
+        // Action budget anchored right (above the plan panel): label + colour-coded
+        // pips; the breakdown is a hover tooltip (tap to toggle on touch).
         el.innerHTML = `
           <span class="turn-faction player-${faction}">${glyph}</span>
-          <span class="actions-label">Actions</span>
-          <div class="actions-remaining" title="Tap for breakdown">${diamonds}</div>
+          <div class="action-budget">
+            <span class="actions-label">Action Budget</span>
+            <div class="actions-remaining" tabindex="0" aria-label="Action budget breakdown">${pips}<div id="budget-breakdown" class="budget-breakdown">${tip}</div></div>
+          </div>
         `;
         const pipsEl = el.querySelector('.actions-remaining');
-        if (pipsEl) pipsEl.addEventListener('click', () => this._showBudgetBreakdown());
+        if (pipsEl) pipsEl.addEventListener('click', (e) => { e.stopPropagation(); this._toggleBudgetTip(pipsEl); });
       }
       return;
     }
@@ -3842,88 +3830,63 @@ export class UIController {
     ], () => {});
   }
 
-  // ── Budget breakdown popup ───────────────────────────────────────────────
+  // ── Action budget ────────────────────────────────────────────────────────
 
-  /** Show a small popup with the action budget breakdown (triggered by tapping action pips). */
-  _dismissBudgetBreakdown() {
-    const el = this._el('budget-breakdown');
-    if (el) el.classList.remove('visible');
+  /**
+   * Itemised action budget for the current planning faction: the source `parts`
+   * (for the colour-coded pips), human-readable `rows` (for the tooltip), the
+   * capped `total`, and the spare-`food` count. Uses the SAME faction math the
+   * game uses for the budget (Faction.computeBudgetBreakdown), so the pips/total
+   * always match `_planBudget`.
+   */
+  _computeActionBudget() {
+    const faction    = this._planFaction;
+    const factionObj = getFaction(faction);
+    const phase      = this.state.phase;
+    const phaseIcon  = PHASE_ICON[phase] ?? '';
+    const phaseLabel = phase ? phase.charAt(0).toUpperCase() + phase.slice(1) : '';
+    const entities   = this.state.entities;
+    const stash      = faction === 'hero' ? this.state.inventory?.hero : this.state.inventory?.witch;
+    const food       = getItemCountOf(stash, 'food');
+
+    const unitCount = entities.filter(
+      e => e.alive && e.owner === faction && e.type !== factionObj.leaderType
+    ).length;
+    const nodeBonus = countHeldNodes(faction, this.state.witchObjectives ?? [], entities);
+    const { parts, total } = factionObj.computeBudgetBreakdown(phase, unitCount, nodeBonus);
+
+    const unitIcon = faction === 'hero' ? ICON.survivor : ICON.minion;
+    const unitNoun = faction === 'hero' ? 'Survivor'    : 'Minion';
+    const labelFor = (p) => {
+      switch (p.key) {
+        case 'base':  return 'Base';
+        case 'phase': return `${phaseIcon} ${phaseLabel} bonus`;
+        case 'unit':  return `${unitIcon} ${unitNoun}${p.value !== 1 ? 's' : ''} (${p.count})`;
+        case 'node':  return `◆ Power Node${p.value !== 1 ? 's' : ''} (${p.value})`;
+        default:      return p.key;
+      }
+    };
+    const rows = parts.filter(p => p.value > 0).map(p => ({ key: p.key, label: labelFor(p), value: p.value }));
+    const foodLabel = food > 0 ? `${ICON.food} Food ×${food}` : '';
+    return { parts, rows, total, food, foodLabel };
+  }
+
+  /** Toggle the budget breakdown tooltip open (tap on touch; desktop uses CSS hover). */
+  _toggleBudgetTip(pipsEl) {
+    const open = pipsEl.classList.toggle('tip-open');
     if (this._budgetDismiss) {
       document.removeEventListener('click', this._budgetDismiss, true);
       this._budgetDismiss = null;
     }
-  }
-
-  _showBudgetBreakdown() {
-    const el = this._el('budget-breakdown');
-    if (!el || !this._planMode) return;
-
-    // Toggle off
-    if (el.classList.contains('visible')) {
-      this._dismissBudgetBreakdown();
-      return;
+    if (open) {
+      this._budgetDismiss = (e) => {
+        if (pipsEl.contains(e.target)) return;   // a tap on the pips re-toggles via its own handler
+        pipsEl.classList.remove('tip-open');
+        document.removeEventListener('click', this._budgetDismiss, true);
+        this._budgetDismiss = null;
+      };
+      document.addEventListener('click', this._budgetDismiss, true);
     }
-
-    // Reparent into the actions-remaining div so absolute positioning anchors correctly
-    const pipsEl = document.querySelector('.actions-remaining');
-    if (pipsEl && el.parentElement !== pipsEl) pipsEl.appendChild(el);
-
-    const faction = this._planFaction;
-    const phase = this.state.phase;
-    const phaseIcon = PHASE_ICON[phase] ?? '';
-    const phaseLabel = phase ? phase.charAt(0).toUpperCase() + phase.slice(1) : '';
-    const actions = this._planBudget ?? 0;
-    const entities = this.state.entities;
-    const inventory = this.state.inventory;
-    const stash = faction === 'hero' ? inventory?.hero : inventory?.witch;
-    const foodCount = getItemCountOf(stash, 'food');
-
-    const rows = [];
-    if (faction === 'hero') {
-      const timeBonus     = (phase === 'day' || phase === 'dawn') ? 1 : 0;
-      const survivorCount = entities.filter(e => e.alive && e.owner === 'hero' && e.type !== 'hero').length;
-      const survivorBonus = Math.min(survivorCount, 5);
-      rows.push({ label: 'Base', value: 3 });
-      if (timeBonus)     rows.push({ label: `${phaseIcon} ${phaseLabel} bonus`, value: timeBonus });
-      if (survivorBonus) rows.push({ label: `${ICON.survivor} Survivor${survivorBonus !== 1 ? 's' : ''} (${survivorCount})`, value: survivorBonus });
-    } else {
-      const timeBonus = phase === 'night' ? 1 : 0;
-      const unitCount = entities.filter(e => e.alive && e.owner === 'witch' && e.type !== 'witch').length;
-      const unitBonus = Math.min(unitCount, 3);
-      rows.push({ label: 'Base', value: 3 });
-      if (timeBonus) rows.push({ label: `${phaseIcon} ${phaseLabel} bonus`, value: timeBonus });
-      if (unitBonus) rows.push({ label: `${ICON.minion} Minion${unitBonus !== 1 ? 's' : ''} (${unitCount})`, value: unitBonus });
-    }
-    const nodeBonus = countHeldNodes(faction, this.state.witchObjectives ?? [], entities);
-    if (nodeBonus) {
-      rows.push({ label: `◆ Power Node${nodeBonus !== 1 ? 's' : ''} (${nodeBonus})`, value: nodeBonus });
-    }
-
-    let html = '<div class="action-breakdown-table">';
-    for (const r of rows) {
-      html += `<div class="abkd-row"><span class="abkd-label">${r.label}</span><span class="abkd-val">+${r.value}</span></div>`;
-    }
-    html += `<hr class="abkd-divider">`;
-    html += `<div class="abkd-row abkd-total"><span class="abkd-label">Total</span><span class="abkd-val">${actions}</span></div>`;
-    if (foodCount > 0) {
-      html += `<div class="abkd-row abkd-food"><span class="abkd-label">${ICON.food} Food ×${foodCount}</span><span class="abkd-val">(extra actions)</span></div>`;
-    }
-    html += '</div>';
-    el.innerHTML = html;
-    el.classList.add('visible');
-
-    // Dismiss on click outside (but not on the pips themselves — that's handled by toggle above)
-    this._budgetDismiss = (e) => {
-      // Ignore clicks on the pips trigger — the toggle handles those
-      if (pipsEl?.contains(e.target)) return;
-      this._dismissBudgetBreakdown();
-    };
-    // Use setTimeout so the current click event finishes before the listener activates
-    setTimeout(() => {
-      if (el.classList.contains('visible')) {
-        document.addEventListener('click', this._budgetDismiss, true);
-      }
-    }, 0);
   }
 
   /**
@@ -4069,14 +4032,14 @@ export class UIController {
 
     const portraitHtml = src
       ? `<img src="${src}" style="width:72px;height:72px;border-radius:50%;border:2px solid ${color};display:block;">`
-      : `<div style="font-size:2.8rem;line-height:1;color:${color};width:72px;text-align:center;">${glyph}</div>`;
+      : `<div style="font-size:var(--fs-2xl);line-height:1;color:${color};width:72px;text-align:center;">${glyph}</div>`;
 
     const titleHtml = encounterUnit.title
-      ? `<div style="font-size:0.75rem;color:#9a8a7a;font-style:italic;margin-bottom:0.25rem;">${encounterUnit.title}</div>`
+      ? `<div style="font-size:var(--fs-xs);color:#9a8a7a;font-style:italic;margin-bottom:0.25rem;">${encounterUnit.title}</div>`
       : '';
 
     const abilityHtml = encounterUnit.abilityLabel
-      ? `<div style="font-size:0.72rem;color:#88eeff;margin-top:0.3rem;">\uE062 ${encounterUnit.abilityLabel}</div>`
+      ? `<div style="font-size:var(--fs-xs);color:#88eeff;margin-top:0.3rem;">\uE062 ${encounterUnit.abilityLabel}</div>`
       : '';
 
     const hpPct   = encounterUnit.maxHp > 0 ? (encounterUnit.hp / encounterUnit.maxHp) * 100 : 100;
@@ -4100,16 +4063,16 @@ export class UIController {
       <div style="display:flex;align-items:center;gap:0.85rem;margin-bottom:0.75rem;">
         <div style="flex-shrink:0;">${portraitHtml}</div>
         <div style="flex:1;min-width:0;">
-          <div style="font-size:1rem;font-weight:bold;color:${color};margin-bottom:0.12rem;">${glyph} ${encounterUnit.name}</div>
+          <div style="font-size:var(--fs-base);font-weight:bold;color:${color};margin-bottom:0.12rem;">${glyph} ${encounterUnit.name}</div>
           ${titleHtml}
-          <div style="font-size:0.72rem;color:#c8b89a;">HP ${encounterUnit.hp}/${encounterUnit.maxHp} · ATK ${attackOf(encounterUnit)} · DEF ${defenseOf(encounterUnit)}</div>
+          <div style="font-size:var(--fs-xs);color:#c8b89a;">HP ${encounterUnit.hp}/${encounterUnit.maxHp} · ATK ${attackOf(encounterUnit)} · DEF ${defenseOf(encounterUnit)}</div>
           <div style="background:#1e1e2a;border-radius:3px;height:5px;margin-top:0.3rem;overflow:hidden;">
             <div style="width:${hpPct}%;height:100%;background:${hpColor};border-radius:3px;"></div>
           </div>
           ${abilityHtml}
         </div>
       </div>
-      <div style="font-size:0.82rem;color:#b8a88a;text-align:center;margin-bottom:0.5rem;">${message}</div>
+      <div style="font-size:var(--fs-sm);color:#b8a88a;text-align:center;margin-bottom:0.5rem;">${message}</div>
       ${this.autoplay ? '' : '<div class="result-dismiss">— click anywhere to continue —</div>'}
     `;
 
@@ -4837,8 +4800,6 @@ export class UIController {
         planPanel.classList.add('collapsed');
         const planTabToggle = this._el('plan-tab-toggle');
         if (planTabToggle) planTabToggle.textContent = '+';
-        const planToggleBtn = this._el('plan-toggle-btn');
-        if (planToggleBtn) planToggleBtn.textContent = '▶';
         this._syncPlanInset();
         this._renderEndTurnBtn();
       }
@@ -6668,7 +6629,7 @@ function _combatantHTML(snap, role, portraitSrc = null) {
   return `
     ${portraitHtml}
     <div class="combatant-name" style="color:${color}">${snap.name}</div>
-    <div style="font-size:0.68rem;color:#7a7060;margin-bottom:0.3rem">${label}</div>
+    <div style="font-size:var(--fs-2xs);color:#7a7060;margin-bottom:0.3rem">${label}</div>
     <div class="combatant-stats">HP: ${snap.hp}/${snap.maxHp} · ATK: ${snap.attack} · DEF: ${snap.defense}</div>
     <div class="combatant-hp-bar">
       <div class="combatant-hp-fill" style="width:${hpPct}%;background:${hpColor}"></div>

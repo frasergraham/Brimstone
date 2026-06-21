@@ -7405,7 +7405,7 @@ async function _showBattleScreen() {
           <td style="padding:0.3rem;text-align:right">${b.total_rounds}</td>
           <td style="padding:0.3rem;text-align:right">
             <a href="/replay?replayGame=${encodeURIComponent(b.game_id)}&source=mp" target="_blank"
-               class="setup-btn" style="padding:0.15rem 0.5rem;font-size:0.7rem">Replay</a>
+               class="setup-btn" style="padding:0.15rem 0.5rem;font-size:var(--fs-xs)">Replay</a>
           </td>
         </tr>`;
       }).join('');
@@ -7691,7 +7691,7 @@ function _renderLobby(lobby) {
   if (isNativeMobile && linkWrap) {
     const shareBtn = document.createElement('button');
     shareBtn.className = 'setup-btn lobby-share-btn';
-    shareBtn.style.cssText = 'font-size:0.8rem;margin-left:0.3rem';
+    shareBtn.style.cssText = 'font-size:var(--fs-sm);margin-left:0.3rem';
     shareBtn.textContent = '↗ Share';
     shareBtn.addEventListener('click', () => {
       shareInvite("Join my game of Caleb's Hollow!", inviteUrl);
@@ -7848,7 +7848,7 @@ function _renderLobby(lobby) {
     hintEl = document.createElement('p');
     (hintEl || _legacyEl).id = 'lobby-open-slots-hint';
     (hintEl || _legacyEl).className = 'setup-lore';
-    (hintEl || _legacyEl).style.cssText = 'font-size:0.8rem;margin-top:0.5rem;opacity:0.7';
+    (hintEl || _legacyEl).style.cssText = 'font-size:var(--fs-sm);margin-top:0.5rem;opacity:0.7';
     (grid || _legacyEl).parentNode.insertBefore(hintEl, (grid || _legacyEl).nextSibling?.nextSibling);
   }
 
@@ -7923,11 +7923,11 @@ function _showSlotInvitePopup(lobby, slotIndex, faction, anchorEl) {
   popup.innerHTML = `
     ${friendsSection}
     <input type="email" class="setup-input" placeholder="Email address" autocomplete="email"
-           style="font-size:0.8rem;margin:0">
+           style="font-size:var(--fs-sm);margin:0">
     <div style="display:flex;gap:0.3rem;margin-top:0.3rem">
-      <button class="setup-btn primary" style="font-size:0.75rem;flex:1">Send</button>
-      <button class="setup-btn" style="font-size:0.75rem;flex:1">Copy Link</button>
-      ${isNativeMobile ? '<button class="setup-btn" style="font-size:0.75rem;flex:1">Share</button>' : ''}
+      <button class="setup-btn primary" style="font-size:var(--fs-xs);flex:1">Send</button>
+      <button class="setup-btn" style="font-size:var(--fs-xs);flex:1">Copy Link</button>
+      ${isNativeMobile ? '<button class="setup-btn" style="font-size:var(--fs-xs);flex:1">Share</button>' : ''}
     </div>
   `;
   const buttons = popup.querySelectorAll('button');
@@ -9307,7 +9307,7 @@ function _renderSpectatorReadyList(players, submittedIds) {
     return `<div class="sp-ready-row">
       <span class="${dotCls}"></span>
       <span class="sp-ready-name ${fCls}" title="${safeName}">${safeName}</span>
-      <span style="font-size:0.72rem;color:${submitted ? 'var(--green)' : 'var(--text-dim)'}">${status}</span>
+      <span style="font-size:var(--fs-xs);color:${submitted ? 'var(--green)' : 'var(--text-dim)'}">${status}</span>
     </div>`;
   }).join('');
 }

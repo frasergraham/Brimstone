@@ -382,7 +382,7 @@ describe('buildNodeBadgeHtml', () => {
 describe('buildUnitDetailHtml', () => {
   test('renders HP, equipped weapon, and ATK/DEF/RNG from fallback fields', () => {
     const e = { hp: 14, maxHp: 14, attack: 4, defense: 2, range: 1, items: { sword: { count: 1, equipped: true } } };
-    const html = buildUnitDetailHtml(e, e.items);
+    const html = buildUnitDetailHtml(e, e.items, true);
     assert.ok(html.includes('14/14'), 'shows HP');
     assert.ok(html.includes('Sword'), 'shows equipped weapon label');
     assert.ok(html.includes('<span class="usb-stat-val">4</span>'), 'ATK 4');
@@ -395,7 +395,7 @@ describe('buildUnitDetailHtml', () => {
       hp: 10, maxHp: 10, items: {},
       getAttack: () => 9, getDefense: () => 5, getRange: () => 3,
     };
-    const html = buildUnitDetailHtml(e, e.items);
+    const html = buildUnitDetailHtml(e, e.items, true);
     assert.ok(html.includes('<span class="usb-stat-val">9</span>'), 'effective ATK 9');
     assert.ok(html.includes('<span class="usb-stat-val">5</span>'), 'effective DEF 5');
     assert.ok(html.includes('<span class="usb-stat-val">3</span>'), 'effective RNG 3');
@@ -404,7 +404,7 @@ describe('buildUnitDetailHtml', () => {
   test('lists carried pack items with counts (weapons and consumables)', () => {
     const e = { hp: 10, maxHp: 10, attack: 3, defense: 1, range: 3,
                 items: { bow: { count: 1, equipped: true }, dagger: { count: 1 }, herbs: { count: 2 } } };
-    const html = buildUnitDetailHtml(e, e.items);
+    const html = buildUnitDetailHtml(e, e.items, true);
     assert.ok(html.includes('Dagger'), 'weapon item labelled via WEAPON_LABEL');
     assert.ok(html.includes('Herbs'),  'consumable labelled via RESOURCE_LABEL');
     assert.ok(html.includes('×1'), 'dagger count');
@@ -415,7 +415,7 @@ describe('buildUnitDetailHtml', () => {
   test('falls back to entity.items when items arg omitted', () => {
     const e = { hp: 10, maxHp: 10, attack: 3, defense: 1, range: 1,
                 items: { sword: { count: 1 } } };
-    const html = buildUnitDetailHtml(e);
+    const html = buildUnitDetailHtml(e, undefined, true);
     assert.ok(html.includes('Sword'), 'reads entity.items');
     assert.ok(html.includes('×1'));
   });
@@ -424,14 +424,14 @@ describe('buildUnitDetailHtml', () => {
     // The equipped sword lives in the vitals weapon line, not the pack — the
     // pack lists only spare/unequipped items.
     const e = { hp: 10, maxHp: 10, attack: 3, defense: 1, range: 1, items: { sword: { count: 1, equipped: true } } };
-    const html = buildUnitDetailHtml(e, {});
+    const html = buildUnitDetailHtml(e, {}, true);
     assert.ok(html.includes('No spare items'), 'pack empty state');
     assert.ok(html.includes('Sword'), 'equipped weapon still shown in vitals');
   });
 
   test('shows Unarmed when no weapon is equipped', () => {
     const e = { hp: 10, maxHp: 10, attack: 1, defense: 1, range: 1, items: {} };
-    assert.ok(buildUnitDetailHtml(e, {}).includes('👊 Unarmed'));
+    assert.ok(buildUnitDetailHtml(e, {}).includes('Unarmed'));
   });
 
   test('a spare copy of the EQUIPPED weapon still shows in the pack with its count', () => {
@@ -441,7 +441,7 @@ describe('buildUnitDetailHtml', () => {
     // vanished and the panel read "No spare items".
     const e = { hp: 10, maxHp: 10, attack: 3, defense: 1, range: 1,
                 items: { sword: { count: 2, equipped: true } } };
-    const html = buildUnitDetailHtml(e, e.items);
+    const html = buildUnitDetailHtml(e, e.items, true);
     assert.ok(!html.includes('No spare items'), 'the spare sword must surface, not read empty');
     assert.ok(html.includes('Sword'), 'spare weapon labelled');
     assert.ok(html.includes('×1'), 'one spare copy beyond the equipped one');
@@ -575,7 +575,7 @@ describe('buildUnitDetailHtml — plan panel mirrors the Unit Stats Bar', () => 
       hp: 10, maxHp: 14, weapon: null, effects: [],
       getAttack: () => 3, getDefense: () => 2, getRange: () => 1, getAgility: () => 4,
     };
-    const html = buildUnitDetailHtml(entity, {});
+    const html = buildUnitDetailHtml(entity, {}, true);
     assert.match(html, /AGI/);
     assert.match(html, />4</);
   });
