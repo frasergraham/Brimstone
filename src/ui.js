@@ -2331,7 +2331,7 @@ export class UIController {
         case ActionType.SOUND_HORN:
           arcItems.push({ group: 'scout', label: 'Sound Horn', fullLabel: 'Sound Horn — call hidden survivors within 4 hexes, but reveal your position this round (1 action, 1 food)',
             desc: 'Calls hidden survivors within 4 hexes, but reveals your position this round.',
-            color: '#7eccd6', dis: !action.affordable || dis, cost: 1, resCost: '1\uE012', attrs: 'data-action="sound_horn"' });
+            color: '#7eccd6', dis: !action.affordable || dis, cost: 1, resCost: `1 ${RESOURCE_LABEL[ResourceType.FOOD]}`, attrs: 'data-action="sound_horn"' });
           break;
         case ActionType.GUARD: {
           const charges = action.currentCharges || 0;
@@ -2354,7 +2354,7 @@ export class UIController {
           const doublerGain = Math.min(MAX_FORTIFY_LEVEL, cur + 2) - cur;
           const woodGain    = Math.min(MAX_FORTIFY_LEVEL, cur + 1) - cur;
           const shortLbl = hasMetal ? 'Reinforce Hex' : 'Fortify Hex';
-          const fortRes = hasMetal ? '1\uE011' : '1\uE010';
+          const fortRes = hasMetal ? `1 ${RESOURCE_LABEL[ResourceType.METAL]}` : `1 ${RESOURCE_LABEL[ResourceType.WOOD]}`;
           const fullLbl = hasMetal
             ? `Reinforce +${metalGain} lvl (1 metal)`
             : hasDoubler
@@ -2382,7 +2382,7 @@ export class UIController {
           }
           arcItems.push({ group: 'items', label: 'Heal', fullLabel: action.atFullHp ? 'Already at full HP' : 'Herbs (heal 2D10 HP)',
             desc: action.atFullHp ? 'Already at full HP.' : 'Spend 1 herb to heal this unit 2D10 HP. (1 action)',
-            color: '#55cc55', dis: healDis, cost: 1, resCost: '1\uE015',
+            color: '#55cc55', dis: healDis, cost: 1, resCost: `1 ${RESOURCE_LABEL[ResourceType.HERBS]}`,
             attrs: 'data-action="heal"' });
           break;
         }
@@ -2460,8 +2460,8 @@ export class UIController {
           .map(o => o.summonType)
       );
       const ALL_SUMMONS = [
-        { st: EntityType.IRON_GOLEM, label: 'Summon Iron Golem',  full: 'Summon Iron Golem (2 metal)',  afford: projMetal >= 2, res: '2\uE011' },
-        { st: EntityType.WOOD_GOLEM, label: 'Summon Wood Golem', full: 'Summon Wood Golem (2 wood)',   afford: projWood >= 2, res: '2\uE010' },
+        { st: EntityType.IRON_GOLEM, label: 'Summon Iron Golem',  full: 'Summon Iron Golem (2 metal)',  afford: projMetal >= 2, res: `2 ${RESOURCE_LABEL[ResourceType.METAL]}` },
+        { st: EntityType.WOOD_GOLEM, label: 'Summon Wood Golem', full: 'Summon Wood Golem (2 wood)',   afford: projWood >= 2, res: `2 ${RESOURCE_LABEL[ResourceType.WOOD]}` },
         { st: EntityType.MINION,     label: 'Summon Minion',      full: 'Summon Minion (2 any resource)', afford: projTotal >= 2, res: '2 res' },
       ];
       for (const s of ALL_SUMMONS) {
@@ -4930,7 +4930,9 @@ export class UIController {
       const foundRes   = {}; // icon → count  (from explore loot)
       const usedRes   = {}; // icon → count  (from summon/fortify/use-item)
       const _addRes = (map, icon, n = 1) => { map[icon] = (map[icon] || 0) + n; };
-      const RES_ICON_MAP = { wood: '\uE010', metal: '\uE011', food: '\uE012', silver: '\uE013', scripture: '\uE014', herbs: '\uE015' };
+      // Reverse map (glyph -> resource id) for parsing legacy glyph-only loot floaters.
+      const RES_ID_BY_ICON = { [ICON.wood]: 'wood', [ICON.metal]: 'metal', [ICON.food]: 'food', [ICON.silver]: 'silver', [ICON.scripture]: 'scripture', [ICON.herb]: 'herbs' };
+      const RES_IDS = new Set(['wood', 'metal', 'food', 'silver', 'scripture', 'herbs']);
 
       for (const step of steps ?? []) {
         // Tag each event with its faction for fog filtering
@@ -5020,19 +5022,20 @@ export class UIController {
                   if (ITEMS[id] || id === 'horse') {
                     equipFinds.push({ label: lootDisplayLabel(id) });
                   } else {
-                    _addRes(foundRes, icon || id);
+                    _addRes(foundRes, id);
                   }
                 }
               } else {
                 for (const item of icons) {
                   if (!item.startsWith('+')) continue;
-                  const icon = item.slice(1);
-                  if (icon === '\uE048' || icon === '\uE0A2') {
-                    const keyword = icon === '\uE048' ? 'horse' : 'Found a ';
+                  const icon  = item.slice(1);
+                  const glyph = icon.charAt(0);   // floater may be "glyph" or "glyph Name"
+                  if (glyph === '\uE048' || glyph === '\uE0A2') {
+                    const keyword = glyph === '\uE048' ? 'horse' : 'Found a ';
                     const logLine = (ev.result.log ?? []).find(l => l.toLowerCase().includes(keyword));
-                    equipFinds.push({ icon, log: logLine || (icon === '\uE048' ? 'Found a horse!' : 'Found a weapon!') });
+                    equipFinds.push({ icon: glyph, log: logLine || (glyph === '\uE048' ? 'Found a horse!' : 'Found a weapon!') });
                   } else {
-                    _addRes(foundRes, icon);
+                    _addRes(foundRes, RES_ID_BY_ICON[glyph] || icon);
                   }
                 }
               }
@@ -5040,19 +5043,18 @@ export class UIController {
             // Resources spent: summon — use result.spent for exact breakdown
             if (ev.action?.type === 'summon') {
               for (const { type, amount } of ev.result?.spent ?? []) {
-                const icon = RES_ICON_MAP[type] ?? type;
-                _addRes(usedRes, icon, amount);
+                _addRes(usedRes, type, amount);
               }
             }
             // Resources spent: fortify
             if (ev.action?.type === 'fortify') {
               const log0 = ev.result?.log?.[0] ?? '';
-              _addRes(usedRes, log0.includes('metal') ? '\uE011' : '\uE010');
+              _addRes(usedRes, log0.includes('metal') ? 'metal' : 'wood');
             }
             // Resources spent: use-item (only trackable consumables)
             if (ev.action?.type === 'use_item') {
-              const icon = RES_ICON_MAP[ev.action?.item];
-              if (icon) _addRes(usedRes, icon);
+              const rid = ev.action?.item;
+              if (RES_IDS.has(rid)) _addRes(usedRes, rid);
             }
           }
         }
@@ -5175,13 +5177,13 @@ export class UIController {
         const foundEntries = Object.entries(foundRes);
         const usedEntries  = Object.entries(usedRes);
         if (foundEntries.length > 0) {
-          const foundStr = foundEntries.map(([icon, n]) => `${n}${icon}`).join(' ');
+          const foundStr = foundEntries.map(([id, n]) => `${RESOURCE_LABEL[id] || id} \u00d7${n}`).join('   ');
           html += `<div class="summary-resources found">${ICON.storehouse} Found: ${foundStr}</div>`;
         }
         if (usedEntries.length > 0) {
-          const usedStr = usedEntries.map(([icon, n]) =>
-            icon === 'res' ? `${n} res` : `${n}${icon}`
-          ).join(' ');
+          const usedStr = usedEntries.map(([id, n]) =>
+            id === 'res' ? `${n} res` : `${RESOURCE_LABEL[id] || id} \u00d7${n}`
+          ).join('   ');
           html += `<div class="summary-resources used">${ICON.sentTo} Spent: ${usedStr}</div>`;
         }
 
@@ -6352,9 +6354,9 @@ export class UIController {
     let lootHtml = '';
     if (loot.length) {
       const tally = new Map();
-      for (const it of loot) tally.set(it, (tally.get(it) ?? 0) + 1);
-      const pips = [...tally.entries()].map(([icon, n]) =>
-        `<span class="wrapup-loot-pip">${esc(icon)}${n > 1 ? `<span class="wrapup-loot-x">×${n}</span>` : ''}</span>`
+      for (const it of loot) { const k = String(it).replace(/^\+/, ''); tally.set(k, (tally.get(k) ?? 0) + 1); }
+      const pips = [...tally.entries()].map(([label, n]) =>
+        `<span class="wrapup-loot-pip">${esc(label)}${n > 1 ? `<span class="wrapup-loot-x">×${n}</span>` : ''}</span>`
       ).join('');
       lootHtml = `<div class="wrapup-loot"><div class="wrapup-found-label">Looted</div>`
         + `<div class="wrapup-loot-row">${pips}</div></div>`;

@@ -137,8 +137,8 @@ export function describePlanActionParts(action, entities, index = 0) {
     case PlanActionType.HEAL:         return { verb: 'Heal',       target: null };
     case PlanActionType.SOUND_HORN:   return { verb: 'Sound Horn', target: null };
     case PlanActionType.USE_ABILITY:  return { verb: 'Use Ability', target: null };
-    case PlanActionType.USE_ITEM:     return { verb: `Use ${action.item}`,     target: null };
-    case PlanActionType.EQUIP_WEAPON: return { verb: `Equip ${action.weapon}`, target: null };
+    case PlanActionType.USE_ITEM:     return { verb: `Use ${RESOURCE_LABEL[action.item] || action.item}`, target: null };
+    case PlanActionType.EQUIP_WEAPON: return { verb: `Equip ${WEAPON_LABEL[action.weapon] || action.weapon}`, target: null };
     case PlanActionType.BATTLE_UNIT: {
       const target = entities.find(e => e.id === action.targetId);
       return { verb: rangeOf(entity) > 1 ? 'Ranged Attack' : 'Attack', target: target?.displayName ?? '?' };
@@ -325,23 +325,23 @@ const RES_ICON = {
 function _stepCostLabel(action, projShared, projWitch, projEntityItems) {
   switch (action.type) {
     case PlanActionType.SUMMON: {
-      if (getItemCountOf(projWitch, ResourceType.METAL) >= 2) return `−2${RES_ICON[ResourceType.METAL]}`;
-      if (getItemCountOf(projWitch, ResourceType.WOOD)  >= 2) return `−2${RES_ICON[ResourceType.WOOD]}`;
+      if (getItemCountOf(projWitch, ResourceType.METAL) >= 2) return `−2 ${RESOURCE_LABEL[ResourceType.METAL]}`;
+      if (getItemCountOf(projWitch, ResourceType.WOOD)  >= 2) return `−2 ${RESOURCE_LABEL[ResourceType.WOOD]}`;
       return '−2 res';
     }
     case PlanActionType.FORTIFY:
-      if (getItemCountOf(projShared, ResourceType.METAL) > 0) return `−1${RES_ICON[ResourceType.METAL]}`;
-      if (getItemCountOf(projShared, ResourceType.WOOD)  > 0) return `−1${RES_ICON[ResourceType.WOOD]}`;
+      if (getItemCountOf(projShared, ResourceType.METAL) > 0) return `−1 ${RESOURCE_LABEL[ResourceType.METAL]}`;
+      if (getItemCountOf(projShared, ResourceType.WOOD)  > 0) return `−1 ${RESOURCE_LABEL[ResourceType.WOOD]}`;
       return '';
     case PlanActionType.HEAL:
-      return `−1${RES_ICON[ResourceType.HERBS]}`;
+      return `−1 ${RESOURCE_LABEL[ResourceType.HERBS]}`;
     case PlanActionType.USE_ITEM: {
       const item = action.item;
       if (!item || ITEMS[item]?.kind === 'weapon') return '';
-      return `−1${RES_ICON[item] || item}`;
+      return `−1 ${RESOURCE_LABEL[item] || item}`;
     }
     case PlanActionType.SOUND_HORN:
-      return `−1${RES_ICON[ResourceType.FOOD]}`;
+      return `−1 ${RESOURCE_LABEL[ResourceType.FOOD]}`;
     default: return '';
   }
 }

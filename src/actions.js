@@ -2,7 +2,7 @@
 import { getNeighbors, hexKey, hexDistance, hexRange, hexLine, offsetToAxial, axialToOffset } from './hex.js';
 import { ICON } from './icons.js';
 import {
-  ResourceType, WEAPON_LABEL, BUILDING_LOOT, TERRAIN_LOOT, rollLoot,
+  ResourceType, WEAPON_LABEL, RESOURCE_LABEL, BUILDING_LOOT, TERRAIN_LOOT, rollLoot,
   MAX_FORTIFY_LEVEL, getFortifyCombatBonus, isFortWall,
   FORT_IMPASSABLE_THRESHOLD, FORTIFY_HP_PER_LEVEL, MAX_FORTIFY_HP,
   damageFortHP,
@@ -890,7 +890,7 @@ function _applyLoot(state, actor, lootType, log, lootItems, lootItemIds) {
     if (faction.canEquipHorse()) {
       if (!actor.hasItem('horse')) actor.addItem('horse');
       log.push(`Found a horse! ${actor.displayName}'s movement range increases to 2.`);
-      gained('+\uE048', 'horse');
+      gained(`+${RESOURCE_LABEL.horse}`, 'horse');
     }
     return;
   }
@@ -900,7 +900,7 @@ function _applyLoot(state, actor, lootType, log, lootItems, lootItemIds) {
     // Sound Horn action. Idempotent: re-exploring the same tile won't stack it.
     if (!actor.hasItem('horn')) actor.addItem('horn');
     log.push(`Found a horn! ${actor.displayName} can sound it to call out across the land.`);
-    gained('+\uE049', 'horn');
+    gained(`+${RESOURCE_LABEL.horn}`, 'horn');
     return;
   }
 
@@ -911,11 +911,11 @@ function _applyLoot(state, actor, lootType, log, lootItems, lootItemIds) {
       if (!actor.getEquippedWeaponId()) {
         actor.equipWeapon(lootType);
         log.push(`Found a ${label}! ${actor.displayName} equips it immediately.`);
-        gained('+\uE0A2', lootType);
+        gained(`+${ICON.sword} ${label}`, lootType);
       } else {
         actor.addItem(lootType);
         log.push(`Found a ${label}! Added to ${actor.displayName}'s pack.`);
-        gained('+\uE0A2', lootType);
+        gained(`+${ICON.sword} ${label}`, lootType);
       }
     } else if (faction.canEquipWeapon()) {
       // The side can use weapons in general, but this faction rejects this
@@ -933,18 +933,15 @@ function _applyLoot(state, actor, lootType, log, lootItems, lootItemIds) {
     const inv = faction.getInventory(state);
     addItemInItems(inv, lootType, 1);
     log.push(`${actor.displayName} found Herbs! Added to supplies.`);
-    gained('+\uE015', lootType);
+    gained(`+${RESOURCE_LABEL[ResourceType.HERBS]}`, lootType);
     return;
   }
 
-  // All other resources go to faction inventory
-  const resLabel = lootType.charAt(0).toUpperCase() + lootType.slice(1);
-  const RES_ICON = { wood: ICON.wood, metal: ICON.metal, food: ICON.food, silver: ICON.silver, scripture: ICON.scripture };
-  const resIcon = RES_ICON[lootType] || `+${resLabel}`;
+  // All other resources go to faction inventory — floater shows glyph + name.
   const inv = faction.getInventory(state);
   addItemInItems(inv, lootType, 1);
   log.push(faction.getResourceFoundLog(actor, lootType));
-  gained(`+${resIcon}`, lootType);
+  gained(`+${RESOURCE_LABEL[lootType] || lootType}`, lootType);
 }
 
 // Splash damage: when an attack triggers splash, every other unit on the

@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { describePlanActionParts } from '../src/ui-render.js';
 import { PlanActionType } from '../src/planner.js';
 import { EntityType } from '../src/entities.js';
+import { ICON } from '../src/icons.js';
 
 // Minimal snapshot entities (plain objects; range drives melee-vs-ranged).
 const melee  = { id: 'h1', displayName: 'Ishmael', type: EntityType.PALADIN, range: 1, ownerId: 'p1' };
@@ -64,6 +65,12 @@ describe('describePlanActionParts', () => {
     assert.deepEqual(
       describePlanActionParts({ type: PlanActionType.EQUIP_WEAPON, entityId: 'h1', weapon: 'Silver Sword' }, ENTS),
       { verb: 'Equip Silver Sword', target: null });
+  });
+
+  test('USE_ITEM on a known resource shows the glyph AND the name', () => {
+    const r = describePlanActionParts({ type: PlanActionType.USE_ITEM, entityId: 'h1', item: 'herbs' }, ENTS);
+    assert.match(r.verb, /Herbs/, 'includes the resource name');
+    assert.ok(r.verb.includes(ICON.herb), 'includes the resource glyph');
   });
 
   test('unknown action type falls back to "Step N" (1-based)', () => {
