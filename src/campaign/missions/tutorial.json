@@ -2,6 +2,7 @@
   "schema": 1,
   "campaignId": "calebs_hollow_prologue",
   "id": "tutorial",
+  "disabled": true,
   "title": "The Road to Caleb's Hollow - Tutorial",
   "chapter": 1,
   "briefing": "On the road to Caleb's Hollow, the forest grows darker with every step. Shadows twist between the trees, and the air carries the faint stench of decay. Something is very wrong ahead.",

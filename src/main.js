@@ -3947,9 +3947,10 @@ async function _showCampaignScreen(campaignDef, autoMissionId, slotIndex = 1) {
     _showMissionBriefing(autoMissionId);
     return;
   }
-  if (_activeCampaign?.campaignDef?.missions?.length === 1) {
+  const _playable = _activeCampaign?.playableMissions?.() ?? [];
+  if (_playable.length === 1) {
     showStep('campaign');
-    const missionId = _activeCampaign.campaignDef.missions[0].id;
+    const missionId = _playable[0].id;
     _campaignSelectedMission = missionId;
     _showMissionBriefing(missionId);
     return;
@@ -9419,6 +9420,7 @@ function _ledgerCampaignData() {
       resumeMissionId,
       missions: (c.getMissionList?.() ?? []).map(m => ({
         id: m.id, title: m.title, completed: !!m.completed, available: !!m.available,
+        disabled: !!m.disabled,
         chapter: c.getMissionDef?.(m.id)?.chapter ?? 1,
         briefing: c.getMissionDef?.(m.id)?.briefing ?? '',
       })),
