@@ -40,7 +40,7 @@ import { VERSION, SAVE_VERSION }            from '../src/version.js';
 import { generateMultipleStarts, generateBattleStarts } from '../src/map.js';
 import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS, EntityType, isLeaderType } from '../src/entities.js';
 import { pickAIName }                              from '../src/ai-names.js';
-import { sideOf, getFactionsForSide }              from '../src/factions.js';
+import { sideOf, getFactionsForSide, STARTING_RESOURCE_LEVELS } from '../src/factions.js';
 
 // ── Room phase enum ─────────────────────────────────────────────────────────
 // Single source of truth for where a room is in its lifecycle.
@@ -506,6 +506,7 @@ function createRoom(config = {}) {
       isAsync:          !!config.isAsync,
       isBattle:         !!config.isBattle,
       aiDifficulty:     AI_DIFFICULTIES.includes(config.aiDifficulty) ? config.aiDifficulty : 'normal',
+      startingResources: STARTING_RESOURCE_LEVELS.includes(config.startingResources) ? config.startingResources : 'none',
     },
     consecutiveTimeouts: {},  // playerId → consecutive empty-plan timeout count
     slots:            [],
@@ -1706,6 +1707,7 @@ export function createLobby(playerId, playerName, ws, config = {}) {
     isAsync:        config.isAsync ?? false,
     isBattle,
     aiDifficulty:   config.aiDifficulty,
+    startingResources: config.startingResources,
   });
   room.isPrivate    = config.isPrivate ?? false;
   room.hostPlayerId = playerId;
@@ -1983,8 +1985,9 @@ export function startGame(playerId, roomId) {
   const anyWitchAI = room.slots.some(s => s.faction === 'witch' && s.status !== 'human');
   const anyHeroAI  = room.slots.some(s => s.faction === 'hero'  && s.status !== 'human');
 
-  // Initialize GameState
-  const state      = new GameState(anyWitchAI, anyHeroAI, room.config.mapSize, room.config.nodeCount);
+  // Initialize GameState — startingResources (validated in createRoom) bakes a
+  // faction-tuned bonus cache into the inventory; 'none' is a no-op.
+  const state      = new GameState(anyWitchAI, anyHeroAI, room.config.mapSize, room.config.nodeCount, null, room.config.startingResources);
   // Legacy 'full' fog (retired) degrades to 'partial'.
   state.fogOfWar   = room.config.fog === 'full' ? 'partial' : room.config.fog;
   // AI difficulty (validated in createRoom) — persisted via state-sync so

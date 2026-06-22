@@ -66,7 +66,7 @@ CLIENT → SERVER                          SERVER → CLIENT
 ─────────────────                        ─────────────────
 createLobby                              lobbyJoined
   { fog, mapSize, playersPerSide,          { lobby }
-    isPrivate }
+    isPrivate, startingResources }
                                          lobbyUpdate
 joinLobby                                  { lobby }
   { codeOrId }

@@ -17,6 +17,12 @@ import { ITEMS } from './items.js';
 import { DAMAGE_SCALE } from './balance.js';
 import { triggerSurvivorEncounter } from './survivor-discovery.js';
 
+/** Valid "Starting Resources" config levels (none/low/med/high) — the single
+ *  source of truth shared by the skirmish + online-lobby UI and the server's
+ *  config validation. Each faction maps a level to a bonus cache via
+ *  getStartingResourceBonus(level). */
+export const STARTING_RESOURCE_LEVELS = Object.freeze(['none', 'low', 'med', 'high']);
+
 // ── Base Class ──────────────────────────────────────────────────────────────
 
 export class Faction {
@@ -264,6 +270,13 @@ export class Faction {
 
   /** Starting resources for this faction's inventory at game start */
   getStartingResources() { return {}; }
+
+  /** Bonus starting resources for the chosen "Starting Resources" level
+   *  (none/low/med/high) — a faction-tuned cache ADDED on top of
+   *  getStartingResources(). 'none' (the default) returns {} so the legacy
+   *  balance baseline and every existing game stay unchanged. Keyed by
+   *  ResourceType; overridden per-faction (hero: sustain; witch: summon stock). */
+  getStartingResourceBonus(_level) { return {}; }
 
   /** Log message when this faction finds a resource */
   getResourceFoundLog(_actor, _lootType) { return ''; }
@@ -578,6 +591,17 @@ export class HeroFaction extends Faction {
 
   getStartingResources() { return { [ResourceType.FOOD]: 2 }; }
 
+  // Hero cache favours sustain + action economy (herbs heal, food = extra
+  // actions, silver = +ATK, scripture = ward). Added on top of the base food.
+  getStartingResourceBonus(level) {
+    switch (level) {
+      case 'low':  return { [ResourceType.HERBS]: 2, [ResourceType.FOOD]: 2 };
+      case 'med':  return { [ResourceType.HERBS]: 4, [ResourceType.FOOD]: 3, [ResourceType.SILVER]: 2 };
+      case 'high': return { [ResourceType.HERBS]: 6, [ResourceType.FOOD]: 5, [ResourceType.SILVER]: 3, [ResourceType.SCRIPTURE]: 2 };
+      default:     return {};
+    }
+  }
+
   getResourceFoundLog(actor, _lootType) {
     return `Found ${_lootType}! Added to shared supplies.`;
   }
@@ -749,6 +773,17 @@ export class WitchFaction extends Faction {
   }
 
   getStartingResources() { return { [ResourceType.WOOD]: 2, [ResourceType.METAL]: 2 }; }
+
+  // Witch cache favours the summon economy (wood → Wood Golem, metal → Iron
+  // Golem) plus some herbs to sustain raised units. Added on top of the base.
+  getStartingResourceBonus(level) {
+    switch (level) {
+      case 'low':  return { [ResourceType.WOOD]: 2, [ResourceType.METAL]: 2 };
+      case 'med':  return { [ResourceType.WOOD]: 4, [ResourceType.METAL]: 3, [ResourceType.HERBS]: 2 };
+      case 'high': return { [ResourceType.WOOD]: 6, [ResourceType.METAL]: 5, [ResourceType.HERBS]: 3 };
+      default:     return {};
+    }
+  }
 
   getResourceFoundLog(actor, lootType) {
     return `${actor.displayName} secures ${lootType} for dark rituals.`;

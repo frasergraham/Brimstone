@@ -261,8 +261,11 @@
 .lg-champion { align-items:flex-start; }
 .lg-champ-weapon { font-size:11px; color:var(--lg-ink-2); margin-top:7px; }
 .lg-champ-wstats { color:var(--lg-gold-dim); font-size:10px; }
-.lg-opts { display:flex; gap:9px; }
-.lg-opt { flex:1; display:flex; flex-direction:column; gap:5px; background:rgba(16,18,26,.6); border:1px solid #232036; border-radius:5px; padding:9px 12px; }
+/* Option rows wrap rather than crush: with several controls (skirmish has 4,
+   the online create form 6) the min-width keeps a wide pane on one row but lets
+   the controls reflow to multiple rows on narrow/phone widths. */
+.lg-opts { display:flex; flex-wrap:wrap; gap:9px; }
+.lg-opt { flex:1 1 92px; min-width:92px; display:flex; flex-direction:column; gap:5px; background:rgba(16,18,26,.6); border:1px solid #232036; border-radius:5px; padding:9px 12px; }
 .lg-opt-label { font-size:11px; color:var(--lg-faint); }
 
 /* Custom dropdown (aesthetic; per-option subtext) */

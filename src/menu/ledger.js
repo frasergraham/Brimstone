@@ -33,7 +33,7 @@ let _campView = 'missions';      // Campaign sub-view: 'missions' | 'party'
 let _campBriefing = null;        // active mission briefing ({slot,missionId,resume,title,briefing,index})
 let _campConfirmDelete = null;   // slot index awaiting delete confirmation
 let _skFaction = null;           // selected Skirmish champion
-const _skOpts = { mapSize: 'standard', nodeCount: 3, aiDifficulty: 'normal' };
+const _skOpts = { mapSize: 'standard', nodeCount: 3, aiDifficulty: 'normal', startingResources: 'none' };
 let _othersView = 'landing';     // Play With Others sub-view: 'landing'|'find'|'lobby'|'battle'
 let _lobby = null;               // current lobby state (from the onLobby push)
 let _lobbyList = [];             // open public lobbies (from onLobbyList)
@@ -568,6 +568,7 @@ function _panelSkirmish(body) {
   opts.appendChild(_optSelect('aiDifficulty', 'AI cunning', [
     { value: 'easy', label: 'Easy', sub: 'forgiving' }, { value: 'normal', label: 'Normal', sub: 'balanced' }, { value: 'hard', label: 'Hard', sub: 'ruthless' },
   ], (v) => v));
+  opts.appendChild(_optSelect('startingResources', 'Starting resources', STARTING_RES_OPTS, (v) => v));
   body.appendChild(opts);
 
   const startRow = document.createElement('div');
@@ -711,19 +712,21 @@ function _othersFind(body) {
   const ppsDd  = _dropdown([{ value: '1', label: '1v1' }, { value: '2', label: '2v2' }, { value: '3', label: '3v3' }, { value: '4', label: '4v4' }], '1');
   const mapDd  = _dropdown(MAP_SIZE_OPTS, 'standard');
   const privDd = _dropdown([{ value: 'false', label: 'Public', sub: 'Listed; anyone can join' }, { value: 'true', label: 'Private', sub: 'Join by code only' }], 'false');
+  const resDd  = _dropdown(STARTING_RES_OPTS, 'none');
   const timeDd = _createAsync
     ? _dropdown([{ value: '43200000', label: '12 hours' }, { value: '86400000', label: '1 day' }, { value: '172800000', label: '2 days' }], '86400000')
     : _dropdown([{ value: '60000', label: '60 sec' }, { value: '90000', label: '90 sec' }, { value: '120000', label: '2 min' }], '90000');
   opts.appendChild(_optWrap('Cadence', modeDd));
   opts.appendChild(_optWrap('Players', ppsDd));
   opts.appendChild(_optWrap('Map', mapDd));
+  opts.appendChild(_optWrap('Resources', resDd));
   opts.appendChild(_optWrap(_createAsync ? 'Per turn' : 'Turn timer', timeDd));
   opts.appendChild(_optWrap('Visibility', privDd));
   body.appendChild(opts);
   const createBtn = _button('＋ Create Game', 'gold', () => _data.lobby?.create?.({
     playersPerSide: parseInt(ppsDd.value, 10), mapSize: mapDd.value,
     isPrivate: privDd.value === 'true', isAsync: _createAsync,
-    turnIntervalMs: parseInt(timeDd.value, 10),
+    turnIntervalMs: parseInt(timeDd.value, 10), startingResources: resDd.value,
   }));
   createBtn.style.marginTop = '12px';
   body.appendChild(createBtn);
@@ -935,6 +938,15 @@ const MAP_SIZE_OPTS = [
   { value: 'regional', label: 'Regional', sub: '19×19 · roomy' },
   { value: 'campaign', label: 'Campaign', sub: '23×23 · long game' },
   { value: 'battle',   label: 'Battle',   sub: '42×42 · epic war' },
+];
+// "Starting Resources" — a faction-tuned cache each side begins with. 'None'
+// keeps the faction defaults (the long-standing baseline); higher levels add
+// summon stock for the witch and sustain/economy for the hero.
+const STARTING_RES_OPTS = [
+  { value: 'none', label: 'None',   sub: 'faction defaults' },
+  { value: 'low',  label: 'Low',    sub: 'a small cache' },
+  { value: 'med',  label: 'Medium', sub: 'a healthy stock' },
+  { value: 'high', label: 'High',   sub: 'a war chest' },
 ];
 const CADENCE_OPTS = [
   { value: 'live',  label: 'Live',  sub: 'Timed turns, one sitting' },

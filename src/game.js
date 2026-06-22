@@ -1,7 +1,7 @@
 // Central game state and turn management
 import { generateMap } from './map.js';
 import { ICON } from './icons.js';
-import { createHero, createWitch, createMinion, createSurvivor, resetRoster, survivorRosterIndexByName, bumpEntityId as _bumpModuleEntityId, EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, normalizeItems } from './entities.js';
+import { createHero, createWitch, createMinion, createSurvivor, resetRoster, survivorRosterIndexByName, bumpEntityId as _bumpModuleEntityId, EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, normalizeItems, addItemInItems } from './entities.js';
 import { BuildingType, ResourceType, hasBuilding, isRiver } from './tiles.js';
 import { hexKey, hexDistance, getNeighbors, setMapDimensions, MAP_COLS, MAP_ROWS } from './hex.js';
 import { applyPostRoundEffects, attritionForCycle } from './post-round-effects.js';
@@ -154,8 +154,11 @@ export class GameState {
    * @param {object|null} mapDataOverride  Pre-built map data (e.g. from tutorial or campaign configs).
    *   When provided, generateMap() is skipped. Must include { tiles, witchObjectives,
    *   heroStart, witchStart, mapSize, survivorCounts, cols?, rows? }.
+   * @param {string} startingResources  "Starting Resources" level (none/low/med/high).
+   *   Adds a faction-tuned bonus cache on top of each side's base resources;
+   *   'none' (default) is a no-op so the balance baseline is unchanged.
    */
-  constructor(witchIsAI = true, heroIsAI = false, mapSize = 'standard', nodeCount = null, mapDataOverride = null) {
+  constructor(witchIsAI = true, heroIsAI = false, mapSize = 'standard', nodeCount = null, mapDataOverride = null, startingResources = 'none') {
     // Per-instance entity/roster/dice state. Previously module-level globals
     // in entities.js which caused cross-game collisions on the server.
     this.nextEntityId       = 1;
@@ -235,6 +238,15 @@ export class GameState {
       hero:  normalizeItems(getFaction('hero').getStartingResources()),
       witch: normalizeItems(getFaction('witch').getStartingResources()),
     };
+    // Optional "Starting Resources" handicap (none/low/med/high): a faction-tuned
+    // bonus cache added on top of the baseline. 'none' (the default for every
+    // existing call site) adds nothing, so normal/online/headless play and the
+    // balance baseline are byte-identical. The result bakes into `inventory`,
+    // which state-sync already serializes — no extra persisted field needed.
+    for (const side of ['hero', 'witch']) {
+      const bonus = getFaction(side).getStartingResourceBonus(startingResources);
+      for (const [id, n] of Object.entries(bonus)) addItemInItems(this.inventory[side], id, n);
+    }
 
     this.mapSize       = mapData.mapSize;
     // Procedural map seed (for `/seed` debug command + bug-repro). Pre-built

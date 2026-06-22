@@ -411,7 +411,8 @@ function init(witchIsAI, heroIsAI, autoplay = false, humanFactionId = null, opts
   const nodeCount = opts?.nodeCount != null
     ? opts.nodeCount
     : parseInt(document.getElementById('select-node-count')?.value ?? '3', 10);
-  state    = new GameState(witchIsAI, heroIsAI, mapSize, nodeCount);
+  const startingResources = opts?.startingResources ?? 'none';
+  state    = new GameState(witchIsAI, heroIsAI, mapSize, nodeCount, null, startingResources);
 
   // Difficulty applies to human-vs-AI only — AI-vs-AI (autoplay/balance) and
   // two-human games always run at the tuned 'normal' baseline.
