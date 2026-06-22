@@ -898,7 +898,11 @@ function _othersBattle(body) {
     loading.remove();
     const b = st?.myBattle || (st?.battles && st.battles[0]) || null;
     if (!b) { body.appendChild(_empty('No active Battle right now — check back at the next muster.')); return; }
-    const day = b.dayScore ?? 0, night = b.nightScore ?? 0, total = (day + night) || 1;
+    // Day = hero side, Night = witch side. The server's battle-status payload
+    // carries the cumulative totals as heroScore/witchScore (the canonical
+    // nodeScore fields); accept the day/night aliases too for forward-compat.
+    const day = b.dayScore ?? b.heroScore ?? 0, night = b.nightScore ?? b.witchScore ?? 0;
+    const total = (day + night) || 1;
     const pps = b.maxPerSide ?? 10;
     const card = document.createElement('div');
     card.className = 'lg-battle is-live';
@@ -1280,17 +1284,31 @@ function _detailStatsHTML(d) {
   out.push(`<div class="lg-detail-meta">${meta.join(' · ')}</div>`);
 
   if (d.score) {
-    const max = d.score.threshold || 4;
-    const pips = (side, n) => Array.from({ length: max }, (_, i) =>
-      `<span class="score-pip ${side}${i < n ? ' filled' : ''}"></span>`).join('');
-    const dots = (d.nodes || []).map((n) =>
-      `<span class="node-dot ${esc(n.controller)}" style="border-color:${esc(n.color)}"></span>`).join('');
-    out.push(`<div class="lg-detail-stat lg-detail-score"><span>Node score</span>` +
-      `<span class="lg-detail-tracks">` +
-        `<span class="score-track hero-track">${pips('hero', d.score.hero)}</span>` +
-        (dots ? `<span class="node-dots-group">${dots}</span>` : '') +
-        `<span class="score-track witch-track">${pips('witch', d.score.witch)}</span>` +
-      `</span><i>first to ${max}</i></div>`);
+    if (d.kind === 'battle') {
+      // The persistent Battle has NO first-to-N node goal, so the 4-dot tracker
+      // is misleading. Show the cumulative per-side total instead, mirroring the
+      // live battle card's .lg-battle-scorebar (hero score = Day, witch = Night).
+      const day = d.score.hero ?? 0, night = d.score.witch ?? 0;
+      const total = (day + night) || 1;
+      out.push(`<div class="lg-detail-stat lg-detail-score"><span>Score</span>` +
+        `<span class="lg-detail-tracks"><span class="lg-battle-scorebar">` +
+          `<span class="d">${ICON.day} Day ${day}</span>` +
+          `<div class="track"><div class="fill" style="width:${Math.round(day / total * 100)}%"></div></div>` +
+          `<span class="n">${night} Night ${ICON.night}</span>` +
+        `</span></span></div>`);
+    } else {
+      const max = d.score.threshold || 4;
+      const pips = (side, n) => Array.from({ length: max }, (_, i) =>
+        `<span class="score-pip ${side}${i < n ? ' filled' : ''}"></span>`).join('');
+      const dots = (d.nodes || []).map((n) =>
+        `<span class="node-dot ${esc(n.controller)}" style="border-color:${esc(n.color)}"></span>`).join('');
+      out.push(`<div class="lg-detail-stat lg-detail-score"><span>Node score</span>` +
+        `<span class="lg-detail-tracks">` +
+          `<span class="score-track hero-track">${pips('hero', d.score.hero)}</span>` +
+          (dots ? `<span class="node-dots-group">${dots}</span>` : '') +
+          `<span class="score-track witch-track">${pips('witch', d.score.witch)}</span>` +
+        `</span><i>first to ${max}</i></div>`);
+    }
   }
   if (d.kills) {
     out.push(`<div class="lg-detail-stat"><span>Slain</span>` +
