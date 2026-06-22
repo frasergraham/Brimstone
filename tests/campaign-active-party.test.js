@@ -99,6 +99,31 @@ describe('persisted active-party selection', () => {
     assert.deepEqual(c.getActiveParty(3), [0, 1]);
   });
 
+  // Regression: applyMissionResult rebuilds the roster deployed-FIRST, so the
+  // index-based activeParty must be remapped by NAME or the player's chosen
+  // squad drifts to other survivors (or shrinks) — the "started with 1 survivor
+  // though my party is 3" bug. The selection must follow the same survivors.
+  test('the active-party selection is remapped by NAME across the post-mission roster reorder', () => {
+    const c = new Campaign(hollowDef, 1);
+    c.roster = _roster(3);              // S0, S1, S2
+    c.setActiveParty([0, 1, 2]);        // all three chosen in the Party screen
+    // Won mission: reconcile returns a reordered (deployed-first) roster.
+    const reordered = [c.roster[2], c.roster[0], c.roster[1]];   // S2, S0, S1
+    c.applyMissionResult('prologue', { won: true, survivors: reordered, fallen: [], resources: {}, flags: {} });
+    const activeNames = c.getActiveParty(3).map(i => c.roster[i].name).sort();
+    assert.deepEqual(activeNames, ['S0', 'S1', 'S2'], 'all three chosen survivors stay active after the reorder');
+  });
+
+  test('a partial active party keeps exactly the chosen survivors across the reorder', () => {
+    const c = new Campaign(hollowDef, 1);
+    c.roster = _roster(3);
+    c.setActiveParty([0, 2]);           // S0 + S2 active; S1 benched
+    const reordered = [c.roster[1], c.roster[2], c.roster[0]];   // S1, S2, S0
+    c.applyMissionResult('prologue', { won: true, survivors: reordered, fallen: [], resources: {}, flags: {} });
+    const activeNames = c.getActiveParty(3).map(i => c.roster[i].name).sort();
+    assert.deepEqual(activeNames, ['S0', 'S2'], 'the benched survivor stays benched; chosen two stay active');
+  });
+
   test('a pre-v8 save loads with an empty active party (migration backfill)', () => {
     // Hand-write a v7 save lacking `activeParty`.
     const c = new Campaign(hollowDef, 1);

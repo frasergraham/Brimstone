@@ -1205,9 +1205,21 @@ export class Campaign {
     }
     this.currentMission = this.getNextMission() ?? missionId;
 
-    // Permadeath: replace roster with only surviving survivors
+    // Permadeath: replace roster with only surviving survivors. The new roster
+    // is reordered (deployed-first), so remap the active-party selection by NAME
+    // — `activeParty` stores roster INDICES, which would otherwise drift to
+    // different survivors (or shrink) and deploy the wrong/too-few units next
+    // mission. The player's chosen squad is preserved by identity; newly
+    // recruited (unselected) survivors stay in reserve until promoted.
     if (result.survivors) {
+      const prevRoster  = Array.isArray(this.roster) ? this.roster : [];
+      const activeNames = this._sanitizeRosterIndices(this.activeParty)
+        .map(i => prevRoster[i]?.name)
+        .filter(Boolean);
       this.roster = result.survivors.map(s => snapshotSurvivor(s));
+      this.activeParty = activeNames
+        .map(name => this.roster.findIndex(s => s.name === name))
+        .filter(i => i >= 0);
     }
 
     // Permadeath memorial: a survivor who died on this COMPLETED mission is

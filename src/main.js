@@ -5096,6 +5096,11 @@ function _handleCampaignMissionEnd() {
       flags: {},
     });
     rewardSummary = _missionResult?.rewards ?? rewardSummary;
+    // The roster was just reordered (deployed-first) and the active-party
+    // selection remapped by name (Campaign.applyMissionResult); resync the
+    // in-memory working copy so the NEXT mission's deploy uses the player's
+    // actual chosen squad, not stale pre-reorder indices.
+    _activeRosterIndices = _activeCampaign.getActiveParty();
   } else {
     // Defeat: restore party to pre-mission state (no permadeath, no stat changes)
     survivors = _activeCampaign.roster;
