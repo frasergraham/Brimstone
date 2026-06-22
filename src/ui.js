@@ -5353,8 +5353,14 @@ export class UIController {
         }
         gameOverBtns = document.createElement('div');
         gameOverBtns.className = 'round-summary-gameover-btns';
+        // Campaign missions route this button into the post-mission debrief (NOT
+        // the menu), so label it "Continue →" there — "Return to Menu" read as an
+        // abandon prompt, leaving players parked on the Victory modal over the
+        // still-visible replay ("stuck in replay" on the prologue). data-action
+        // stays 'restart'; _runLocalResolution maps it to _handleCampaignMissionEnd.
+        const primaryLabel = isCampaign ? 'Continue →' : 'Return to Menu';
         gameOverBtns.innerHTML =
-          `<button class="plan-btn primary" data-action="restart">Return to Menu</button>` +
+          `<button class="plan-btn primary" data-action="restart">${primaryLabel}</button>` +
           (hasFullReplay && !isCampaign ? `<button class="plan-btn secondary" data-action="replay-full">Replay Full Game</button>` : '');
         actionsEl.appendChild(gameOverBtns);
       } else if (nextBtn) {
