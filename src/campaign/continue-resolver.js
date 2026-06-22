@@ -24,16 +24,16 @@ export function campaignMissionNumber(campaignDef, missionId) {
 }
 
 /**
- * Denominator for the "Mission N / Total" label: the count of NON-tutorial
+ * Denominator for the "Mission N / Total" label: the count of NON-disabled
  * missions (so the last real mission reads "Mission 12 / 12", not "/13"). The
- * tutorial is excluded because it's "Mission 0" — it isn't counted toward the
- * campaign's mission total.
+ * tutorial is excluded because it carries `disabled: true` (shelved) — disabled
+ * missions never count toward the campaign's mission total. Counting non-disabled
+ * entries (rather than a positional `length - 1` "tutorial is index 0"
+ * assumption) keeps the total honest if any other mission is later shelved.
  */
 export function campaignMissionTotal(campaignDef) {
   const missions = campaignDef?.missions || [];
-  // The first catalog entry is the tutorial (Mission 0); the rest are the real
-  // missions counted in the denominator.
-  return Math.max(0, missions.length - 1);
+  return missions.filter(m => !m?.disabled).length;
 }
 
 /**

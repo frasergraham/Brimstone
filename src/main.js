@@ -3857,6 +3857,15 @@ function _resumeCampaignMission(missionId) {
   const missionDef = _activeCampaign.getMissionDef(missionId);
   if (!missionDef) return;
 
+  // A disabled mission is shelved — never playable, never resumable. Even if a
+  // resume row leaked through (a stale mid-mission save of a now-disabled
+  // mission, e.g. the shelved tutorial), refuse to launch it and discard the
+  // stale save so it stops resurfacing.
+  if (_activeCampaign._isMissionDisabled(missionDef)) {
+    deleteCampaignMissionSave(_activeCampaign.campaignDef.id, missionId, slot);
+    return;
+  }
+
   // Sanity guard — if the mission's hasWitch shape changed since the save was
   // written (e.g. M5 flipped from no-witch to witch in the mission-5-7 rework)
   // the saved state has no witch entity and resume would silently desync from
@@ -6003,9 +6012,14 @@ function _localCampaignRows() {
   try {
     for (const camp of CAMPAIGNS) {
       if (camp.disabled) continue;
-      const missions = camp.missions || [];
-      // Denominator excludes the tutorial (Mission 0), so the last real mission
-      // reads "Mission 12 / 12" rather than "/13".
+      // Only PLAYABLE (non-disabled) missions may surface a resume row — a
+      // shelved mission (e.g. the disabled tutorial) must never produce a
+      // clickable Continue entry even when a stale mid-mission save lingers in
+      // localStorage. All gameplay enumeration excludes disabled missions; the
+      // viewer lists them greyed via a separate path.
+      const missions = (camp.missions || []).filter(m => !m.disabled);
+      // Denominator excludes disabled missions (the tutorial today), so the last
+      // real mission reads "Mission 12 / 12" rather than "/13".
       const missionTotal = _campaignMissionTotal(camp);
 
       // Continue tracks ONE playthrough per campaign — the persisted active slot
@@ -6015,7 +6029,7 @@ function _localCampaignRows() {
       const slot = getActiveSlot(camp.id);
       const hasMidMissionSave = new Set();
 
-      // 1. Scan missions for any that have a mid-mission save file in this slot
+      // 1. Scan playable missions for any with a mid-mission save in this slot
       for (const m of missions) {
         const save = loadCampaignMissionSave(camp.id, m.id, slot);
         if (!save) continue;
