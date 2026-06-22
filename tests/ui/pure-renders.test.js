@@ -562,7 +562,10 @@ describe('buildCycleDeadlineHtml', () => {
     assert.equal(cd.current, 3);
     assert.equal(cd.remaining, 4);              // 4 full rounds AFTER this one
     assert.equal(cd.deadlinePhase, 'dawn');
-    assert.ok(cd.countLabel.includes('Round 3 / 7'), 'count label shows X / N');
+    // The countdown names the DEADLINE phase, not the round — the cycle-bump
+    // label already states "Round N of N", so restating it here was duplicated.
+    assert.ok(cd.countLabel.includes('Ends Dawn'), 'count label names the deadline phase');
+    assert.ok(!/Round/.test(cd.countLabel), 'count label must not restate "Round N of N"');
   });
 
   test('track has one segment per round, exactly one active, with the deadline marked', () => {

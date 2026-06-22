@@ -1301,6 +1301,12 @@ function _detailStatsHTML(d) {
           `<div class="track"><div class="fill" style="width:${Math.round(day / total * 100)}%"></div></div>` +
           `<span class="n">${night} Night ${ICON.night}</span>` +
         `</span></span></div>`);
+      // Battle has no first-to-N score goal, but who currently holds each Power
+      // Node is still meaningful — keep the control circles (just not the pips).
+      const dots = (d.nodes || []).map((n) =>
+        `<span class="node-dot ${esc(n.controller)}" style="border-color:${esc(n.color)}"></span>`).join('');
+      if (dots) out.push(`<div class="lg-detail-stat lg-detail-score"><span>Nodes</span>` +
+        `<span class="lg-detail-tracks"><span class="node-dots-group">${dots}</span></span></div>`);
     } else {
       const max = d.score.threshold || 4;
       const pips = (side, n) => Array.from({ length: max }, (_, i) =>

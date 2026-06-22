@@ -969,7 +969,10 @@ export function buildCycleDeadlineHtml(state) {
     current,
     remaining,
     deadlinePhase,
-    countLabel: `${ICON.hourglass} Round ${current} / ${total}`,
+    // The cycle-bump label already states "<Phase> — Round N of N"; the countdown
+    // names the DEADLINE instead (the segmented track shows per-round progress)
+    // so the round isn't stated twice in the same bar.
+    countLabel: `${ICON.hourglass} Ends ${PHASE_META[deadlinePhase]?.label ?? deadlinePhase}`,
     trackHtml,
   };
 }
