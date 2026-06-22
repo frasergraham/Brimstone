@@ -1293,7 +1293,7 @@ function _detailStatsHTML(d) {
       out.push(`<div class="lg-detail-stat lg-detail-score"><span>Score</span>` +
         `<span class="lg-detail-tracks"><span class="lg-battle-scorebar">` +
           `<span class="d">${ICON.day} Day ${day}</span>` +
-          `<span class="track"><span class="fill" style="width:${Math.round(day / total * 100)}%"></span></span>` +
+          `<div class="track"><div class="fill" style="width:${Math.round(day / total * 100)}%"></div></div>` +
           `<span class="n">${night} Night ${ICON.night}</span>` +
         `</span></span></div>`);
     } else {
