@@ -48,6 +48,8 @@
 .ledger-wordmark { font-family:var(--lg-display); font-weight:600; font-size:30px; letter-spacing:.1em;
   line-height:.92; color:var(--lg-gold); text-shadow:0 0 26px rgba(245,200,66,.5); }
 .ledger-sub { font-family:var(--lg-display); font-size:10px; letter-spacing:.4em; color:var(--lg-label); margin:6px 0 32px; }
+/* Mobile-only brand header (shown via the max-width:720px query); the desktop rail wordmark covers branding otherwise. */
+.ledger-mobrand { display:none; }
 .ledger-rail-items { display:flex; flex-direction:column; gap:3px; flex:1; }
 .ledger-rail-item {
   display:flex; align-items:center; gap:13px; padding:11px 13px; border-radius:4px; cursor:pointer;
@@ -500,7 +502,7 @@
 .lg-back:hover { color:#dcb6ee; }
 .lg-find-actions { display:flex; gap:10px; margin-bottom:6px; }
 .lg-join-row { display:flex; gap:8px; align-items:center; }
-.lg-code-input { flex:1; background:rgba(8,9,14,.7); border:1px solid #2a2540; border-radius:4px; color:var(--lg-ink);
+.lg-code-input { flex:1; min-width:0; background:rgba(8,9,14,.7); border:1px solid #2a2540; border-radius:4px; color:var(--lg-ink);
   font-family:var(--lg-serif); font-size:15px; letter-spacing:.2em; text-transform:uppercase; padding:9px 12px; }
 .lg-lobby-head { display:flex; justify-content:space-between; align-items:flex-start; }
 .lg-lobby-title { font-family:var(--lg-display); font-size:30px; color:var(--lg-ink); }
@@ -533,12 +535,24 @@
     padding-bottom:calc(8px + env(safe-area-inset-bottom));
   }
   .ledger-wordmark, .ledger-sub, .ledger-user { display:none; }
+  /* Game title at the top of the pane (the rail wordmark is hidden on mobile). */
+  .ledger-mobrand {
+    display:block; order:0; flex:none; text-align:center;
+    font-family:var(--lg-display); font-weight:600; font-size:26px; letter-spacing:.06em;
+    color:var(--lg-gold); text-shadow:0 0 22px rgba(245,200,66,.5);
+    padding:calc(12px + env(safe-area-inset-top)) 12px 10px;
+    border-bottom:1px solid rgba(212,167,44,.16); background:rgba(8,9,13,.6);
+  }
   .ledger-rail-items { flex-direction:row; gap:2px; }
   .ledger-rail-item { flex-direction:column; gap:2px; padding:6px 10px; border-left:none; border-bottom:2px solid transparent; }
   .ledger-rail-item.is-active { border-left:none; border-bottom-color:var(--lg-gold); }
   .ledger-rail-item .lb { font-size:11px; }
-  .ledger-pane { order:1; padding:calc(40px + env(safe-area-inset-top)) 18px 18px; }
+  /* Brand header now owns the top safe-area inset, so the pane just needs normal padding. */
+  .ledger-pane { order:1; padding:18px 18px; }
   .ledger-pane-title { font-size:30px; }
+  /* Continue's featured entry: stack the thumbnail above the text (side-by-side squishes on phones). */
+  .lg-resume { flex-direction:column; gap:14px; }
+  .lg-resume-thumb { width:100%; height:150px; }
   /* Party Manager: 4-up cards squish on narrow displays — cap at 2 per row. */
   .lg-party .cprog-grid,
   .lg-party .cprog-grid.reserve-grid { grid-template-columns:repeat(2, minmax(0,1fr)); }

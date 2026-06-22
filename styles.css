@@ -3683,6 +3683,10 @@ body.renderer-3d.debug-counters #cam-counter { display: block; }
   #turn-info { gap: 0.3rem 0.6rem; }
   .phase-hint { display: none; }
 
+  /* Action budget stacks to two lines so it fits the narrow header: the
+     "Action Budget" label sits above the row of diamond pips. */
+  .action-budget { flex-direction: column; align-items: flex-end; gap: 0.1rem; }
+
   /* Cycle bump stays compact; just tighten padding on narrow screens */
   #cycle-bump { padding: 0.2rem 0.55rem; gap: 0.3rem; }
   #cycle-bump-icon { width: 16px; height: 16px; }
@@ -5918,6 +5922,9 @@ img.plan-step-avatar {
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
 }
 #replay-progress.review .replay-arrow { display: inline-block; }
+/* Both arrows use the icon-font play glyph (▶ renders as a color emoji on mobile);
+   mirror the "previous" one so it points left. */
+#replay-review-prev { transform: scaleX(-1); }
 .replay-arrow:hover { color: #f0d878; }
 /* Mobile: shrink the replay control bar so it doesn't crowd the other HUD. */
 @media (max-width: 700px) {

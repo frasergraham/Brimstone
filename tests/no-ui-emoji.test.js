@@ -24,7 +24,11 @@ const isColorEmoji = (cp) =>
   (cp >= 0x1F000 && cp <= 0x1FAFF) ||  // supplementary pictographs
   (cp >= 0x2600 && cp <= 0x27BF) ||    // misc symbols + dingbats (color on mobile)
   (cp >= 0x2300 && cp <= 0x23FF) ||    // media/technical (⏩ ⏸ ⏳ …)
-  (cp >= 0x2B00 && cp <= 0x2BFF);      // misc symbols & arrows (⬡ ⭕ …)
+  (cp >= 0x2B00 && cp <= 0x2BFF) ||    // misc symbols & arrows (⬡ ⭕ …)
+  // A couple of "Geometric Shapes" have an emoji presentation and render as
+  // full-color glyphs on iOS/Android: ▶ (play) and ◀ (reverse). Use ICON.play
+  // instead. (The rest of the block — ◆ ◇ pips, ▸ — stays monochrome.)
+  cp === 0x25B6 || cp === 0x25C0;
 
 // Strip comments so descriptive emoji in comments don't trip the guard. Handles
 // /* */ and <!-- --> (all file types) and // line comments (.js only). Does NOT

@@ -16,7 +16,7 @@ import { isModeAvailable, isFactionAvailable, COMING_SOON_LABEL } from '../demo-
 
 /** The six rail destinations, top to bottom (mirrors the mock). */
 const DESTINATIONS = [
-  { id: 'continue', icon: '▶',  label: 'Continue',         title: 'Continue',         tag: 'Games in Progress',            accent: 'gold' },
+  { id: 'continue', icon: ICON.play,  label: 'Continue',         title: 'Continue',         tag: 'Games in Progress',            accent: 'gold' },
   { id: 'campaign', icon: '\uE021',  label: 'Campaign',         title: 'The Campaign',     tag: 'Assemble a party of survivors and follow the story of Ishmael and the Witch',    accent: 'gold' },
   { id: 'skirmish', icon: '\uE061', label: 'Skirmish',         title: 'Skirmish',         tag: 'Single player battle vs. AI - hold the majority of power nodes to win', accent: 'gold' },
   { id: 'others',   icon: '\uE023', label: 'Play Online',       title: 'Play Online',      tag: 'Multiplayer single battles, or join the persistent two-week long async battle for Caleb\'s Hollow',      accent: 'purple' },
@@ -366,7 +366,7 @@ function _campaignBriefing(body) {
 
   body.appendChild(cols);
 
-  const begin = _button(b.resume ? '▶ Resume Mission' : '▶ Begin Mission', 'gold',
+  const begin = _button(b.resume ? `${ICON.play} Resume Mission` : `${ICON.play} Begin Mission`, 'gold',
     () => _data?.startMission?.(b.slot, b.missionId, b.resume));
   begin.style.marginTop = '20px';
   body.appendChild(begin);
@@ -572,7 +572,7 @@ function _panelSkirmish(body) {
 
   const startRow = document.createElement('div');
   startRow.className = 'lg-skirmish-start';
-  startRow.appendChild(_button('▶ Start', 'gold', () => {
+  startRow.appendChild(_button(`${ICON.play} Start`, 'gold', () => {
     if (!isFactionAvailable(_skFaction)) return;   // never launch a demo-blocked champion
     _data?.startSkirmish?.(_skFaction, { ..._skOpts });
   }));
@@ -830,7 +830,7 @@ function _othersLobby(body, lobby) {
   footer.className = 'lg-lobby-footer';
   if (isHost) footer.appendChild(_button('\uE07F Fill with AI', 'ghost', () => _data.lobby?.fillAll?.('random')));
   const allFilled = (lobby.slots || []).every((s) => s.status === 'human' || s.status === 'ai');
-  const startBtn = _button('▶ Start', 'gold', () => _data.lobby?.start?.());
+  const startBtn = _button(`${ICON.play} Start`, 'gold', () => _data.lobby?.start?.());
   if (!isHost || !allFilled) startBtn.disabled = true;
   footer.appendChild(startBtn);
   body.appendChild(footer);
@@ -1211,7 +1211,7 @@ function _resumeHero(row) {
   }
   const actions = document.createElement('div');
   actions.className = 'lg-resume-actions lg-feed-actions';
-  _fillGameActions(actions, row, '▶ Resume');
+  _fillGameActions(actions, row, `${ICON.play} Resume`);
   wrap.querySelector('.lg-resume-body').appendChild(actions);
   return wrap;
 }
@@ -1326,7 +1326,7 @@ function _openGameDetail(row) {
  *  re-renders the panel (the abandoned game drops out of the refreshed list). */
 function _fillGameActions(actions, row, cta = null) {
   actions.replaceChildren();
-  actions.appendChild(_button(cta || (row.action_needed ? 'Your turn ▸' : '▶ Resume'), 'gold', () => _activateRow(row)));
+  actions.appendChild(_button(cta || (row.action_needed ? 'Your turn ▸' : `${ICON.play} Resume`), 'gold', () => _activateRow(row)));
   if (!_data?.abandonable?.(row)) return;
   actions.appendChild(_button('Abandon', 'danger', () => {
     const q = document.createElement('span');
@@ -1366,7 +1366,7 @@ function _missionRow(slot, m, status, index, campaignId) {
     `<span class="lg-mission-n gthc">${esc(_missionNumLabel(index))}</span>` +
     `<span class="lg-mission-name">${esc(m.title || m.id)}</span>` +
     (playable
-      ? `<button class="lg-btn lg-btn-gold lg-btn-sm">${resume ? '▶ Resume' : '▶ Play'}</button>`
+      ? `<button class="lg-btn lg-btn-gold lg-btn-sm">${resume ? `${ICON.play} Resume` : `${ICON.play} Play`}</button>`
       : `<span class="lg-mission-mark">${mark}</span>`);
   if (playable) {
     const go = (e) => {

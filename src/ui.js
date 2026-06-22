@@ -5924,7 +5924,7 @@ export class UIController {
            + rows
            + `<div class="replay-conv-btns">`
            +   `<button class="replay-conv-btn" type="button">SKIP</button>`
-           +   `<button class="replay-conv-continue" type="button" style="display:none">CONTINUE ▶</button>`
+           +   `<button class="replay-conv-continue" type="button" style="display:none">CONTINUE ${ICON.play}</button>`
            + `</div>`
            + `</div>`;
     }
