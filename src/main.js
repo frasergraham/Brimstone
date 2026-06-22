@@ -1390,6 +1390,24 @@ async function _runLocalResolution(skipSummary = false) {
   if (ui) await ui._triggerPostRoundEffects();
   redraw();
 
+  // Accumulate round for full-game replay — MUST run before _saveSpGame(), which
+  // serializes _roundHistory to localStorage. If the just-resolved round were
+  // appended after the save, the persisted history would lag one round behind;
+  // on resume that stale history hides the "Last Turn" replay button (or replays
+  // the wrong turn). Pushing first keeps the persisted history in lockstep with
+  // the live game, so a resumed save shows the replay exactly as a fresh round-end.
+  if (!_autoplay) {
+    _roundHistory.push({
+      roundNum:     _preResolveRoundNum,
+      preState:     _preResolveStateJson,
+      steps:        JSON.stringify(steps),
+      // Save post-resolution entities for the last round so the replay
+      // correctly snaps to the outcome (not back to pre-action positions).
+      // Captured before endRound() so it reflects combat results only.
+      finalEntities: state.gameOver ? finalEntities : undefined,
+    });
+  }
+
   // Persist single-player progress to localStorage
   _saveSpGame();
 
@@ -1403,19 +1421,6 @@ async function _runLocalResolution(skipSummary = false) {
   // Snapshot the board for the menu save lists (end of every round). Fire-and-
   // forget — an offscreen render that never disturbs the live view.
   _captureRoundThumbnail();
-
-  // Accumulate round for full-game replay
-  if (!_autoplay) {
-    _roundHistory.push({
-      roundNum:     _preResolveRoundNum,
-      preState:     _preResolveStateJson,
-      steps:        JSON.stringify(steps),
-      // Save post-resolution entities for the last round so the replay
-      // correctly snaps to the outcome (not back to pre-action positions).
-      // Captured before endRound() so it reflects combat results only.
-      finalEntities: state.gameOver ? finalEntities : undefined,
-    });
-  }
 
   // Post-resolution: normal turns end with a wrap-up CARD + review (the timeline
   // stays up; arrows scrub the cards). Game-over keeps its dedicated modal.
