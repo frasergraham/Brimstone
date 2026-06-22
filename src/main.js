@@ -1304,6 +1304,32 @@ async function _runLocalResolution(skipSummary = false) {
   // Hold a reference to the final entity array so we can restore it after animation.
   const finalEntities = state.entities;
 
+  // Game-over auto-finish (Mission 1 / prologue "stuck in replay" fix): the
+  // outcome is sealed the instant resolvePlans() returns, but the win/lose is
+  // only WRITTEN to state by finalizeRound() AFTER the replay below. A manual-
+  // stepping player who doesn't click NEXT all the way through a game-ending
+  // round never reaches finalizeRound — so the Victory/Defeat modal + campaign
+  // debrief never appear and they're stranded on the replay HUD. peekVictory()
+  // is a read-only probe of the resolved state; when it reports a win we run
+  // this round's replay to completion automatically (no manual gate), so the
+  // terminal modal is always reached. Online has no gap — the server runs
+  // finalizeRound() before clients replay. Harmless if mis-detected: it just
+  // auto-plays one round's replay.
+  //
+  // The resolver REMOVES dead entities, so a post-resolution witch-unit count of
+  // zero is ambiguous (a hero-only mission also has none). peekVictory() needs to
+  // know the witch/night side actually FIELDED a unit this round for its mission-
+  // logic "all enemies dead" win proxy (the prologue's golem) — read that off the
+  // pre-resolution snapshot captured above.
+  let _hadWitchUnitsPreResolve = false;
+  try {
+    const pre = JSON.parse(_preResolveStateJson);
+    _hadWitchUnitsPreResolve = (pre.entities ?? []).some(e => e.owner === 'witch');
+  } catch { /* snapshot parse failure → fall back to the standard checks only */ }
+  if (!_autoplay && state.peekVictory({ hadWitchUnits: _hadWitchUnitsPreResolve })) {
+    playback.autoFinish = true;
+  }
+
   // Snapshot post-resolution explored flags, then revert to pre-resolution state
   // so the explored dot only appears when the EXPLORE step is actually animated.
   const postExplored = new Map();
@@ -1947,7 +1973,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   const skipHudActive = !_autoplay && ui && !ui._replayOnControl;
   if (skipHudActive) {
     // Start in the player's remembered mode: AutoPlay (continuous) or manual.
-    playback.paused = !ui.replayAutoPlay;
+    // A game-ending round auto-runs to completion so the player can't be
+    // stranded mid-replay before the terminal modal (see playback.autoFinish /
+    // the peekVictory() hook in _runLocalResolution). The flag is one-shot:
+    // consume it here so the next round respects the player's manual/auto choice.
+    playback.paused = playback.autoFinish ? false : !ui.replayAutoPlay;
+    playback.autoFinish = false;
     playback.stepRequested = false;
     ui.showInlineReplayHUD?.((action) => {
       switch (action) {

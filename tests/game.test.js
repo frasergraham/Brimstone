@@ -204,6 +204,65 @@ describe('Victory — kill conditions', () => {
   });
 });
 
+// peekVictory() — a READ-ONLY look at whether the current (already-resolved)
+// state has sealed a game-over, WITHOUT mutating state.winner/log. The offline
+// resolution loop uses it the moment resolvePlans() returns so it can auto-run
+// the round's replay to completion (instead of stranding a manual-stepping
+// player on the replay HUD, never reaching the Victory/Defeat modal — the
+// "stuck in replay after killing the golem" bug on Mission 1 / the prologue).
+describe('peekVictory — read-only game-over detection (Mission 1 stuck-replay fix)', () => {
+  test('does not mutate state and reports nothing when the game is live', () => {
+    const state = new GameState(true, true);
+    assert.equal(state.peekVictory(), null, 'no game-over while both leaders stand');
+    assert.equal(state.winner, null, 'peek must not set winner');
+    assert.equal(state.gameOver, false, 'peek must not flip gameOver');
+  });
+
+  test('detects an impending standard leader-death win without mutating', () => {
+    const state = new GameState(true, true);
+    state.witch.hp = 0; // resolution just slew the witch leader
+    const peek = state.peekVictory();
+    assert.ok(peek, 'peek sees the sealed win');
+    assert.equal(peek.winner, 'hero');
+    // Crucially read-only: the live victory state is untouched until finalizeRound.
+    assert.equal(state.winner, null, 'peek did not write winner');
+    assert.equal(state.gameOver, false, 'peek did not flip gameOver');
+  });
+
+  test('detects a mission-logic "all enemies dead" win shape (prologue golem, no witch leader)', () => {
+    // The prologue has hasWitch:false (no witch leader) and wins via the
+    // mission-logic graph when every witch-owned unit (3 zombies → golem) dies.
+    // checkVictory() can't see that win (it's graph-driven), but peekVictory()
+    // must still recognise the round as game-ending so the replay auto-completes
+    // rather than gating on a manual NEXT the player may never press.
+    const state = new GameState(true, true);
+    // Mirror hasWitch:false — drop the witch leader.
+    state.entities = state.entities.filter(e => !(e.owner === 'witch' && e.type === EntityType.WITCH));
+    state.witch = null;
+    // The mission-logic proxy only runs for graph missions — attach a marker
+    // engine (the prologue has one; a plain game does not, and must NOT auto-win
+    // just because a side happens to have no units mid-game).
+    state.logicEngine = {};
+    // One lone witch-owned enemy (the golem). With it still on the board, the
+    // round hasn't sealed a win even though hadWitchUnits is true.
+    const golem = createMinion(2, 2, 'witch', state);
+    state.entities.push(golem);
+    assert.equal(state.peekVictory({ hadWitchUnits: true }), null, 'enemy still alive → not over yet');
+
+    // The resolver REMOVES dead entities, so a wipe shows up as zero witch units
+    // present (not a corpse with alive=false). Drop the golem to mirror that.
+    state.entities = state.entities.filter(e => e !== golem);
+    // Without the hadWitchUnits hint it's indistinguishable from a hero-only
+    // mission, so the proxy must stay silent.
+    assert.equal(state.peekVictory(), null, 'no hint → no false auto-win on an empty witch side');
+    // With the hint (the side fielded the golem this round) the wipe is a win.
+    const peek = state.peekVictory({ hadWitchUnits: true });
+    assert.ok(peek, 'witch side wiped after fielding a unit → the round sealed a win');
+    assert.equal(peek.winner, 'hero');
+    assert.equal(state.winner, null, 'peek stays read-only');
+  });
+});
+
 describe('Victory — node scoring', () => {
   // Helper: put `count` node hexes under one faction's control (default 2 = majority)
   function holdNodes(state, faction, count = 2) {

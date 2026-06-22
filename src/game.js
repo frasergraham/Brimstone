@@ -1095,6 +1095,68 @@ export class GameState {
   }
 
   /**
+   * READ-ONLY look at whether the just-resolved state has already sealed a
+   * game-over — returns `{ winner, winReason }` or `null`, **without** mutating
+   * `winner` / `winReason` / the log. (checkVictory() is the authoritative,
+   * mutating version run inside endRound().)
+   *
+   * Why this exists: offline (src/main.js), the round's REPLAY animates BEFORE
+   * finalizeRound() runs checkVictory() + the mission-logic win pump. A manual-
+   * stepping player who doesn't click NEXT all the way to the end of a game-
+   * ending round never reaches finalizeRound, so the Victory/Defeat modal and
+   * campaign debrief never appear — the player is stranded on the replay HUD
+   * ("stuck in replay after killing the golem", Mission 1 / the prologue). The
+   * resolution loop calls peekVictory() the instant resolvePlans() returns; when
+   * it reports a win it auto-runs that round's replay to completion so the
+   * terminal modal is always reached. Online (server/lobby.js) has no such gap —
+   * it runs finalizeRound() immediately, server-side, before the client replays.
+   *
+   * It mirrors checkVictory()'s mutating conditions as pure reads, PLUS a
+   * mission-logic proxy: the witch/night side is wiped out this round (e.g. the
+   * prologue's "defeat the wood golem" graph win, which has no witch leader so
+   * the standard leader-death check can't see it). The resolver REMOVES dead
+   * entities, so "wiped out" = the side had units at round start (caller passes
+   * `hadWitchUnits`) but has none alive now. A false negative just falls back to
+   * the normal manual replay; a false positive merely auto-plays a non-ending
+   * round's replay — both harmless.
+   *
+   * @param {{ hadWitchUnits?: boolean }} [opts] - hadWitchUnits: did the witch
+   *   side field any unit at round START (read off the pre-resolution snapshot)?
+   *   Required for the mission-logic proxy, since the resolver removes the corpse.
+   */
+  peekVictory({ hadWitchUnits = false } = {}) {
+    // Custom victory delegate (legacy campaign missions). Delegates are pure
+    // reads that RETURN a result; checkVictory() is what writes it to state.
+    if (this.victoryDelegate) {
+      const result = this.victoryDelegate(this);
+      if (result) return { winner: result.winner, winReason: result.winReason };
+    }
+
+    if (this.gameMode === GameMode.BATTLE) return null; // time-based, not a kill
+
+    // Standard leader-death (both sides) — same predicate as checkVictory().
+    if (this.witch !== null && this.factionEliminated('witch')) {
+      return { winner: 'hero', winReason: WIN_REASON.WITCH_SLAIN };
+    }
+    if (this.factionEliminated('hero')) {
+      return { winner: 'witch', winReason: WIN_REASON.HERO_SLAIN };
+    }
+
+    // Mission-logic win proxy: the witch/night side fielded units this round but
+    // they're all gone now (dead corpses are removed by the resolver, so a live
+    // count of zero — given hadWitchUnits — means a wipe). Covers graph wins like
+    // the prologue's golem (hasWitch:false ⇒ no leader for the check above to
+    // catch). Only the witch side is probed for a hero win — a wiped hero side is
+    // already a leader death above, and a player losing all units is a loss.
+    if (this.logicEngine && hadWitchUnits) {
+      const witchAlive = this.entities.some(e => e.owner === 'witch' && e.alive);
+      if (!witchAlive) return { winner: 'hero', winReason: WIN_REASON.WITCH_SLAIN };
+    }
+
+    return null;
+  }
+
+  /**
    * Battle mode end-of-week check.
    * Called by checkVictory() — the battle ends when the current time passes endsAt.
    * The server also checks this; the client trusts the server's authoritative timing.
