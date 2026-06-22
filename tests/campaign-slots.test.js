@@ -24,6 +24,10 @@ globalThis.localStorage = {
 };
 
 const hollowDef = getCampaignById('calebs_hollow_prologue');
+// The tutorial is shelved (disabled), so progress totals count only the PLAYABLE
+// missions and a fresh campaign opens on the first playable mission.
+const PLAYABLE_TOTAL = hollowDef.missions.filter(m => !m.disabled).length;
+const FIRST_PLAYABLE = hollowDef.missions.find(m => !m.disabled).id;
 
 // ── Slot-key derivation ───────────────────────────────────────────────────────
 
@@ -252,22 +256,22 @@ describe('getSlotSummary', () => {
     const info = Campaign.getSlotSummary(hollowDef, 2);
     assert.equal(info.used, false);
     assert.equal(info.slotIndex, 2);
-    assert.equal(info.total, hollowDef.missions.length);
+    assert.equal(info.total, PLAYABLE_TOTAL);            // disabled tutorial excluded
   });
 
   test('reports a used slot with the next mission to resume', () => {
-    // Post tutorial-fold (Phase E), `tutorial` is Chapter 1's first mission and
-    // `prologue` (The Awakening) requires it — so "one mission done, resume next"
-    // is: tutorial completed, resume at prologue.
+    // The tutorial is disabled, so progress starts at the first playable mission
+    // (prologue). "One mission done, resume next" is: prologue completed, resume
+    // at the mission after it.
     const c = new Campaign(hollowDef, 1);
-    c.completedMissions.add('tutorial');
-    c.currentMission = 'prologue';
+    c.completedMissions.add('prologue');
+    c.currentMission = 'gathering_survivors';
     c.save();
     const info = Campaign.getSlotSummary(hollowDef, 1);
     assert.equal(info.used, true);
     assert.equal(info.status, 'in-progress');
     assert.equal(info.completed, 1);
-    assert.equal(info.currentMission, 'prologue');
+    assert.equal(info.currentMission, 'gathering_survivors');
     assert.ok(info.currentMissionTitle);
     assert.equal(typeof info.updatedAt, 'number');
   });
@@ -278,7 +282,9 @@ describe('getSlotSummary', () => {
     assert.equal(info.used, true);
     assert.equal(info.status, 'new');
     assert.equal(info.completed, 0);
-    assert.equal(info.currentMission, hollowDef.firstMission);
+    // firstMission is the (disabled) tutorial; a fresh slot resolves to the first
+    // playable mission instead.
+    assert.equal(info.currentMission, FIRST_PLAYABLE);
   });
 });
 
@@ -289,7 +295,7 @@ describe('getAggregateProgress', () => {
     const p = Campaign.getAggregateProgress(hollowDef);
     assert.equal(p.status, 'new');
     assert.equal(p.completed, 0);
-    assert.equal(p.total, hollowDef.missions.length);
+    assert.equal(p.total, PLAYABLE_TOTAL);               // disabled tutorial excluded
   });
 
   test('reports the furthest-along slot', () => {

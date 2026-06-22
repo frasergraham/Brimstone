@@ -295,7 +295,12 @@ function _panelCampaign(body) {
     const chron = document.createElement('div');
     chron.className = 'lg-chronicle';
     for (const { m, index } of chap.missions) {
-      const status = m.completed ? 'done' : (m.id === sel.nextMissionId ? 'current' : (m.available ? 'available' : 'locked'));
+      // A disabled mission is shelved — shown greyed + non-selectable, never
+      // current/available, regardless of slot progress.
+      const status = m.disabled ? 'disabled'
+        : m.completed ? 'done'
+        : (m.id === sel.nextMissionId ? 'current'
+        : (m.available ? 'available' : 'locked'));
       chron.appendChild(_missionRow(sel, m, status, index, data.campaignId));
     }
     body.appendChild(chron);
@@ -1383,7 +1388,9 @@ function _activateRow(row) {
 function _missionRow(slot, m, status, index, campaignId) {
   const playable = status === 'current' || status === 'available';
   const resume = status === 'current' && slot.resumeMissionId === m.id;
-  const mark = status === 'done' ? '\uE071' : status === 'locked' ? '\uE081' : '◆';
+  const mark = status === 'done' ? '\uE071'
+    : (status === 'locked' || status === 'disabled') ? '\uE081'
+    : '◆';
   // Map image: the live saved thumbnail when this mission is in progress (keyed
   // by its row id `<campaignId>/slot<N>/<missionId>`, captured at round-end like
   // a skirmish), else the mission's fixed pre-generated map image.

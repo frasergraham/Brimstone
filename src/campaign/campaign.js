@@ -758,7 +758,13 @@ export class Campaign {
     this.slotIndex         = clampSlotIndex(slotIndex);
     this.saveSlot          = campaignSlotSaveSlot(campaignDef.id, this.slotIndex);
     this.version           = SAVE_VERSION;
-    this.currentMission    = campaignDef.firstMission;
+    // Seed the starting mission. If the authored `firstMission` is itself
+    // disabled (e.g. the tutorial was shelved), fall through to the first
+    // PLAYABLE mission so a fresh campaign opens on something launchable rather
+    // than pointing at a shelved mission.
+    this.currentMission    = this._isMissionIdDisabled(campaignDef.firstMission)
+      ? (this.playableMissions()[0]?.id ?? campaignDef.firstMission)
+      : campaignDef.firstMission;
     this.completedMissions = new Set();
     this.roster            = []; // Array of snapshotSurvivor() objects
     // Permadeath memorial: survivors who died on a COMPLETED (won) mission.
@@ -875,6 +881,40 @@ export class Campaign {
     return this.campaignDef.missions.find(m => m.id === missionId) ?? null;
   }
 
+  /**
+   * Whether a mission def is DISABLED — flagged `disabled: true` in its JSON to
+   * shelve it without deleting it. A disabled mission is COMPLETELY ignored by
+   * game logic: it is never playable, never the next mission, never counted in
+   * progression totals, and any `requires`/`unlock` dependency that points at it
+   * is treated as already satisfied (so downstream missions still unlock). The
+   * campaign viewer still LISTS it (greyed, non-selectable) — see getMissionList.
+   * @param {object} mission  a runtime mission def
+   * @returns {boolean}
+   */
+  _isMissionDisabled(mission) {
+    return !!mission?.disabled;
+  }
+
+  /**
+   * Whether the mission with `id` is disabled. Unknown ids are NOT disabled (a
+   * dependency on a mission that doesn't exist is a real, unsatisfiable blocker —
+   * only an explicitly-shelved mission is auto-satisfied). Used so a `requires`/
+   * `missionDone` pointing at a disabled mission counts as satisfied.
+   * @param {string} id
+   * @returns {boolean}
+   */
+  _isMissionIdDisabled(id) {
+    return this._isMissionDisabled(this.getMissionDef(id));
+  }
+
+  /** The list of NON-disabled missions — the set game logic should ever act on
+   *  (next mission, available, progression totals, completion). The viewer reads
+   *  the full `campaignDef.missions` (via getMissionList) to still SHOW disabled
+   *  rows greyed; everything else goes through here. */
+  playableMissions() {
+    return this.campaignDef.missions.filter(m => !this._isMissionDisabled(m));
+  }
+
   /** Get the map builder function for a mission. */
   getMapBuilder(mapBuilderKey) {
     return this.campaignDef.mapBuilders[mapBuilderKey] ?? null;
@@ -888,7 +928,10 @@ export class Campaign {
    */
   buildUnlockContext() {
     return {
-      isCompleted: (id) => this.completedMissions.has(id),
+      // A disabled mission counts as completed for the purposes of unlock
+      // criteria, so a downstream mission whose `unlock` names a shelved one
+      // (missionDone / anyOf) still opens — it never soft-locks the chain.
+      isCompleted: (id) => this.completedMissions.has(id) || this._isMissionIdDisabled(id),
       hasItem: (id) => (this.heroStats?.items?.[id]?.count ?? 0) > 0,
       level: this.heroStats?.level ?? this.getCompletedCount(),
       getFlag: (key) => this.storyFlags?.[key],
@@ -904,8 +947,13 @@ export class Campaign {
    * drifts between the two.
    */
   _canPlayMission(mission) {
+    // A disabled mission is shelved — never launchable, never the next mission.
+    if (this._isMissionDisabled(mission)) return false;
     if (this.completedMissions.has(mission.id)) return false;
-    if (mission.requires && !mission.requires.every(r => this.completedMissions.has(r))) return false;
+    // A `requires` entry is satisfied when completed OR when its target mission
+    // is itself disabled (a shelved prerequisite never blocks downstream play).
+    if (mission.requires && !mission.requires.every(
+      r => this.completedMissions.has(r) || this._isMissionIdDisabled(r))) return false;
     if (mission.unlock != null && !evaluateUnlock(mission.unlock, this.buildUnlockContext())) return false;
     return true;
   }
@@ -926,7 +974,10 @@ export class Campaign {
    */
   _missionBlockers(mission) {
     const ctx = this.buildUnlockContext();
-    const reqMissing = (mission.requires ?? []).filter(r => !this.completedMissions.has(r));
+    // A disabled prerequisite is satisfied (see _canPlayMission) — it never
+    // counts as a blocker. ctx.isCompleted already folds disabled in for unlock.
+    const reqMissing = (mission.requires ?? [])
+      .filter(r => !this.completedMissions.has(r) && !this._isMissionIdDisabled(r));
     const unlockMissing = this._unlockMissionBlockers(mission.unlock, ctx);
     if (unlockMissing === null) return null;
     return [...reqMissing, ...unlockMissing];
@@ -990,10 +1041,13 @@ export class Campaign {
    * Check if all missions in this campaign are completed.
    * Returns false for a campaign with no missions defined — an empty missions
    * array isn't "complete", it's unpopulated (e.g. a Coming Soon chapter).
+   * Disabled missions are ignored: a campaign is "complete" when every PLAYABLE
+   * mission is done, even if a shelved mission was never (and can never be) won.
    */
   isComplete() {
-    if (this.campaignDef.missions.length === 0) return false;
-    return this.campaignDef.missions.every(m => this.completedMissions.has(m.id));
+    const playable = this.playableMissions();
+    if (playable.length === 0) return false;
+    return playable.every(m => this.completedMissions.has(m.id));
   }
 
   /**
@@ -1008,14 +1062,16 @@ export class Campaign {
     return false;
   }
 
-  /** Count of missions completed so far in this campaign. */
+  /** Count of PLAYABLE missions completed so far in this campaign (disabled
+   *  missions never count toward progress — they're shelved, not "done"). */
   getCompletedCount() {
-    return this.campaignDef.missions.filter(m => this.completedMissions.has(m.id)).length;
+    return this.playableMissions().filter(m => this.completedMissions.has(m.id)).length;
   }
 
-  /** Total number of missions in this campaign. */
+  /** Total number of PLAYABLE missions in this campaign (the progress
+   *  denominator — disabled missions are excluded so "N / total" stays honest). */
   getMissionCount() {
-    return this.campaignDef.missions.length;
+    return this.playableMissions().length;
   }
 
   /**
@@ -1095,17 +1151,28 @@ export class Campaign {
    * `visible` marks whether the row should be shown at all: completed and
    * playable missions always show; a locked mission shows only when it's the
    * immediate next one ("one step from playable", see `_isMissionVisible`).
+   *
+   * Disabled missions are SHOWN here (so the viewer can render them greyed and
+   * non-selectable) but are never `available`, never `completed`, never the
+   * `current` mission. The `disabled` flag lets the viewer style + block them;
+   * all gameplay enumeration goes through playableMissions() and ignores them.
    */
   getMissionList() {
-    return this.campaignDef.missions.map(m => ({
-      id: m.id,
-      title: m.title,
-      briefing: m.briefing,
-      completed: this.completedMissions.has(m.id),
-      available: this._canPlayMission(m),
-      visible: this._isMissionVisible(m),
-      current: m.id === this.currentMission,
-    }));
+    return this.campaignDef.missions.map(m => {
+      const disabled = this._isMissionDisabled(m);
+      return {
+        id: m.id,
+        title: m.title,
+        briefing: m.briefing,
+        disabled,
+        completed: !disabled && this.completedMissions.has(m.id),
+        available: this._canPlayMission(m), // already false when disabled
+        // Disabled rows are always visible (greyed) so the player sees the
+        // shelved mission rather than it silently vanishing from the list.
+        visible: disabled || this._isMissionVisible(m),
+        current: !disabled && m.id === this.currentMission,
+      };
+    });
   }
 
   /**

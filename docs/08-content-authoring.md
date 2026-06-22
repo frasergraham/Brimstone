@@ -131,6 +131,10 @@ A mission can be a **plain skirmish vs the witch AI** — no painted tiles, no l
 
 → bonus = `max(0, target − (wins among "of"))`. The Long Watch (`Ch1M6`) uses this: it unlocks on a `{ "unlock": { "anyOf": { "count": 3, "of": [villages] } } }` gate (win any 3 of the 5 — `completedMissions` tracks **wins only**), and the witch's bonus eases the more villages were cleared (3 won → +2, 4 → +1, 5 → +0). `unlock` is AND-ed with the legacy `requires`; see `src/campaign/unlock.js` for the full criteria grammar.
 
+### Shelving a mission (`disabled`)
+
+To take a mission out of play **without deleting its JSON**, set `"disabled": true` at the top level of the mission file. A disabled mission is COMPLETELY ignored by game logic — it never appears as a playable/next mission, it's skipped by progression (excluded from `getMissionCount`/`getCompletedCount`/`isComplete` totals), and any `requires`/`unlock`/`anyOf` dependency that points at it is treated as **already satisfied** (so downstream missions still unlock and the chain never soft-locks). If the campaign's `firstMission` is the disabled one, a fresh campaign opens on the first *playable* mission instead. The campaign viewer still **lists** the mission, greyed and non-selectable, so the shelving is visible rather than a silent gap. All gameplay enumeration funnels through `Campaign.playableMissions()` (`src/campaign/campaign.js`); the viewer reads the full `getMissionList()` (each row carries a `disabled` flag). The current shipped example is `tutorial.json` (Mission 0).
+
 **Enemy unit levels (difficulty ramp):** any `enemyUnits[]` or `waves[].units[]`
 spec accepts an optional `"level": N` (integer ≥1). At spawn, `applyLevel` scales
 the unit's HP/ATK/DEF by the Standard curve (HP ×(1+0.5·(L−1)), +1 ATK/level,

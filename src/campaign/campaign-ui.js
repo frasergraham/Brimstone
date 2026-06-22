@@ -668,14 +668,20 @@ export function debriefRewardsSectionHTML(rewards) {
  * admin bypass) is set, in which case every mission is shown and treated as
  * launchable. Each row carries a status and, for locked rows, a hint naming the
  * blocking mission.
- * @returns {{id, title, briefing, status:'completed'|'available'|'locked', lockedHint?}[]}
+ *
+ * A `disabled` mission (shelved via `disabled:true` in its JSON) always renders
+ * as its own non-selectable `disabled` status — even under the admin `unlockAll`
+ * bypass it never becomes launchable.
+ * @returns {{id, title, briefing, status:'completed'|'available'|'locked'|'disabled', lockedHint?}[]}
  */
 export function missionRows(campaign, unlockAll = false) {
   return campaign.getMissionList()
-    .filter(m => unlockAll || m.visible)
+    .filter(m => m.disabled || unlockAll || m.visible)
     .map(m => {
-      const unlocked = unlockAll || m.available;
-      const status = m.completed ? 'completed' : unlocked ? 'available' : 'locked';
+      const unlocked = !m.disabled && (unlockAll || m.available);
+      const status = m.disabled ? 'disabled'
+        : m.completed ? 'completed'
+        : unlocked ? 'available' : 'locked';
       const def = campaign.getMissionDef(m.id);
       let lockedHint;
       if (status === 'locked') {
@@ -706,7 +712,9 @@ export function missionListPaneHTML(chapterTitle, rows) {
   }
   for (const r of rows) {
     const icon = r.status === 'completed' ? ICON.check : r.status === 'available' ? '→' : ICON.lock;
-    const desc = r.status === 'locked'
+    const desc = r.status === 'disabled'
+      ? 'Unavailable'
+      : r.status === 'locked'
       ? (r.lockedHint || 'Locked')
       : (r.briefing || '');
     html += `<div class="cprog-mission ${r.status}" data-mission="${r.id}">

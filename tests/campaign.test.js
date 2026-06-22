@@ -641,9 +641,11 @@ describe('Campaign class', () => {
     localStorage.clear();
   });
 
-  test('new campaign starts at firstMission with empty roster', () => {
+  test('new campaign starts at the first playable mission with empty roster', () => {
     const c = new Campaign(hollowDef);
-    assert.equal(c.currentMission, 'tutorial');
+    // firstMission is `tutorial`, but the tutorial is disabled (shelved), so a
+    // fresh campaign opens on the first PLAYABLE mission (prologue) instead.
+    assert.equal(c.currentMission, 'prologue');
     assert.equal(c.roster.length, 0);
     assert.equal(c.completedMissions.size, 0);
   });
@@ -767,10 +769,12 @@ describe('Campaign class', () => {
   test('getMissionList returns correct statuses', () => {
     const c = new Campaign(hollowDef);
     const list = c.getMissionList();
-    assert.equal(list.length, 13);     // tutorial + 7 story + 5 villages
-    // On a fresh save only the two prereq-free openers are playable.
-    assert.ok(list[0].available);      // tutorial — no prereqs
-    assert.ok(list[1].available);      // prologue (The Awakening) — no prereqs either
+    assert.equal(list.length, 13);     // tutorial + 7 story + 5 villages (tutorial still LISTED, greyed)
+    // The tutorial is disabled — listed but never playable.
+    assert.ok(list[0].disabled);       // tutorial — shelved
+    assert.ok(!list[0].available);     // disabled ⇒ never launchable
+    // On a fresh save only the prereq-free opener (prologue) is playable.
+    assert.ok(list[1].available);      // prologue (The Awakening) — no prereqs
     for (let i = 2; i < list.length; i++) {
       assert.ok(!list[i].available, `${list[i].id} should be locked on a fresh save`);
     }
@@ -779,8 +783,8 @@ describe('Campaign class', () => {
   test('getMissionList visibility shows only completed + playable + immediate-next', () => {
     const c = new Campaign(hollowDef);
     const list = c.getMissionList();
-    assert.ok(list[0].visible);        // tutorial — playable now
-    assert.ok(list[1].visible);        // prologue — also playable now (no prereqs)
+    assert.ok(list[0].visible && list[0].disabled);  // tutorial — shown greyed, non-selectable
+    assert.ok(list[1].visible);        // prologue — playable now (no prereqs)
     assert.ok(list[2].visible);        // gathering_survivors — one step away from prologue
     for (let i = 3; i < list.length; i++) {
       assert.ok(!list[i].visible, `${list[i].id} should be hidden on a fresh save`);
@@ -790,7 +794,7 @@ describe('Campaign class', () => {
     // reveals the next mission after it.
     c.completedMissions.add('prologue');
     const list2 = c.getMissionList();
-    assert.ok(list2[0].visible && list2[0].available); // tutorial — still playable
+    assert.ok(list2[0].visible && list2[0].disabled);  // tutorial — still shown greyed
     assert.ok(list2[1].visible && list2[1].completed); // prologue — completed
     assert.ok(list2[2].visible && list2[2].available); // gathering_survivors — now playable
     assert.ok(list2[3].visible && !list2[3].available);// first_night — now one step away
@@ -1067,25 +1071,29 @@ describe('Campaign class', () => {
     localStorage.clear();
   });
 
+  // The live campaign shelves the tutorial (disabled), so progress totals count
+  // only the PLAYABLE missions — 12 of the 13 listed.
+  const PLAYABLE_TOTAL = hollowDef.missions.filter(m => !m.disabled).length;
+
   test('getStatus returns "new" for a fresh campaign', () => {
     const c = new Campaign(hollowDef);
     assert.equal(c.getStatus(), 'new');
     assert.equal(c.getCompletedCount(), 0);
-    assert.equal(c.getMissionCount(), hollowDef.missions.length);
+    assert.equal(c.getMissionCount(), PLAYABLE_TOTAL);   // disabled tutorial excluded
   });
 
   test('getStatus returns "in-progress" with some missions completed', () => {
     const c = new Campaign(hollowDef);
-    c.completedMissions.add(hollowDef.missions[0].id);
+    c.completedMissions.add('prologue');                 // a PLAYABLE mission
     assert.equal(c.getStatus(), 'in-progress');
     assert.equal(c.getCompletedCount(), 1);
   });
 
-  test('getStatus returns "completed" when all missions are completed', () => {
+  test('getStatus returns "completed" when all playable missions are completed', () => {
     const c = new Campaign(hollowDef);
     for (const m of hollowDef.missions) c.completedMissions.add(m.id);
     assert.equal(c.getStatus(), 'completed');
-    assert.equal(c.getCompletedCount(), hollowDef.missions.length);
+    assert.equal(c.getCompletedCount(), PLAYABLE_TOTAL); // disabled tutorial never counts
   });
 
   test('static getCampaignProgress returns "new" with no save', () => {
@@ -1093,18 +1101,18 @@ describe('Campaign class', () => {
     const p = Campaign.getCampaignProgress(hollowDef);
     assert.equal(p.status, 'new');
     assert.equal(p.completed, 0);
-    assert.equal(p.total, hollowDef.missions.length);
+    assert.equal(p.total, PLAYABLE_TOTAL);               // disabled tutorial excluded
   });
 
   test('static getCampaignProgress reports in-progress from saved state', () => {
     localStorage.clear();
     const c = new Campaign(hollowDef);
-    c.completedMissions.add(hollowDef.missions[0].id);
+    c.completedMissions.add('prologue');                 // a PLAYABLE mission
     c.save();
     const p = Campaign.getCampaignProgress(hollowDef);
     assert.equal(p.status, 'in-progress');
     assert.equal(p.completed, 1);
-    assert.equal(p.total, hollowDef.missions.length);
+    assert.equal(p.total, PLAYABLE_TOTAL);
     localStorage.clear();
   });
 
@@ -1115,8 +1123,8 @@ describe('Campaign class', () => {
     c.save();
     const p = Campaign.getCampaignProgress(hollowDef);
     assert.equal(p.status, 'completed');
-    assert.equal(p.completed, hollowDef.missions.length);
-    assert.equal(p.total, hollowDef.missions.length);
+    assert.equal(p.completed, PLAYABLE_TOTAL);           // disabled tutorial never counts
+    assert.equal(p.total, PLAYABLE_TOTAL);
     localStorage.clear();
   });
 

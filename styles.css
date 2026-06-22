@@ -7885,6 +7885,16 @@ body.spectator-mode #game-screen   { display: flex !important; }
   border-left-color: rgba(255,255,255,0.1);
 }
 .cprog-mission.locked .cprog-mission-name { color: var(--clr-dim, #999); }
+/* Disabled missions: shelved via `disabled:true` in the mission JSON. Greyed
+   and non-selectable — dimmer than a merely-locked row, no hover affordance. */
+.cprog-mission.disabled {
+  opacity: 0.4;
+  border-left-color: rgba(255,255,255,0.08);
+  cursor: default;
+  pointer-events: none;
+}
+.cprog-mission.disabled .cprog-mission-name { color: var(--clr-dim, #999); }
+.cprog-mission.disabled .cprog-mission-icon { opacity: 0.6; }
 
 @media (hover: hover) {
   .cprog-mission.available:hover {

@@ -231,6 +231,15 @@
 .lg-mission.is-locked .lg-mission-name { color:#6a6356; }
 .lg-mission-mark { font-size:14px; color:var(--lg-faint); }
 .lg-mission.is-done .lg-mission-mark { color:var(--lg-green); }
+/* Disabled missions: shelved (e.g. via `disabled:true` in the mission JSON).
+   Shown greyed and non-selectable — dimmer than a locked row so it reads as
+   "unavailable", not "play this next". No hover/cursor affordance. */
+.lg-mission.is-disabled { opacity:.4; cursor:default; }
+.lg-mission.is-disabled:hover { background:none; }
+.lg-mission.is-disabled .lg-mission-thumb { filter:grayscale(1) brightness(.4); }
+.lg-mission.is-disabled .lg-mission-name,
+.lg-mission.is-disabled .lg-mission-n { color:#6a6356; }
+.lg-mission.is-disabled .lg-mission-mark { color:var(--lg-faint); }
 
 /* Account */
 .lg-account { display:flex; align-items:center; gap:14px; background:rgba(16,18,26,.66); border:1px solid #2a2540;
