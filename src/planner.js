@@ -132,12 +132,27 @@ export function snapEntity(entity) {
  * @param {string|null} currentWeaponId  the unit's live equipped weapon id
  * @returns {string|null} the projected equipped weapon id
  */
+/**
+ * The weapon id an action would EQUIP, or null. Players equip via a USE_ITEM
+ * action whose item is a weapon (the action arc emits `data-action="use_item"`,
+ * queued as USE_ITEM); EQUIP_WEAPON is the legacy/AI-plan form. Both flip the
+ * equipped weapon at resolution (executeUseItem → equipWeapon), so range /
+ * guard-zone projection must honour BOTH — otherwise post-equip highlights
+ * silently use the live weapon's reach.
+ */
+export function weaponEquippedByAction(action) {
+  if (!action) return null;
+  if (action.type === PlanActionType.EQUIP_WEAPON) return action.weapon ?? null;
+  if (action.type === PlanActionType.USE_ITEM && ITEMS[action.item]?.kind === 'weapon') return action.item;
+  return null;
+}
+
 export function projectEquippedWeaponId(plan, entityId, currentWeaponId = null) {
   let weaponId = currentWeaponId;
   for (const a of (plan ?? [])) {
-    if (a.type === PlanActionType.EQUIP_WEAPON && a.entityId === entityId && a.weapon) {
-      weaponId = a.weapon;
-    }
+    if (a.entityId !== entityId) continue;
+    const w = weaponEquippedByAction(a);
+    if (w) weaponId = w;
   }
   return weaponId;
 }
@@ -210,10 +225,12 @@ export function computeGhostState(state, plan) {
       // Give the new unit a temporary id for ghost rendering.
       const ghostId = `ghost-summon-${steps.length}`;
       positions.set(ghostId, { col: spawnCol, row: spawnRow });
-    } else if (action.type === PlanActionType.EQUIP_WEAPON) {
-      // Project the weapon switch so range-driven highlights for THIS and later
-      // steps reflect the post-equip weapon (mirrors how MOVE advances position).
-      if (action.weapon) weapons.set(action.entityId, action.weapon);
+    } else {
+      // Project a weapon switch — a USE_ITEM of a weapon (the real UI path) or a
+      // legacy EQUIP_WEAPON — so range-driven highlights for THIS and later steps
+      // reflect the post-equip reach (mirrors how MOVE advances position).
+      const equipped = weaponEquippedByAction(action);
+      if (equipped) weapons.set(action.entityId, equipped);
     }
 
     steps.push({

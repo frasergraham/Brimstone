@@ -58,6 +58,62 @@ describe('projectEquippedWeaponId projects the queued weapon switch', () => {
   });
 });
 
+// ── The REAL UI path: equips are queued as USE_ITEM of a weapon ────────────────
+//
+// The action arc emits `data-action="use_item"` for weapon equips (ui.js
+// _buildActionPopup), so the queued action is { type: USE_ITEM, item: <weaponId> },
+// NOT EQUIP_WEAPON. The projection must treat a USE_ITEM of a weapon as the equip
+// — otherwise range/guard highlights never reflect the switch in actual play even
+// though the EQUIP_WEAPON-only tests above pass. (executeUseItem equips a weapon
+// item at resolution, so the projection must match.)
+
+describe('weapon equips queued as USE_ITEM (the real UI path) project too', () => {
+  test('projectEquippedWeaponId: USE_ITEM of a weapon switches the projected weapon', () => {
+    const plan = [{ type: PlanActionType.USE_ITEM, entityId: 'h', item: 'bow' }];
+    assert.equal(projectEquippedWeaponId(plan, 'h', 'sword'), 'bow');
+  });
+
+  test('projectEquippedWeaponId: USE_ITEM of a non-weapon item leaves the weapon', () => {
+    const plan = [{ type: PlanActionType.USE_ITEM, entityId: 'h', item: 'food' }];
+    assert.equal(projectEquippedWeaponId(plan, 'h', 'sword'), 'sword');
+  });
+
+  test('projectEquippedWeaponId: only this unit\'s USE_ITEM equip is projected', () => {
+    const plan = [{ type: PlanActionType.USE_ITEM, entityId: 'other', item: 'bow' }];
+    assert.equal(projectEquippedWeaponId(plan, 'h', 'sword'), 'sword');
+  });
+
+  test('computeGhostState: a USE_ITEM weapon equip lands in the weapons map', () => {
+    const state = freshState();
+    const hero  = state.hero;
+    hero.equipWeapon('sword'); // live: melee, range 1
+    const steps = computeGhostState(state, [
+      { type: PlanActionType.USE_ITEM, entityId: hero.id, item: 'bow' },
+    ]);
+    assert.equal(steps[steps.length - 1].weapons.get(hero.id), 'bow',
+      'a USE_ITEM weapon equip must project the post-equip weapon (range highlights depend on it)');
+  });
+
+  test('end-to-end: a USE_ITEM bow equip makes a distance-2 enemy a valid target', () => {
+    const state = freshState();
+    state.fogOfWar = 'none';
+    const hero = state.hero;
+    const minion = createMinion();
+    state.entities = state.entities.filter(e => e.id === hero.id);
+    hero.equipWeapon('sword'); // melee, range 1
+    hero.col = 5; hero.row = 5;
+    minion.col = 7; minion.row = 5; // distance 2
+    state.entities.push(minion);
+
+    const plan = [{ type: PlanActionType.USE_ITEM, entityId: hero.id, item: 'bow' }];
+    const projected = applyProjectedEquip(hero, projectEquippedWeaponId(
+      plan, hero.id, hero.getEquippedWeaponId()));
+    const battle = getValidActions(state, projected).find(a => a.type === ActionType.BATTLE);
+    assert.ok(battle?.targets.some(t => t.id === minion.id),
+      'after a queued USE_ITEM bow equip the distance-2 minion must become attackable');
+  });
+});
+
 // ── applyProjectedEquip: build a highlight-source entity with the projected weapon
 
 describe('applyProjectedEquip yields an entity whose range reflects the projection', () => {

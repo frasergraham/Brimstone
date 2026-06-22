@@ -2283,17 +2283,20 @@ export class UIController {
       return;
     }
 
-    // In planning mode use projected position so attack is available after a planned move
+    // In planning mode use the unit's PROJECTED position (after queued MOVEs) and
+    // PROJECTED weapon (after a queued equip) so the arc's available actions and
+    // their range reflect what the plan LEAVES the unit as — not the live state.
+    // Mirrors _selectEntity; applyProjectedEquip re-parents to Entity.prototype so
+    // hasAbility / getAttack / getRange still resolve.
     let effectiveEntity = entity;
     if (this._planMode) {
-      const proj = this._getProjectedPos(entity.id);
-      if (proj && (proj.col !== entity.col || proj.row !== entity.row)) {
-        // Re-parent the spread to Entity.prototype so methods like
-        // hasAbility / getAttack still resolve; plain spread loses them.
-        effectiveEntity = Object.setPrototypeOf(
-          { ...entity, col: proj.col, row: proj.row },
-          Object.getPrototypeOf(entity)
-        );
+      const proj          = this._getProjectedPos(entity.id);
+      const projWeapon    = this._getProjectedWeaponId(entity.id);
+      const posChanged    = proj && (proj.col !== entity.col || proj.row !== entity.row);
+      const weaponChanged = projWeapon && projWeapon !== entity.getEquippedWeaponId();
+      if (posChanged || weaponChanged) {
+        effectiveEntity = applyProjectedEquip(entity, weaponChanged ? projWeapon : null);
+        if (posChanged) { effectiveEntity.col = proj.col; effectiveEntity.row = proj.row; }
       }
     }
     const actions = getValidActions(state, effectiveEntity);
