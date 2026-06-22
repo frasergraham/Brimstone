@@ -1981,7 +1981,7 @@
                 "col": 11,
                 "row": 6
               },
-              "spawnLog": " A wood golem crashes out of the thicket to cover her escape!"
+              "spawnLog": "\uE098 A wood golem crashes out of the thicket to cover her escape!"
             },
             {
               "type": "wood_golem",
@@ -1989,7 +1989,7 @@
                 "col": 9,
                 "row": 8
               },
-              "spawnLog": " Another golem lurches between you and the altar!"
+              "spawnLog": "\uE098 Another golem lurches between you and the altar!"
             },
             {
               "type": "wood_golem",
@@ -1997,7 +1997,7 @@
                 "col": 10,
                 "row": 4
               },
-              "spawnLog": " A third golem blocks the path she took into the shadows!"
+              "spawnLog": "\uE098 A third golem blocks the path she took into the shadows!"
             }
           ]
         },
