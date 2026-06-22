@@ -29,7 +29,7 @@
   "enemyUnits": [],
   "aiPersonality": "balanced",
   "aiBudgetBonus": 0,
-  "maxSurvivorsFromRoster": 0,
+  "maxSurvivorsFromRoster": 3,
   "missionSurvivors": 0,
   "maxDiscoverableSurvivors": 1,
   "objectives": {

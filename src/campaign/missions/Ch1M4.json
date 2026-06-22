@@ -18,7 +18,7 @@
   "disableScoring": true,
   "aiPersonality": "aggressive",
   "aiBudgetBonus": 2,
-  "maxSurvivorsFromRoster": 2,
+  "maxSurvivorsFromRoster": 3,
   "minSurvivors": 2,
   "missionSurvivors": 1,
   "maxDiscoverableSurvivors": 1,

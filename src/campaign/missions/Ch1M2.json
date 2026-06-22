@@ -28,7 +28,7 @@
   "disableScoring": true,
   "aiPersonality": "balanced",
   "aiBudgetBonus": 1,
-  "maxSurvivorsFromRoster": 0,
+  "maxSurvivorsFromRoster": 3,
   "missionSurvivors": 0,
   "maxDiscoverableSurvivors": 4,
   "startingResources": {},

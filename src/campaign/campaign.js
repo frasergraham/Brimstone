@@ -276,6 +276,27 @@ export function collectFallenAfterMission(entities, missionId) {
 }
 
 /**
+ * Ordered deploy spots for a mission's starting party: a mission's authored
+ * `survivorStartPositions` are used FIRST, then hero-start neighbours (deduped)
+ * as overflow. This lets the full allowed party deploy even when a mission
+ * authored fewer positions than its start cap (e.g. 2 spots but a party of up
+ * to 3) instead of silently dropping the surplus — the placement mechanism is
+ * unchanged, only short position lists no longer cap the party below its size.
+ * Pure: takes plain {col,row} lists, returns a new ordered list.
+ *
+ * @param {{col:number,row:number}[]|null} explicitSpots  mission.survivorStartPositions, or null/empty
+ * @param {{col:number,row:number}[]} neighbors           hero-start neighbours (fallback + overflow)
+ * @returns {{col:number,row:number}[]}
+ */
+export function deploySpots(explicitSpots, neighbors) {
+  if (!explicitSpots || explicitSpots.length === 0) return [...(neighbors ?? [])];
+  const overflow = (neighbors ?? []).filter(
+    n => !explicitSpots.some(s => s.col === n.col && s.row === n.row)
+  );
+  return [...explicitSpots, ...overflow];
+}
+
+/**
  * Build victory/defeat delegate function from mission objectives.
  * Returns a function (state) => { winner, winReason, log } | null.
  *

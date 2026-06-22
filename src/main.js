@@ -54,7 +54,7 @@ import { nodeController } from './game.js';
 import { MissionConductor, areHintsSuppressed, markHintsSeen, resetAllHintsForCampaign } from './mission-conductor.js';
 import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel, getEquippedWeaponIdOf, normalizeItems, flattenItemCounts } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
-import { Campaign, CAMPAIGN_SLOT_COUNT, getActiveSlot, setActiveSlot, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
+import { Campaign, CAMPAIGN_SLOT_COUNT, getActiveSlot, setActiveSlot, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout, deploySpots } from './campaign/campaign.js';
 import { CAMPAIGNS } from './campaign/campaign-registry.js';
 import { campaignMissionNumber as _campaignMissionNumber, campaignMissionTotal as _campaignMissionTotal, hasCampaignToContinue } from './campaign/continue-resolver.js';
 import { saveThumb, deleteThumb, loadThumb, saveStats, loadStats, campaignMissionRowId } from './menu/thumbnails.js';
@@ -4677,7 +4677,10 @@ function _initCampaignMission(missionDef) {
       ? [...missionDef.survivorStartPositions]
       : null;
     const neighbors = getNeighbors(heroStart.col, heroStart.row);
-    const spots = explicitSpots ?? neighbors;
+    // Authored positions first, then hero-neighbours as overflow (deploySpots),
+    // so a mission that authored fewer positions than its start cap still
+    // deploys the full allowed party instead of silently dropping the surplus.
+    const spots = deploySpots(explicitSpots, neighbors);
     for (let i = 0; i < toDeploy.length && i < spots.length; i++) {
       const rosterEntry = _activeCampaign.roster[toDeploy[i]];
       if (!rosterEntry) continue;

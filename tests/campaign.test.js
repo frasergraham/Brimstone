@@ -8,7 +8,7 @@ import { EntityType, createMinion, createZombie, createWoodGolem, createSurvivor
 import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import {
   Campaign, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves,
-  reconcileRosterAfterMission, applyCarriedHeroLoadout, rosterSnapshotFromName,
+  reconcileRosterAfterMission, applyCarriedHeroLoadout, rosterSnapshotFromName, deploySpots,
 } from '../src/campaign/campaign.js';
 import { getFaction } from '../src/factions.js';
 import { hasLineOfSight } from '../src/actions.js';
@@ -1570,6 +1570,40 @@ describe('Roster balancing config', () => {
     }
   });
 
+  test('every mission allows the full ≤4-total start party (no cap below PARTY_CAP)', () => {
+    // Every campaign mission must let the player field up to 4 total units
+    // (hero + 3 survivors). An unset cap defaults to PARTY_CAP (3); a set cap
+    // must therefore be >= 3 so no mission silently caps the party lower.
+    for (const m of hollowDef.missions) {
+      assert.ok((m.maxSurvivorsFromRoster ?? 3) >= 3,
+        `${m.id}: maxSurvivorsFromRoster (${m.maxSurvivorsFromRoster}) caps the start party below 4 total units`);
+      assert.ok((m.maxSurvivors ?? 3) >= 3,
+        `${m.id}: maxSurvivors (${m.maxSurvivors}) caps the start party below 4 total units`);
+    }
+  });
+
+  test('deploySpots: no authored positions → hero-neighbours (unchanged fallback)', () => {
+    const neighbors = [{ col: 1, row: 0 }, { col: 0, row: 1 }];
+    assert.deepEqual(deploySpots(null, neighbors), neighbors);
+    assert.deepEqual(deploySpots([], neighbors), neighbors);
+  });
+
+  test('deploySpots: authored positions first, then hero-neighbours as overflow', () => {
+    const explicit  = [{ col: 3, row: 6 }, { col: 1, row: 6 }];
+    const neighbors = [{ col: 5, row: 5 }, { col: 6, row: 5 }];
+    const spots = deploySpots(explicit, neighbors);
+    assert.deepEqual(spots.slice(0, 2), explicit);       // authored placements first
+    // A 3rd selected survivor (beyond the 2 authored spots) overflows to a neighbour.
+    assert.deepEqual(spots[2], { col: 5, row: 5 });
+    assert.equal(spots.length, 4);
+  });
+
+  test('deploySpots: overflow neighbours dedupe against authored positions', () => {
+    const explicit  = [{ col: 5, row: 5 }];
+    const neighbors = [{ col: 5, row: 5 }, { col: 6, row: 5 }]; // first coincides with authored
+    assert.deepEqual(deploySpots(explicit, neighbors), [{ col: 5, row: 5 }, { col: 6, row: 5 }]);
+  });
+
   test('minSurvivors <= maxSurvivors when both set', () => {
     for (const m of hollowDef.missions) {
       if (m.minSurvivors != null && m.maxSurvivors != null) {
@@ -2569,9 +2603,10 @@ describe('Mission 3 (The First Night) balance', () => {
     assert.equal(pws.survivors, 2);
   });
 
-  test('guarantees a party of two via minSurvivors and maxSurvivorsFromRoster', () => {
+  test('guarantees a party of two (min) and allows up to the full ≤4-total party', () => {
     assert.equal(mission3.minSurvivors, 2);
-    assert.equal(mission3.maxSurvivorsFromRoster, 2);
+    // Start cap raised so every mission can field up to 4 total units (hero + 3).
+    assert.equal(mission3.maxSurvivorsFromRoster, 3);
     // No hidden-survivor discovery — the night is a fixed-party defense.
     assert.equal(mission3.missionSurvivors, 0);
     assert.equal(mission3.maxDiscoverableSurvivors, 0);
@@ -2670,9 +2705,13 @@ describe('Mission 4 (The River Crossing) balance', () => {
     assert.equal(mission4.phaseCycle.loop, true);
   });
 
-  test('starts with a guaranteed party of two survivors', () => {
-    assert.equal(mission4.maxSurvivorsFromRoster, 2);
+  test('guarantees two survivors (min) and allows up to the full ≤4-total party', () => {
+    // Start cap raised so the player can field up to 4 total units (hero + 3);
+    // the minimum of two is preserved (the river crossing needs a party).
+    assert.equal(mission4.maxSurvivorsFromRoster, 3);
     assert.equal(mission4.minSurvivors, 2);
+    // Two authored start positions remain; a 3rd selected survivor overflows to
+    // a hero-neighbour at deploy time (see main.js roster deploy).
     assert.ok(Array.isArray(mission4.survivorStartPositions));
     assert.equal(mission4.survivorStartPositions.length, 2);
   });
