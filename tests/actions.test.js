@@ -1301,6 +1301,85 @@ describe('executeBattle — splash damage', () => {
   });
 });
 
+// ── Vanilla splash is a flat 2d6 chip (no margin scaling) ─────────────────────
+// Regression guard for the "punch-down" exploit: crushing a weak 0-defence unit
+// used to inflate the margin → a 14/21 blast that bypassed the defence of the
+// strong units stacked with it. Vanilla splash is now a flat 2d6 (2–12), so it
+// can never one-shot anything (the smallest unit has 14 HP) and never scales
+// with the margin. The brute keeps its margin-scaled blast (brute-faction.test).
+describe('executeBattle — vanilla splash is flat 2d6', () => {
+  test('a huge-margin crush still splashes at most 12 (no margin scaling)', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.attackBonus = 100; // enormous margin — would be a 21 blast under the old rule
+    const target = createMinion(hero.col, hero.row);
+    target.hp = 1; target.maxHp = 1; // dies to the direct hit
+    state.entities.push(target);
+    // Strong unit stacked on the same hex — the would-be exploit victim.
+    const golem = createMinion(hero.col, hero.row);
+    golem.hp = 99; golem.maxHp = 99;
+    state.entities.push(golem);
+
+    const r = executeBattle(state, hero, target);
+    assert.ok(r.killed, 'weak target dies to the direct hit');
+    const dmg = 99 - golem.hp;
+    assert.ok(dmg >= 2 && dmg <= 12,
+      `vanilla splash should be 2d6 (2–12), not margin-scaled; got ${dmg}`);
+  });
+
+  test('vanilla splash never one-shots a 14-HP unit in a single blast', () => {
+    for (let i = 0; i < 40; i++) {
+      const state = freshState();
+      const hero = state.hero;
+      hero.attackBonus = 100;
+      const target = createMinion(hero.col, hero.row);
+      target.hp = 1; target.maxHp = 1;
+      state.entities.push(target);
+      const bystander = createMinion(hero.col, hero.row);
+      bystander.hp = 14; bystander.maxHp = 14; // smallest unit in the game
+      state.entities.push(bystander);
+
+      executeBattle(state, hero, target);
+      assert.ok(bystander.alive && bystander.hp >= 2,
+        `14-HP unit should survive one 2d6 splash (max 12); hp=${bystander.hp}`);
+    }
+  });
+
+  test('vanilla splash damage varies with 2d6', () => {
+    const seen = new Set();
+    for (let i = 0; i < 60; i++) {
+      const state = freshState();
+      const hero = state.hero;
+      hero.attackBonus = 100;
+      const target = createMinion(hero.col, hero.row);
+      target.hp = 1; target.maxHp = 1;
+      state.entities.push(target);
+      const bystander = createMinion(hero.col, hero.row);
+      bystander.hp = 99; bystander.maxHp = 99;
+      state.entities.push(bystander);
+
+      executeBattle(state, hero, target);
+      seen.add(99 - bystander.hp);
+    }
+    assert.ok(seen.size > 1, 'splash damage should vary (2d6), not be a fixed value');
+    for (const d of seen) assert.ok(d >= 2 && d <= 12, `each splash within 2..12; got ${d}`);
+  });
+
+  test('a vanilla crush with no same-hex bystander still resolves (no victims)', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.attackBonus = 100;
+    const target = createMinion(hero.col, hero.row);
+    target.hp = 1; target.maxHp = 1;
+    state.entities.push(target);
+
+    const r = executeBattle(state, hero, target);
+    assert.ok(r.killed, 'target dies');
+    assert.deepStrictEqual(r.splashHits, [], 'no bystander → no splash hits');
+    assert.deepStrictEqual(r.splashKills, [], 'no bystander → no splash kills');
+  });
+});
+
 // ── Premium-weapon loot tier gate ─────────────────────────────────────────────
 // greatsword/warhammer are gated to late rounds (LOOT_TIER_GATE). Exercise the
 // real explore→_effectiveLoot→rollLoot path: before the gate they can NEVER drop;

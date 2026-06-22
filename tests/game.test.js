@@ -1010,7 +1010,7 @@ describe('swapLeaderToFaction', () => {
     const state = new GameState(true, true);
     state.swapLeaderToFaction('night', 'brute');
     assert.equal(state.witch.type,    'brute');
-    assert.equal(state.witch.maxHp,   126);
+    assert.equal(state.witch.maxHp,   100);
     assert.equal(state.witch.attack,   4);
     assert.equal(state.witch.defense,  3);
     assert.equal(state.witch.agility,  3);

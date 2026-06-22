@@ -13,7 +13,6 @@ import { pickUnitSlot } from './hex-slots.js';
 import { ITEMS, getWeaponDamage } from './items.js';
 import { ABILITIES } from './abilities.js';
 import {
-  DAMAGE_SCALE,
   XP_PER_EXPLORE, XP_PER_FORTIFY_BASE, XP_PER_FORTIFY_LEVEL_BONUS,
   XP_PER_HIT, XP_PER_CRUSH, XP_PER_KILL, XP_PER_DEFEND, XP_PER_COUNTER,
   ALLY_XP_SHARE,
@@ -951,7 +950,13 @@ function _applyLoot(state, actor, lootType, log, lootItems, lootItemIds) {
 // Options:
 //   extraRadius   — extends the blast outward by N hex steps (1 = the 6
 //                   neighbours around (col,row) are also splashed).
-//   damage        — base damage per splashed bystander (default 1).
+//   damage        — base damage per splashed bystander (default 1). May be
+//                   a thunk `() => number`; it is then rolled ONCE per blast
+//                   and only when there is at least one victim, so a splash
+//                   that lands on an empty hex consumes no dice (the die
+//                   stream — and every downstream roll — stays identical to a
+//                   no-splash resolution). All victims of one blast share the
+//                   single rolled value.
 //   sparesOwner   — owner string ('hero' / 'witch'); units of that owner
 //                   are skipped (no damage, no knockback). Friendly-fire
 //                   toggle.
@@ -979,11 +984,16 @@ function _applySplashDamage(state, col, row, excludeIds, log, opts = {}) {
     e => e.alive && hexKeys.has(hexKey(e.col, e.row)) && !excludeSet.has(e.id) &&
          (sparesOwner == null || e.owner !== sparesOwner)
   );
+  // Resolve a `damage` thunk lazily — rolled once, and only when the blast
+  // has a victim, so an empty-hex splash leaves the die stream untouched.
+  const splashDamage = (typeof damage === 'function')
+    ? (bystanders.length ? damage() : 0)
+    : damage;
   const splashKills = [];
   const splashHits  = [];
   for (const b of bystanders) {
     const fromCol = b.col, fromRow = b.row;
-    const dmg = b.applyIncomingDamage(damage, (sd) => state.nextDie(sd));
+    const dmg = b.applyIncomingDamage(splashDamage, (sd) => state.nextDie(sd));
     const wasKilled = b.takeDamage(dmg);
     log.push(`${ICON.splash} ${b.displayName} caught in the blast — takes ${dmg} splash damage! (${b.hp}/${b.maxHp} HP)`);
     let pushedTo = null;
@@ -1255,6 +1265,7 @@ export function executeBattle(state, actor, target, opts = {}) {
   const splashEveryHit   = attackerConcrete.splashesOnEveryHit();
   const splashSpareSide  = attackerConcrete.splashSparesAllies() ? actor.owner : null;
   const splashKnockback  = attackerConcrete.splashKnockback();
+  const splashScalesMargin = attackerConcrete.splashScalesWithMargin();
   // Ranged attacks cannot crush — the rule set explicitly forbids it.
   // Damage tiers by roll ratio multiply the rolled weapon damage: great crush
   // (≥3× defense roll) = 3×, crush (≥2×) = 2×, ordinary hit = 1×. isGreatCrush
@@ -1311,20 +1322,33 @@ export function executeBattle(state, actor, target, opts = {}) {
 
     // Splash damage: vanilla rule splashes only on crush / kill. The
     // brute's `splashesOnEveryHit()` lets the blast fire on any hit.
-    // Splash damage scales with the attacker's roll margin —
-    // `max(1, floor(margin / 3))`, capped at 3 — so big swings turn
-    // into bigger blasts. Bystanders may be knocked one hex outward
-    // and friendly units may be spared, both per concrete faction.
+    // Bystanders may be knocked one hex outward and friendly units may
+    // be spared, both per concrete faction.
     // Ranged attacks never splash (no crush, no AOE).
     if (!isRanged && (isCrush || killed || splashEveryHit)) {
-      // Splash level (1–3) scales with the roll margin, then ×DAMAGE_SCALE so a
-      // blast stays proportional to a normal hit against the scaled HP pools.
-      const splashBaseDamage = Math.max(1, Math.min(3, Math.floor(margin / 3))) * DAMAGE_SCALE;
+      // Splash amount depends on the faction. The brute's blast scales with the
+      // roll margin — tier 1–3 = clamp(floor(margin/3), 1, 3) — and rolls that
+      // many d6 (1d6 / 2d6 / 3d6, averaging 3.5 / 7 / 10.5), so a bigger swing
+      // still means a bigger blast but the damage is now a variable dice roll
+      // rather than a fixed 7 / 14 / 21. Vanilla crush/kill splash is a flat 2d6
+      // chip (≈7, max 12 < the smallest 14-HP unit) that does NOT scale with
+      // margin: crushing a weak unit can no longer delete the strong units stacked
+      // with it (the margin off a 0-defence target used to inflate the blast while
+      // bypassing the bystanders' defence entirely). Both are thunks so the dice
+      // roll only when the blast has a victim (see _applySplashDamage).
+      const splashDamage = splashScalesMargin
+        ? () => {
+            const tier = Math.max(1, Math.min(3, Math.floor(margin / 3)));
+            let dmg = 0;
+            for (let i = 0; i < tier; i++) dmg += state.nextDie(6);
+            return dmg;
+          }
+        : () => state.nextDie(6) + state.nextDie(6);
       const splash = _applySplashDamage(
         state, target.col, target.row, [actor.id, target.id], log,
         {
           extraRadius: splashRadius,
-          damage:      splashBaseDamage,
+          damage:      splashDamage,
           sparesOwner: splashSpareSide,
           knockback:   splashKnockback,
         }
@@ -1394,7 +1418,11 @@ export function executeBattle(state, actor, target, opts = {}) {
           state, actor.col, actor.row, [target.id, actor.id], log,
           {
             extraRadius: defenderConcrete.crushSplashRadius(),
-            damage:      DAMAGE_SCALE, // counter-splash = one scaled point (no margin to scale on)
+            // Counter-splash has no margin to scale on → tier 1: the brute rolls
+            // 1d6, vanilla rolls its flat 2d6 chip.
+            damage:      defenderConcrete.splashScalesWithMargin()
+                           ? () => state.nextDie(6)
+                           : () => state.nextDie(6) + state.nextDie(6),
             sparesOwner: defenderConcrete.splashSparesAllies() ? target.owner : null,
             knockback:   defenderConcrete.splashKnockback(),
           }

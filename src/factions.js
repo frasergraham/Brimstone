@@ -134,6 +134,15 @@ export class Faction {
   splashKnockback() { return false; }
 
   /**
+   * If true, splash damage scales with the attacker's roll margin
+   * (1–3 points ×DAMAGE_SCALE) — the brute's signature. Default vanilla
+   * rule: splash is a flat 2d6 chip (≈7, never lethal to a >12-HP unit)
+   * that does NOT scale with margin, so crushing a weak unit can't be
+   * used to delete the strong units stacked alongside it.
+   */
+  splashScalesWithMargin() { return false; }
+
+  /**
    * Resource cost for summoning a Minion. Defaults to 2 (witch's value)
    * — overridden by faction stubs that want cheaper chaff (brute = 1).
    */
@@ -914,6 +923,10 @@ export class BruteFaction extends WitchFaction {
   // (when the destination is open). Repositioning is the headline
   // tactical effect — the damage tax is secondary.
   splashKnockback() { return true; }
+
+  // The brute's blast scales with the roll margin (1–3 points ×7) —
+  // unlike vanilla splash, which is a flat 2d6 chip.
+  splashScalesWithMargin() { return true; }
 
   // Brute summons only minions, and at a discount — 1 of any resource
   // instead of the witch's 2. Cheap chaff so she has bodies to soak
