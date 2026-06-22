@@ -170,6 +170,8 @@ export function serializeState(state) {
               : {}),
         }
       : null,
+    // One-shot guard for the non-looping cycle-end deadline (mission onCycleEnd).
+    cycleEndFiredAt:      state._cycleEndFiredAt ?? null,
     maxDiscoverableSurvivors: state.maxDiscoverableSurvivors ?? null,
     discoveredSurvivorCount:  state.discoveredSurvivorCount ?? 0,
     // Campaign permadeath — names excluded from the discovery pool. Must survive
@@ -501,6 +503,7 @@ export function deserializeState(snap) {
             : {}),
       }
     : null;
+  state._cycleEndFiredAt     = snap.cycleEndFiredAt ?? null;
 
   // ── Planning fields ──────────────────────────────────────────────────────
   state.planningPhase    = snap.planningPhase ?? false;

@@ -1144,6 +1144,59 @@ input, textarea, select, [contenteditable], [contenteditable] * {
 #cycle-bump.phase-dusk  #cycle-bump-icon { box-shadow: 0 0 6px rgba(180,60,0,0.65);   }
 #cycle-bump.phase-night #cycle-bump-icon { box-shadow: 0 0 8px rgba(123,79,187,0.70); }
 
+/* Deadline countdown (fixed-end / non-looping missions only) — sits inside the
+   cycle bump after the phase label. Hidden for normal/looping games. */
+#cycle-deadline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding-left: 0.5rem;
+  margin-left: 0.1rem;
+  border-left: 1px solid rgba(255,255,255,0.12);
+}
+#cycle-deadline[hidden] { display: none; }
+#cycle-deadline-count {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #e8d9a8;
+  white-space: nowrap;
+}
+#cycle-deadline-track {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+#cycle-deadline-track .cd-seg {
+  width: 7px;
+  height: 9px;
+  border-radius: 2px;
+  background: rgba(255,255,255,0.12);          /* future / empty */
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.35);
+  flex: 0 0 auto;
+}
+#cycle-deadline-track .cd-seg.past   { background: rgba(200,157,255,0.55); }
+#cycle-deadline-track .cd-seg.active {
+  background: #f5c842;
+  box-shadow: 0 0 5px rgba(245,200,66,0.85), inset 0 0 0 1px rgba(0,0,0,0.35);
+  animation: cd-pulse 1.6s ease-in-out infinite;
+}
+/* The deadline (final) segment is always outlined gold so the goal is visible. */
+#cycle-deadline-track .cd-seg.deadline {
+  width: 9px;
+  box-shadow: inset 0 0 0 1.5px rgba(245,200,66,0.9);
+}
+#cycle-deadline-track .cd-seg.deadline.active {
+  box-shadow: 0 0 6px rgba(245,200,66,0.95), inset 0 0 0 1.5px rgba(245,200,66,1);
+}
+@keyframes cd-pulse {
+  0%, 100% { opacity: 1;    }
+  50%      { opacity: 0.55; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #cycle-deadline-track .cd-seg.active { animation: none; }
+}
+
 .turn-line { font-size: var(--fs-sm); color: #b8ac98; }
 
 .turn-faction {
@@ -3690,6 +3743,9 @@ body.renderer-3d.debug-counters #cam-counter { display: block; }
   /* Cycle bump stays compact; just tighten padding on narrow screens */
   #cycle-bump { padding: 0.2rem 0.55rem; gap: 0.3rem; }
   #cycle-bump-icon { width: 16px; height: 16px; }
+  #cycle-deadline { gap: 0.3rem; padding-left: 0.4rem; }
+  #cycle-deadline-track .cd-seg { width: 5px; height: 8px; }
+  #cycle-deadline-track .cd-seg.deadline { width: 7px; }
 
   /* game-main fills all remaining height; canvas is the only child */
   #game-main { overflow: hidden; min-height: 0; }

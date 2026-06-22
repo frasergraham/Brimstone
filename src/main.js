@@ -4490,6 +4490,18 @@ function initScenario(def) {
     if (u.ref) byRef.set(u.ref, e);
   }
 
+  // Dev hook: a fixed-end (non-looping) day-cycle + a starting round, so the
+  // verifier can screenshot the cycle-bar deadline countdown without grinding a
+  // real campaign mission. cycleConfig: { phases:[…], loop:false }; round: N.
+  if (def.cycleConfig) {
+    state.cycleConfig = { phases: [...def.cycleConfig.phases], loop: !!def.cycleConfig.loop };
+    if (def.disableScoring) state.disableScoring = true;
+  }
+  if (def.round && def.round > 1) {
+    state.round = def.round;
+    state.phase = phaseForRound(state.round, state.cycleConfig);
+  }
+
   _setupLocalUI(canvas, null, null, false);  // also drives the loading reveal
   redraw();
 

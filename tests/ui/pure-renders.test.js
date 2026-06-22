@@ -13,6 +13,7 @@ import {
   buildNodeBadgeHtml,
   buildUnitDetailHtml,
   buildCycleInfoHtml,
+  buildCycleDeadlineHtml,
 } from '../../src/ui-render.js';
 import { PlanActionType } from '../../src/planner.js';
 import { EntityType } from '../../src/entities.js';
@@ -536,6 +537,52 @@ describe('buildCycleInfoHtml', () => {
     const html = buildCycleInfoHtml({ ...baseState, round: 1, disableScoring: true });
     assert.ok(!html.toLowerCase().includes('node scoring'), 'no scoring mention in phase descs');
     assert.ok(html.includes('attrition rises'), 'rest of the dawn blurb kept');
+  });
+});
+
+// ── buildCycleDeadlineHtml (fixed-end mission countdown track) ─────────────────
+
+describe('buildCycleDeadlineHtml', () => {
+  // First Night-shaped cycle: dusk + 5 nights + dawn (loop:false), ends at dawn.
+  const firstNight = { phases: ['dusk', 'night', 'night', 'night', 'night', 'night', 'dawn'], loop: false };
+
+  test('returns null for normal (no cycleConfig) games — bar unchanged', () => {
+    assert.equal(buildCycleDeadlineHtml({ round: 3, cycleConfig: null }), null);
+  });
+
+  test('returns null for looping cycles — bar unchanged', () => {
+    const cd = buildCycleDeadlineHtml({ round: 3, cycleConfig: { phases: ['dawn', 'day', 'day', 'day'], loop: true } });
+    assert.equal(cd, null);
+  });
+
+  test('exposes total / current / remaining / deadline phase for a non-looping cycle', () => {
+    const cd = buildCycleDeadlineHtml({ round: 3, cycleConfig: firstNight });
+    assert.ok(cd);
+    assert.equal(cd.total, 7);
+    assert.equal(cd.current, 3);
+    assert.equal(cd.remaining, 4);              // 4 full rounds AFTER this one
+    assert.equal(cd.deadlinePhase, 'dawn');
+    assert.ok(cd.countLabel.includes('Round 3 / 7'), 'count label shows X / N');
+  });
+
+  test('track has one segment per round, exactly one active, with the deadline marked', () => {
+    const cd = buildCycleDeadlineHtml({ round: 3, cycleConfig: firstNight });
+    assert.equal((cd.trackHtml.match(/cd-seg/g) || []).length, 7, 'one segment per round');
+    assert.equal((cd.trackHtml.match(/cd-seg[^"]*\bactive/g) || []).length, 1, 'exactly one active');
+    assert.equal((cd.trackHtml.match(/cd-seg[^"]*\bpast/g) || []).length, 2, 'two past segments (rounds 1-2)');
+    assert.equal((cd.trackHtml.match(/cd-seg[^"]*\bdeadline/g) || []).length, 1, 'final segment marked deadline');
+  });
+
+  test('clamps a round past the end to the deadline round (matches phaseForRound clamp)', () => {
+    // Round 9 on a 7-phase cycle still reads as the final (deadline) round.
+    const cd = buildCycleDeadlineHtml({ round: 9, cycleConfig: firstNight });
+    assert.equal(cd.current, 7);
+    assert.equal(cd.remaining, 0);
+    // The last segment is both active and the deadline once we are on it.
+    assert.equal((cd.trackHtml.match(/cd-seg[^"]*\bactive/g) || []).length, 1);
+    const segs = cd.trackHtml.match(/<span class="[^"]*"><\/span>/g);
+    assert.ok(segs[segs.length - 1].includes('active') && segs[segs.length - 1].includes('deadline'),
+      'the final segment is the active deadline on the last round');
   });
 });
 

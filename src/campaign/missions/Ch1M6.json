@@ -1619,10 +1619,7 @@
       },
       {
         "id": "n19",
-        "type": "onRoundStart",
-        "params": {
-          "round": "any"
-        },
+        "type": "onCycleEnd",
         "x": 40,
         "y": 920
       },
@@ -1643,10 +1640,7 @@
       },
       {
         "id": "n21",
-        "type": "onRoundStart",
-        "params": {
-          "round": "any"
-        },
+        "type": "onCycleEnd",
         "x": 40,
         "y": 1030
       },

@@ -929,6 +929,51 @@ const PHASE_DESC_NO_SCORING = Object.freeze({
   dusk: 'Seek cover before night',
 });
 
+/**
+ * Deadline-countdown data + track HTML for a fixed-end (non-looping) mission's
+ * cycle bar. Returns null for normal/looping games so they render unchanged.
+ *
+ * The track is one segment per round of the cycle: rounds already played are
+ * filled, the current round pulses, and the final round (the deadline) is
+ * marked. Pure — the HUD passes the rendered string straight into the DOM.
+ *
+ * @returns {{ total:number, current:number, remaining:number, deadlinePhase:string,
+ *             countLabel:string, trackHtml:string } | null}
+ */
+export function buildCycleDeadlineHtml(state) {
+  const cfg = state.cycleConfig;
+  if (!cfg || cfg.loop || !Array.isArray(cfg.phases) || cfg.phases.length === 0) return null;
+
+  const total = cfg.phases.length;
+  // Clamp the displayed round into the cycle: the final turn (and any clamped
+  // overflow) reads as the deadline round, never N+1 (see phaseForRound clamp).
+  const current   = Math.min(Math.max(state.round, 1), total);
+  const remaining = Math.max(0, total - current);   // full rounds left AFTER this one
+  const deadlinePhase = cfg.phases[total - 1];
+
+  // Segmented track: past = filled, current = active, future = empty; the final
+  // (deadline) segment carries a marker class regardless of state.
+  let trackHtml = '';
+  for (let i = 0; i < total; i++) {
+    const phase = cfg.phases[i];
+    const cls = ['cd-seg', `phase-${phase}`];
+    if (i + 1 < current)  cls.push('past');
+    else if (i + 1 === current) cls.push('active');
+    else cls.push('future');
+    if (i === total - 1) cls.push('deadline');
+    trackHtml += `<span class="${cls.join(' ')}"></span>`;
+  }
+
+  return {
+    total,
+    current,
+    remaining,
+    deadlinePhase,
+    countLabel: `${ICON.hourglass} Round ${current} / ${total}`,
+    trackHtml,
+  };
+}
+
 export function buildCycleInfoHtml(state, icons = {}) {
   const phases   = state.cycleConfig?.phases ?? DEFAULT_CYCLE_PHASES;
   const cycleLen = phases.length;

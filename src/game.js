@@ -372,6 +372,12 @@ export class GameState {
     // Shape: { phases: string[], loop: boolean }
     this.cycleConfig = null;
 
+    // One-shot guard for the non-looping cycle-end deadline (mission logic
+    // `onCycleEnd`). Holds the cycle length the `cycleEnd` event last fired at so
+    // it fires exactly once per deadline (and re-arms if extendOnWitchScore grows
+    // the cycle). null = not yet fired. Serialized for online/resume parity.
+    this._cycleEndFiredAt = null;
+
     // Attrition level: hazard damage dealt to exposed units (see attritionForCycle).
     this.attritionLevel    = 1;
     this.attritionChanged  = false; // true for exactly one planning phase after a level-up
@@ -973,6 +979,20 @@ export class GameState {
       for (const f of ['hero', 'witch']) {
         if (this.entities.every(e => !(e.alive && e.owner === f))) eng.dispatch('factionAllDead', { faction: f });
         if (this.factionEliminated(f)) eng.dispatch('factionLeaderDead', { faction: f });
+      }
+      // Cycle-end deadline (fixed-end missions): fire ONCE the final turn of a
+      // non-looping cycle has resolved. endRound() has already advanced the round,
+      // so the final round (round == cycle length) resolving means this.round now
+      // exceeds the cycle length. This makes the deadline win/lose evaluate at the
+      // END of the final (e.g. dawn) turn the player just played — not its start.
+      // The deadline moves with extendOnWitchScore (cycle length grows), so the
+      // one-shot guard tracks the length it fired at.
+      if (this.cycleConfig && !this.cycleConfig.loop) {
+        const len = getCycleLength(this.cycleConfig);
+        if (this.round > len && this._cycleEndFiredAt !== len) {
+          this._cycleEndFiredAt = len;
+          eng.dispatch('cycleEnd', { phase: this.phase });
+        }
       }
     }
     return this.logicPresentation.slice(start);
