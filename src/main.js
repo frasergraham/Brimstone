@@ -5360,6 +5360,10 @@ function _gameDetail(row) {
     phaseLabel: _PHASE_NAMES[phase] ?? phase,
     mapSize:    stats?.mapSize ?? row.map_size ?? row.mapSize ?? null,
     thumb:      loadThumb(row.room_id),
+    // The persistent Battle has no first-to-N node goal — the detail panel must
+    // show a Day-vs-Night running total instead of the 4-dot tracker. Flow the
+    // row kind through so _detailStatsHTML can branch (hero=Day, witch=Night).
+    kind:       row.kind ?? null,
   };
   if (!stats) {
     return { ...base, score: null, kills: null, participants: null,
