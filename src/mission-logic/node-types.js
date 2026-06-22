@@ -154,6 +154,24 @@ registerNodeType({
   },
 });
 
+// On Cycle End — fires ONCE, at the END of the final turn of a non-looping day
+// cycle (loop:false), after that turn has fully resolved. This is the correct
+// fire point for a fixed-end mission's deadline win/lose: the final phase's turn
+// (e.g. dawn) is played by the player, THEN the outcome is evaluated. Wiring a
+// phase-deadline objectiveOutcome here (instead of onRoundStart) avoids the
+// off-by-one where the mission ended at the START of the final turn. The game
+// dispatches `cycleEnd` from pumpMissionLogic('postResolution') once the final
+// round (round == cycle length) has resolved. Inert for looping cycles.
+registerNodeType({
+  type: 'onCycleEnd',
+  kind: NodeKind.EVENT,
+  exec: { in: false, out: ['out'] },
+  data: { out: [{ name: 'phase', type: 'string' }] },
+  eventMatch: {
+    cycleEnd: () => 'out',
+  },
+});
+
 registerNodeType({
   type: 'onKillCount',
   kind: NodeKind.EVENT,

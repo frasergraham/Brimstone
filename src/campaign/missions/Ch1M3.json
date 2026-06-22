@@ -411,10 +411,7 @@
       },
       {
         "id": "n18",
-        "type": "onRoundStart",
-        "params": {
-          "round": "any"
-        },
+        "type": "onCycleEnd",
         "x": 40,
         "y": 920
       },
@@ -436,10 +433,7 @@
       },
       {
         "id": "n20",
-        "type": "onRoundStart",
-        "params": {
-          "round": "any"
-        },
+        "type": "onCycleEnd",
         "x": 40,
         "y": 1030
       },

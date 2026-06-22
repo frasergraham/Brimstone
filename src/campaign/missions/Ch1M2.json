@@ -224,10 +224,7 @@
       },
       {
         "id": "n16",
-        "type": "onRoundStart",
-        "params": {
-          "round": "any"
-        },
+        "type": "onCycleEnd",
         "x": 40,
         "y": 700
       },
@@ -372,6 +369,12 @@
         },
         "x": 1706.6560765822994,
         "y": 480
+      },
+      {
+        "id": "n29",
+        "type": "onCycleEnd",
+        "x": 20,
+        "y": 670
       }
     ],
     "edges": [
@@ -583,6 +586,17 @@
           "pin": "survivor"
         },
         "kind": "data"
+      },
+      {
+        "from": {
+          "node": "n29",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n15",
+          "pin": "in"
+        },
+        "kind": "exec"
       }
     ]
   },

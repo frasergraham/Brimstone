@@ -21,7 +21,7 @@ import { compileTurnBattleSummary, compileTurnXpSummary } from './battle-utils.j
 import { buildWrapupCombatsHtml, wrapupIconHtml } from './wrapup-summary.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
-import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildMissionLogHtml, buildMissionLogDescriptionHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos, TurnCardAutoScroll, shouldAutoScrollToActive, computeFadeFlags, buildActionPipsHtml, buildActionBudgetTooltipHtml } from './ui-render.js';
+import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildMissionLogHtml, buildMissionLogDescriptionHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, buildCycleDeadlineHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos, TurnCardAutoScroll, shouldAutoScrollToActive, computeFadeFlags, buildActionPipsHtml, buildActionBudgetTooltipHtml } from './ui-render.js';
 import {
   hideActionPopup, getEntityScreenPos, computeArcPositions,
   positionArcPopup, startArcTracking, positionPopup,
@@ -3004,12 +3004,16 @@ export class UIController {
     const cycleLen     = CYCLE_STEPS.length;
     const roundInCycle = (state.round - 1) % cycleLen;
     const cycle        = Math.ceil(state.round / cycleLen);
-    const roundLabel   = state.cycleConfig && !state.cycleConfig.loop
-      ? `Round ${state.round} of ${cyclePhases.length}`
+    const nonLooping   = !!(state.cycleConfig && !state.cycleConfig.loop);
+    const roundLabel   = nonLooping
+      ? `Round ${Math.min(state.round, cyclePhases.length)} of ${cyclePhases.length}`
       : `Day ${cycle} · Round ${roundInCycle + 1}`;
 
-    // Pill bump above the score bar: "[phase icon] Night — Day 1 · Round 2"
-    const activeStep = CYCLE_STEPS[roundInCycle];
+    // For a non-looping (fixed-end) cycle the clamped phase past the end stays the
+    // final phase — show the deadline phase + round once we reach/overshoot it so
+    // the icon/label match the countdown track rather than a stale modulo step.
+    const stepIdx    = nonLooping ? Math.min(roundInCycle, cycleLen - 1) : roundInCycle;
+    const activeStep = CYCLE_STEPS[stepIdx];
     const bumpEl   = this._el('cycle-bump');
     const iconEl   = this._el('cycle-bump-icon');
     const labelEl  = this._el('cycle-bump-label');
@@ -3023,6 +3027,24 @@ export class UIController {
     }
     if (labelEl && activeStep) {
       labelEl.textContent = `${activeStep.label} — ${roundLabel}`;
+    }
+
+    // Deadline countdown — only for non-looping (fixed-end) missions. Normal /
+    // looping games leave this hidden so their cycle bar is visually unchanged.
+    const deadlineEl  = this._el('cycle-deadline');
+    const countEl     = this._el('cycle-deadline-count');
+    const trackEl     = this._el('cycle-deadline-track');
+    if (deadlineEl) {
+      const cd = buildCycleDeadlineHtml(state);
+      if (cd) {
+        deadlineEl.hidden = false;
+        if (countEl)  countEl.textContent  = cd.countLabel;
+        if (trackEl)  trackEl.innerHTML     = cd.trackHtml;
+        if (bumpEl)   bumpEl.title          = `Mission ends at ${cd.deadlinePhase} (round ${cd.total})`;
+      } else {
+        deadlineEl.hidden = true;
+        if (trackEl) trackEl.innerHTML = '';
+      }
     }
 
     // During planning phase, show planning info
