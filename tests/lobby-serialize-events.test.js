@@ -69,6 +69,50 @@ describe('_serializeEvents — fortification HP fields preservation', () => {
   });
 });
 
+describe('_serializeEvents — replay-order + whiff fields preservation', () => {
+  // resOrder drives the replay's move-deferral (true cross-faction order);
+  // whiffTarget / targetFled drive the fled-attack whiff animation + card. All
+  // are top-level event fields — _serializeEvents is a strict allowlist, so
+  // they'd silently vanish online without an explicit copy.
+  test('resOrder survives the allowlist on an ACTION_OK', () => {
+    const ev = {
+      type: ResEventType.ACTION_OK, faction: 'hero', resOrder: 3,
+      action: { type: PlanActionType.MOVE, entityId: 'h1', toCol: 2, toRow: 2 },
+      result: { success: true, log: [], path: [{ col: 2, row: 2 }] },
+    };
+    const [out] = serializeEventsForTest([ev]);
+    assert.equal(out.resOrder, 3);
+  });
+
+  test('whiffTarget + targetFled survive on a fled-attack ACTION_SKIP', () => {
+    const ev = {
+      type: ResEventType.ACTION_SKIP, faction: 'witch', resOrder: 5,
+      action: { type: PlanActionType.BATTLE_UNIT, entityId: 'w1', targetId: 'h1' },
+      reason: 'Hero slipped away — out of reach.',
+      targetFled: true,
+      whiffTarget: { col: 4, row: 5 },
+      battleSnaps: { actorSnap: { id: 'w1', col: 3, row: 5 }, ranged: false },
+    };
+    const [out] = serializeEventsForTest([ev]);
+    assert.equal(out.targetFled, true);
+    assert.deepEqual(out.whiffTarget, { col: 4, row: 5 });
+    assert.equal(out.resOrder, 5);
+    assert.ok(out.battleSnaps?.actorSnap, 'battleSnaps still ride along');
+  });
+
+  test('absent resOrder / whiff fields are simply omitted (no undefined keys)', () => {
+    const ev = {
+      type: ResEventType.ACTION_OK, faction: 'hero',
+      action: { type: PlanActionType.GUARD, entityId: 'h1' },
+      result: { success: true, log: [] },
+    };
+    const [out] = serializeEventsForTest([ev]);
+    assert.ok(!('resOrder' in out));
+    assert.ok(!('whiffTarget' in out));
+    assert.ok(!('targetFled' in out));
+  });
+});
+
 describe('_serializeEvents — lootItems preservation', () => {
   test('lootItems array is preserved when resources were found', () => {
     const ev = makeExploreEvent(['+🪵', '+⚙']);

@@ -713,8 +713,16 @@ export function resolvePlansMP(state, playerEntries) {
     const eventsByPlayer = new Map();
     let anyAction = false;
 
+    // `resOrder`: monotonic per-step sequence in TRUE resolution order (the
+    // agility-sorted drain order, across ALL players/factions). Player buckets
+    // below discard the cross-bucket interleave, so this is the only record of
+    // which action resolved first — the replay defers a fleeing unit's move past
+    // any earlier-resolved strike on its pre-move hex. See the legacy path for
+    // the full rationale.
+    let _resOrder = 0;
     for (const c of candidates) {
       const events = drainOneStep(state, c.queue, c.player.budget);
+      for (const ev of events) ev.resOrder = _resOrder++;
       if (events.length === 0) continue;
       anyAction = true;
       let bucket = eventsByPlayer.get(c.player.playerId);
@@ -822,8 +830,19 @@ export function resolvePlans(state, heroPlan, witchPlan) {
     _sortCandidates(state, candidates);
     state._turnEndPositions = computeTurnEndPositions(candidates);
 
+    // Tag each drained event with `resOrder` — a monotonic per-step sequence in
+    // TRUE resolution order (the agility-sorted drain order, across BOTH
+    // factions). The faction buckets below discard the cross-faction interleave,
+    // so this is the only record of "the attack resolved before the move". The
+    // replay (src/main.js) reads it to defer a fleeing unit's move past any
+    // EARLIER-resolved strike that landed on its pre-move hex — exact ordering,
+    // not a position-only heuristic. (`reference_resolver_step_events_no_statesync`:
+    // step fields ride in _roundHistory JSON; only ONLINE _serializeEvents needs
+    // the allowlist entry.)
+    let _resOrder = 0;
     for (const c of candidates) {
       const events = drainOneStep(state, c.queue, c.budget);
+      for (const ev of events) ev.resOrder = _resOrder++;
       if (events.length > 0) c.sink.push(...events);
     }
 

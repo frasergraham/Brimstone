@@ -1373,6 +1373,15 @@ export function _serializeEvents(events) {
       faction: ev.faction,
       action:  ev.action,
       reason:  ev.reason ?? null,
+      // resOrder: true cross-faction resolution order within the step. The
+      // replay reads it to defer a fleeing unit's move past an earlier-resolved
+      // strike (src/main.js deferredMoveEntityIds) — drop it and online replay
+      // falls back to the position heuristic. whiffTarget / targetFled describe
+      // a swing at a fled/empty hex (ACTION_SKIP); without them online replay
+      // can't animate the whiff lunge or render the TARGET FLED card.
+      ...(ev.resOrder   != null ? { resOrder:   ev.resOrder }   : {}),
+      ...(ev.whiffTarget        ? { whiffTarget: ev.whiffTarget } : {}),
+      ...(ev.targetFled != null ? { targetFled: ev.targetFled } : {}),
     };
     if (ev.result) {
       out.result = {
