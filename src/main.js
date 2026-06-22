@@ -40,7 +40,7 @@ import { ITEMS } from './items.js';
 import { ABILITIES } from './abilities.js';
 import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
 import { isFactionAvailable } from './demo-config.js';
-import { compileTurnBattleSummary, compileTurnBattlePairs, collectTurnFinds, deferredMoveEntityIds } from './battle-utils.js';
+import { compileTurnBattleSummary, compileTurnBattlePairs, collectTurnFinds, deferredMoveEntityIds, groupWhiffEvents } from './battle-utils.js';
 import { collectWrapUpAttrition } from './post-round-effects.js';
 import { applyEffect } from './effects.js';
 import { installKeybindings } from './keybindings.js';
@@ -2816,10 +2816,18 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     }
 
     // ── Phase 2a: empty-hex attack whiffs (lunge + "no enemy" floater) ───────
+    // A fleeing target that out-ran a unit's WHOLE plan produces several
+    // identical whiffs against the same hex IN ONE STEP (drainOneStep loops over
+    // free skips). Replaying each as its own lunge+return reads as the same unit
+    // lunging at empty grass N times and (with the return not awaited in fast
+    // modes) warping back. Collapse runs of identical whiffs — same actor, same
+    // target hex — into ONE clean beat (the resolution is the same "swung at
+    // nothing"; N copies add no information). Each distinct (actor,hex) whiff
+    // still animates. `groupWhiffEvents` is pure + tested.
     const whiffEvents = allStepEvents.filter(
       ev => ev.type === ResEventType.ACTION_SKIP && ev.whiffTarget && ev.battleSnaps?.actorSnap
     );
-    for (const ev of whiffEvents) {
+    for (const ev of groupWhiffEvents(whiffEvents)) {
       const { actorSnap } = ev.battleSnaps;
       const { col: tCol, row: tRow } = ev.whiffTarget;
 
@@ -2851,9 +2859,13 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         redrawFn();
         await playbackDelay(speed === 'vfast' ? 200 : 400);
 
-        // Return lunge (projectiles self-clear on impact; this is a no-op for them)
+        // Return lunge, then ALWAYS settle it before the next presentation —
+        // not only in cinematic. Otherwise a following lunge (this step or the
+        // next) captures the standee mid-return as its "home" and the unit
+        // warps. waitForAnimations resolves immediately when nothing's in
+        // flight, so this is cheap for projectile whiffs that self-clear.
         renderer.returnAllLungeAnims();
-        if (speed === 'cinematic') await renderer.waitForAnimations();
+        await renderer.waitForAnimations();
         redrawFn();
       }
       // Reveal the whiff's NO TARGET / TARGET FLED note at the end of THIS

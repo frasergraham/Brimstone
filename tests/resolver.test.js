@@ -1415,4 +1415,46 @@ describe('resolvePlans — Agility ordering', () => {
     const witchFirstOk = step0.witchEvents.find(e => e.type === ResEventType.ACTION_OK);
     assert.ok(witchFirstOk, 'Witch minion (higher agility) should resolve its battle in step 0');
   });
+
+  test('resOrder records the TRUE cross-faction order: attack-before-move when the attacker is faster', () => {
+    // Replay bug A: a faster hero attacks while the witch is still adjacent, THEN
+    // the witch flees. The events land in SEPARATE faction buckets (heroEvents /
+    // witchEvents), which discards the interleave — `resOrder` is the only record
+    // that the strike resolved before the move. The replay reads it to defer the
+    // witch's move past the strike instead of warping her back for the hit.
+    const state = freshState();
+    const hero = state.hero;
+    const witch = state.witch;
+
+    const near = emptyPassableNeighbor(state, hero);
+    if (!near) return;
+    // Move the witch adjacent to the hero on a clean passable hex.
+    state.tiles.get(hexKey(near.col, near.row)) && clearFootprint(state.tiles.get(hexKey(near.col, near.row)));
+    witch.col = near.col; witch.row = near.row;
+
+    // Hero out-speeds the witch.
+    hero.agility = 9;
+    witch.agility = 2;
+
+    // Witch flees to a passable empty neighbour that isn't the hero's hex.
+    const flee = getNeighbors(witch.col, witch.row).find(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      if (!t || legacyTileType(t) === 'river' || isBuildingFootprint(t)) return false;
+      if (n.col === hero.col && n.row === hero.row) return false;
+      return !state.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
+    });
+    if (!flee) return;
+
+    const heroPlan  = [{ type: PlanActionType.BATTLE_UNIT, entityId: hero.id, targetId: witch.id, targetCol: witch.col, targetRow: witch.row }];
+    const witchPlan = [{ type: PlanActionType.MOVE, entityId: witch.id, toCol: flee.col, toRow: flee.row }];
+
+    const steps = resolvePlans(state, heroPlan, witchPlan);
+    const step0 = steps[0];
+    const atk  = step0.heroEvents.find(e => e.type === ResEventType.ACTION_OK && e.action.type === PlanActionType.BATTLE_UNIT);
+    const mv   = step0.witchEvents.find(e => e.type === ResEventType.ACTION_OK && e.action.type === PlanActionType.MOVE);
+    assert.ok(atk && mv, 'both the strike and the flee should resolve in step 0');
+    assert.equal(typeof atk.resOrder, 'number', 'strike carries a resOrder');
+    assert.equal(typeof mv.resOrder, 'number', 'move carries a resOrder');
+    assert.ok(atk.resOrder < mv.resOrder, 'the faster hero\'s strike must resolve BEFORE the witch\'s move');
+  });
 });
