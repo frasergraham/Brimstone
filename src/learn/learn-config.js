@@ -430,20 +430,20 @@ export const LEARN_STEPS = [
   {
     id: 'fortify_intro',
     title: 'Dig In',
-    body: 'You can fortify locations by using resources. Select a unit on the church, then click that selected unit again to bring up its action menu, and choose Fortify.',
+    body: 'You can fortify locations by using resources. On the church, click to select Ishmael — two units share the hex — then click him again to bring up his action menu and choose Fortify.',
     trigger: { type: 'action_queued', actionType: PlanActionType.FORTIFY },
     spotlight: { type: 'hex', col: CHURCH.col, row: CHURCH.row, arrow: 'down' },
     pulse: true, tooltipPos: 'bottom-left',
-    allowHexes: [CHURCH], allowActions: [ActionType.FORTIFY],
+    allowHexes: [CHURCH], allowActions: [ActionType.FORTIFY], allowUnits: [EntityType.HERO],
   },
   {
     id: 'guard_intro',
     title: 'Set a Trap',
-    body: 'We\'re not going to leave this spot, but we know the witch is coming — so we should be ready. Click the selected unit again to bring up its action menu, and choose Guard: it will prep one opportunity attack if an enemy moves within range. You can stack guards for more reactions.',
+    body: 'We\'re not going to leave this spot, but we know the witch is coming — so we should be ready. This time select Thomas, click him again to bring up his action menu, and choose Guard: it will prep one opportunity attack if an enemy moves within range. You can stack guards for more reactions.',
     trigger: { type: 'action_queued', actionType: PlanActionType.GUARD },
     spotlight: { type: 'hex', col: CHURCH.col, row: CHURCH.row, arrow: 'down' },
     pulse: true, tooltipPos: 'bottom-left',
-    allowHexes: [CHURCH], allowActions: [ActionType.GUARD],
+    allowHexes: [CHURCH], allowActions: [ActionType.GUARD], allowUnits: [EntityType.SURVIVOR],
   },
   {
     id: 'submit_r2',
@@ -466,9 +466,16 @@ export const LEARN_STEPS = [
   {
     id: 'node_intro',
     title: 'Power Nodes',
-    body: 'Killing the witch is one way to win the battle, but the more tactical path is to control the majority of POWER NODES on the map. The highlighted hexes are controlled by whoever has the most units present. At dawn and dusk each day, the faction with the most power nodes in their control scores. Four points and the battle is yours.',
+    body: 'Killing the witch is one way to win the battle, but the more tactical path is to control the majority of POWER NODES on the map. The highlighted hexes are controlled by whoever has the most units present.',
     trigger: 'click',
-    spotlight: { type: 'hex', col: CHURCH.col, row: CHURCH.row, arrow: 'down' },
+    spotlight: null, tooltipPos: 'center',
+  },
+  {
+    id: 'score_track',
+    title: 'Holding the Nodes',
+    body: 'Each power node carries a coloured circle showing who holds it — your colour or the witch\'s. The score track along the bottom fills as the controlling side scores at dawn and dusk. Four points and the battle is yours.',
+    trigger: 'click',
+    spotlight: { type: 'element', selector: '#score-bar', arrow: 'down' },
     pulse: true, tooltipPos: 'center',
   },
   {
