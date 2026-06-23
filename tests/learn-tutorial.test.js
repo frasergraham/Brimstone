@@ -10,6 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { GameState } from '../src/game.js';
+import { EntityType } from '../src/entities.js';
 import { getReachableHexes, computeLineOfSight, hasLineOfSight } from '../src/actions.js';
 import { hexDistance, hexKey } from '../src/hex.js';
 import { isBuildingFootprint } from '../src/tiles.js';
@@ -158,6 +159,20 @@ test('learn config: scripted MOVE plans use toCol/toRow (resolver field), so the
 test('learn steps: the combat step requires stacking TWO attacks before advancing', () => {
   const combat = LEARN_STEPS.find(s => s.id === 'combat_intro');
   assert.equal(combat.trigger.count, 2, 'combat_intro must gate on two attacks so the player can stack');
+});
+
+test('learn steps: combat restricts the disambiguation pick to the hero', () => {
+  const combat = LEARN_STEPS.find(s => s.id === 'combat_intro');
+  assert.ok(Array.isArray(combat.allowUnits) && combat.allowUnits.includes(EntityType.HERO),
+    'combat_intro must only allow picking the hero from the shared hex');
+});
+
+test('learn steps: each Submit step locks the map (no stray actions while awaiting Submit)', () => {
+  for (const s of LEARN_STEPS) {
+    if (s.trigger?.type === 'plan_submitted') {
+      assert.deepEqual(s.allowHexes, [], `submit step ${s.id} must lock the map with allowHexes: []`);
+    }
+  }
 });
 
 test('learn config: round-step map points at real steps and ends in a handoff', () => {

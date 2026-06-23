@@ -374,6 +374,8 @@ export const LEARN_STEPS = [
     trigger: { type: 'plan_submitted' },
     spotlight: { type: 'element', selector: '#plan-submit-btn', arrow: 'right' },
     pulse: true, tooltipPos: 'bottom-left',
+    // Waiting on Submit: lock the map so no stray actions can be queued.
+    allowHexes: [],
   },
   {
     id: 'watch_r0',
@@ -390,7 +392,7 @@ export const LEARN_STEPS = [
     trigger: { type: 'action_queued', actionType: PlanActionType.BATTLE_UNIT, entityType: EntityType.HERO, count: 2 },
     spotlight: { type: 'hex', col: Z1.col, row: Z1.row, arrow: 'down' },
     pulse: true, tooltipPos: 'bottom-left',
-    allowHexes: [CHURCH, Z1], allowActions: [],
+    allowHexes: [CHURCH, Z1], allowActions: [], allowUnits: [EntityType.HERO],
   },
   {
     id: 'combat_explain',
@@ -414,6 +416,8 @@ export const LEARN_STEPS = [
     trigger: { type: 'plan_submitted' },
     spotlight: { type: 'element', selector: '#plan-submit-btn', arrow: 'right' },
     pulse: true, tooltipPos: 'bottom-left',
+    // Waiting on Submit: lock the map so no stray actions can be queued.
+    allowHexes: [],
   },
   {
     id: 'watch_r1',
@@ -426,7 +430,7 @@ export const LEARN_STEPS = [
   {
     id: 'fortify_intro',
     title: 'Dig In',
-    body: 'You can fortify locations by using resources. Select a unit and have them fortify the building they are in.',
+    body: 'You can fortify locations by using resources. Select a unit on the church, then click that selected unit again to bring up its action menu, and choose Fortify.',
     trigger: { type: 'action_queued', actionType: PlanActionType.FORTIFY },
     spotlight: { type: 'hex', col: CHURCH.col, row: CHURCH.row, arrow: 'down' },
     pulse: true, tooltipPos: 'bottom-left',
@@ -435,7 +439,7 @@ export const LEARN_STEPS = [
   {
     id: 'guard_intro',
     title: 'Set a Trap',
-    body: 'We\'re not going to leave this spot, but we know the witch is coming — so we should be ready. Select the Guard action: your unit will prep for one opportunity attack if an enemy moves within range. You can stack multiple guards for more reactions, and Auto-Guard fills the rest of your budget with guards.',
+    body: 'We\'re not going to leave this spot, but we know the witch is coming — so we should be ready. Click the selected unit again to bring up its action menu, and choose Guard: it will prep one opportunity attack if an enemy moves within range. You can stack guards for more reactions.',
     trigger: { type: 'action_queued', actionType: PlanActionType.GUARD },
     spotlight: { type: 'hex', col: CHURCH.col, row: CHURCH.row, arrow: 'down' },
     pulse: true, tooltipPos: 'bottom-left',
@@ -448,6 +452,8 @@ export const LEARN_STEPS = [
     trigger: { type: 'plan_submitted' },
     spotlight: { type: 'element', selector: '#plan-submit-btn', arrow: 'right' },
     pulse: true, tooltipPos: 'bottom-left',
+    // Waiting on Submit: lock the map so no stray actions can be queued.
+    allowHexes: [],
   },
   {
     id: 'watch_r2',

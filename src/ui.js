@@ -149,6 +149,8 @@ export class UIController {
     // (the default, and free play after handoff) means no restriction.
     this.tutorialAllowedHexes   = null;
     this.tutorialAllowedActions = null;
+    // Restrict which units may be picked from a multi-unit hex (by entity type).
+    this.tutorialAllowedUnits   = null;
     // One-shot: set by the conductor when a MOVE completes a gated step, so the
     // post-move re-select deselects instead of chaining (keeps unit-switching clean).
     this._tutorialSuppressReselect = false;
@@ -3356,6 +3358,14 @@ export class UIController {
     if (action === 'pick_unit') {
       this._pendingDisambig = null;
       const unit = state.entities.find(e => e.id === button.dataset.unitId);
+      // Strict tutorial gating: the disambiguation picker still shows BOTH units
+      // (the player learns to choose), but only the scripted unit may actually be
+      // picked — the hero, not the townsperson sharing the hex. Picking the wrong
+      // one re-shows the picker so the player tries again rather than stalling.
+      if (unit && this.tutorialAllowedUnits && !this.tutorialAllowedUnits.has(unit.type)) {
+        if (this._pendingUnitPick) this._showActionPopup(null);
+        return;
+      }
       if (unit) this._selectEntity(unit);
       this._updateSidebar();
       this.onRedraw();

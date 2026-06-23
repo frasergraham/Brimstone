@@ -148,6 +148,19 @@ export class MissionConductor {
       this._voiceBtn.style.display = this._config.voiceKey ? '' : 'none';
       this._syncVoiceBtn();
     }
+
+    // Scripted guidance owns the plan: disable the Clear and Auto-Guard buttons
+    // so the player can't discard the scripted plan or queue stray actions and
+    // break the deterministic flow. Restored in destroy() at the handoff.
+    if (this._mode === 'scripted') this._lockPlanControls(true);
+  }
+
+  /** Enable/disable the plan controls the tutorial must own (Clear, Auto-Guard). */
+  _lockPlanControls(locked) {
+    for (const id of ['plan-clear-btn', 'plan-autoguard-btn']) {
+      const btn = document.getElementById(id);
+      if (btn) { btn.disabled = locked; btn.style.opacity = locked ? '0.4' : ''; }
+    }
   }
 
   /** Kick off the conductor. Scripted: show step 0. Hints: wait for planning. */
@@ -314,6 +327,7 @@ export class MissionConductor {
     }
     this._stopVoice();
     this._clearSpotlight();
+    if (this._mode === 'scripted') this._lockPlanControls(false);
     if (this._tooltip) this._tooltip.style.display = 'none';
     if (this._skipLink) this._skipLink.style.display = 'none';
     if (this.renderer) this.renderer.tutorialSpotlightHex = null;
@@ -322,6 +336,7 @@ export class MissionConductor {
       this.ui.tutorialSubmitBlocked = false;
       this.ui.tutorialAllowedHexes = null;
       this.ui.tutorialAllowedActions = null;
+      this.ui.tutorialAllowedUnits = null;
     }
     // Detach the shared-button listeners added in the constructor. Without this
     // a destroyed conductor lingers (held alive by the DOM listener) and re-runs
@@ -419,6 +434,7 @@ export class MissionConductor {
       : null;
     const acts = step.allowActions !== undefined ? step.allowActions : this._config.actionWhitelist;
     this.ui.tutorialAllowedActions = Array.isArray(acts) ? new Set(acts) : null;
+    this.ui.tutorialAllowedUnits = Array.isArray(step.allowUnits) ? new Set(step.allowUnits) : null;
 
     // Clear any lingering selection when JUMPING into a gated step out of band
     // (roundStepMap jumps at planning start). For a step reached by completing a
@@ -458,6 +474,7 @@ export class MissionConductor {
       this.ui.tutorialSubmitBlocked = false;
       this.ui.tutorialAllowedHexes = null;
       this.ui.tutorialAllowedActions = null;
+      this.ui.tutorialAllowedUnits = null;
     }
   }
 
