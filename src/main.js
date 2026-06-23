@@ -9504,6 +9504,10 @@ function _ledgerCampaignData() {
       missions: (c.getMissionList?.() ?? []).map(m => ({
         id: m.id, title: m.title, completed: !!m.completed, available: !!m.available,
         disabled: !!m.disabled,
+        // Stable catalog number (tutorial=0, prologue=1, …) — NOT the list position,
+        // so dropping disabled missions doesn't renumber the survivors. Matches the
+        // briefing's "Mission N" and the on-disk Ch1M<N> files.
+        number: _campaignMissionNumber(camp, m.id) ?? 0,
         chapter: c.getMissionDef?.(m.id)?.chapter ?? 1,
         briefing: c.getMissionDef?.(m.id)?.briefing ?? '',
       })),

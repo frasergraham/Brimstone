@@ -74,6 +74,21 @@ export const COMMANDS = Object.freeze({
     describe: 'Show/hide the on-canvas FPS counter',
     run: (ctx) => ctx.renderer?._toggleFpsCounter?.(),
   },
+  freecam: {
+    describe: 'Unlock the camera to orbit/zoom/pan from any angle (/freecam off to relock)',
+    run: (ctx) => {
+      if (!ctx.renderer?.toggleFreeCamera) {
+        return 'Free camera unavailable — start a mission first.';
+      }
+      const arg = (ctx.args?.[0] || '').toLowerCase();
+      const lock = arg === 'off' || arg === 'false' || arg === '0' || arg === 'stop' || arg === 'lock';
+      const on = ctx.renderer.toggleFreeCamera(!lock);
+      if (!lock && !on) return 'Free camera unavailable — the 3D scene is still loading.';
+      return on
+        ? `${ICON.eye} Free camera ON — drag to orbit (any angle), wheel to zoom, ctrl/right-drag to pan. /freecam off to relock.`
+        : `${ICON.eye} Free camera OFF — camera relocked to the board view.`;
+    },
+  },
   aiassist: {
     describe: 'Watch an AI play: /aiassist (manual button) · /aiassist auto · /aiassist off',
     run: (ctx) => {

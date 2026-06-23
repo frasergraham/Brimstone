@@ -314,13 +314,16 @@ const CHAPTER_TITLES = {
 };
 
 /** Bucket a flat mission list into ordered chapters, preserving each mission's
- *  overall campaign index (used for its Roman-numeral label). Missions with no
- *  `chapter` tag fall into Chapter 1. */
+ *  overall campaign number (used for its Roman-numeral label). We use the stable
+ *  catalog `number` (tutorial=0, prologue=1, …), NOT the list position — so a
+ *  dropped disabled mission never renumbers the rest. Missions with no `chapter`
+ *  tag fall into Chapter 1. */
 function _groupByChapter(missions) {
   const order = [];
   const byChapter = new Map();
-  missions.forEach((m, index) => {
+  missions.forEach((m, pos) => {
     const chapter = Number.isFinite(m.chapter) ? m.chapter : 1;
+    const index = Number.isFinite(m.number) ? m.number : pos;
     if (!byChapter.has(chapter)) { byChapter.set(chapter, []); order.push(chapter); }
     byChapter.get(chapter).push({ m, index });
   });

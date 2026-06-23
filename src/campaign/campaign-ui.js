@@ -669,18 +669,17 @@ export function debriefRewardsSectionHTML(rewards) {
  * launchable. Each row carries a status and, for locked rows, a hint naming the
  * blocking mission.
  *
- * A `disabled` mission (shelved via `disabled:true` in its JSON) always renders
- * as its own non-selectable `disabled` status — even under the admin `unlockAll`
- * bypass it never becomes launchable.
- * @returns {{id, title, briefing, status:'completed'|'available'|'locked'|'disabled', lockedHint?}[]}
+ * Disabled missions (shelved via `disabled:true`) never reach here — getMissionList
+ * drops them entirely. A LOCKED row (prerequisites unmet) is the only non-launchable
+ * status; it stays listed so the player can see what's coming.
+ * @returns {{id, title, briefing, status:'completed'|'available'|'locked', lockedHint?}[]}
  */
 export function missionRows(campaign, unlockAll = false) {
   return campaign.getMissionList()
-    .filter(m => m.disabled || unlockAll || m.visible)
+    .filter(m => unlockAll || m.visible)
     .map(m => {
-      const unlocked = !m.disabled && (unlockAll || m.available);
-      const status = m.disabled ? 'disabled'
-        : m.completed ? 'completed'
+      const unlocked = unlockAll || m.available;
+      const status = m.completed ? 'completed'
         : unlocked ? 'available' : 'locked';
       const def = campaign.getMissionDef(m.id);
       let lockedHint;
@@ -703,6 +702,7 @@ export function missionRows(campaign, unlockAll = false) {
  * The mission-list pane.
  * @param {string} chapterTitle  campaign.def.title
  * @param {object[]} rows  [{ id, title, briefing?, status:'completed'|'available'|'locked', lockedHint? }]
+ *   (disabled missions are dropped upstream by getMissionList, so no 'disabled' status here)
  */
 export function missionListPaneHTML(chapterTitle, rows) {
   let html = `<div class="cprog-chapter-title">${chapterTitle}</div>`;
@@ -712,9 +712,7 @@ export function missionListPaneHTML(chapterTitle, rows) {
   }
   for (const r of rows) {
     const icon = r.status === 'completed' ? ICON.check : r.status === 'available' ? '→' : ICON.lock;
-    const desc = r.status === 'disabled'
-      ? 'Unavailable'
-      : r.status === 'locked'
+    const desc = r.status === 'locked'
       ? (r.lockedHint || 'Locked')
       : (r.briefing || '');
     html += `<div class="cprog-mission ${r.status}" data-mission="${r.id}">

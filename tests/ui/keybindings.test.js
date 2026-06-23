@@ -146,6 +146,7 @@ describe('executeConsoleCommand', () => {
       _toggleBorderForest: () => calls.push('forest'),
       _cycleFogDebugMode:  () => calls.push('fog'),
       _toggleFpsCounter:   () => { calls.push('fps'); return 'FPS counter shown'; },
+      toggleFreeCamera:    (on) => { calls.push(`freecam:${on}`); return !!on; },
     };
     return { renderer, calls };
   }
@@ -170,6 +171,29 @@ describe('executeConsoleCommand', () => {
     const res = executeConsoleCommand('/help', {});
     assert.equal(res.ok, true);
     assert.match(res.message, /\/fps/);
+    assert.match(res.message, /\/freecam/);
+  });
+
+  test('/freecam unlocks the camera (toggleFreeCamera(true)) and echoes ON', () => {
+    const { renderer, calls } = makeCtx();
+    const res = executeConsoleCommand('/freecam', { renderer });
+    assert.equal(res.ok, true);
+    assert.match(res.message, /Free camera ON/);
+    assert.deepEqual(calls, ['freecam:true']);
+  });
+
+  test('/freecam off relocks the camera (toggleFreeCamera(false)) and echoes OFF', () => {
+    const { renderer, calls } = makeCtx();
+    const res = executeConsoleCommand('/freecam off', { renderer });
+    assert.equal(res.ok, true);
+    assert.match(res.message, /Free camera OFF/);
+    assert.deepEqual(calls, ['freecam:false']);
+  });
+
+  test('/freecam reports unavailable when no renderer/camera is ready', () => {
+    const res = executeConsoleCommand('/freecam', { renderer: {} });
+    assert.equal(res.ok, true);
+    assert.match(res.message, /unavailable/);
   });
 
   test('leading slash is optional and names are case-insensitive', () => {

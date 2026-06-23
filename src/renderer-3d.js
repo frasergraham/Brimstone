@@ -86,6 +86,7 @@ import {
 export { BLOCK_WORD_VARIANTS };   // re-exported for existing importers (main.js)
 import { getFactionTheme } from './theme.js';
 import { hexKey, hexDistance, getNeighbors, hexRange } from './hex.js';
+import { buildRiverChannelGeometry, classifyRiverEdges, RIVER_SHAPES } from './river-channel-mesh.js';
 import { nodeController, Phase } from './game.js';
 import { findFaction, sightRangeForEntity } from './factions.js';
 import { computeLineOfSight, hasLineOfSight } from './actions.js';
@@ -97,7 +98,7 @@ import {
   makeOverlay, overlayMaterialKey,
 } from './overlays.js';
 import {
-  hexSplatWeights, hexFogWeights, hexTintWeights, splatChannelForTile,
+  hexSplatWeights, hexFogWeights, hexTintWeights, splatChannelForTile, SPLAT_DIRT,
   worldToHex, neighborDeltas, DEFAULT_TERRAIN_TINTS,
 } from './terrain-splat.js';
 import { makeTerrainSplatPlugin, SPLAT_UNIFORM_DEFAULTS } from './terrain-splat-plugin.js';
@@ -6724,6 +6725,7 @@ export class Renderer3D {
     };
 
     this._onCustomPointerDown = (e) => {
+      if (this._cameraFree) return; // debug free-cam: hand input to Babylon's built-in controls
       // We capture the pointer so move/up still fire if the user drags off-
       // canvas; this is important for the buttons row at the bottom edge.
       try { this.canvas.setPointerCapture?.(e.pointerId); } catch { /* ignore */ }
@@ -6780,6 +6782,7 @@ export class Renderer3D {
     };
 
     this._onCustomPointerMove = (e) => {
+      if (this._cameraFree) return; // debug free-cam — see toggleFreeCamera
       const entry = pointers.get(e.pointerId);
       if (!entry) return; // pointer never went down inside the canvas
       entry.prevX = entry.x;
@@ -6830,6 +6833,7 @@ export class Renderer3D {
     };
 
     this._onCustomPointerUp = (e) => {
+      if (this._cameraFree) return; // debug free-cam — see toggleFreeCamera
       pointers.delete(e.pointerId);
       try { this.canvas.releasePointerCapture?.(e.pointerId); } catch { /* ignore */ }
       // Drop two-finger state on transition back to fewer pointers — the next
@@ -6860,7 +6864,7 @@ export class Renderer3D {
     };
 
     this._onCustomWheel = (e) => {
-      if (this.viewLocked) return;
+      if (this.viewLocked || this._cameraFree) return; // free-cam: Babylon wheel-zoom drives radius
       const cam = this._camera;
       if (!cam) return;
       e.preventDefault();
@@ -6886,6 +6890,56 @@ export class Renderer3D {
     // Stop the touch-action default so scrollback / pull-to-refresh doesn't
     // hijack a vertical pan on iOS Safari.
     if (this.canvas.style) this.canvas.style.touchAction = 'none';
+  }
+
+  /** DEBUG free-camera toggle. Driven by the in-game console command `/freecam`
+   *  (`/freecam off` to relock) — see `COMMANDS.freecam` in keybindings.js.
+   *
+   *  Unlocked, the custom board-game input early-returns on `_cameraFree`,
+   *  handing the camera to Babylon's built-in ArcRotateCamera controls — drag
+   *  orbits (including tilt), wheel zooms, ctrl/right-drag pans. The beta +
+   *  radius limits are lifted and `_onBeforeRender` skips the target-to-ground,
+   *  pan-extent, and tilt-on-zoom clamps so you can fly to any angle/height.
+   *  Relocking restores the saved limits, re-snaps beta into range, and pins the
+   *  target back to Y=0. Visual-only — never touches game state or the loop. */
+  toggleFreeCamera(on = true) {
+    const cam = this._camera;
+    if (!cam || !this._babylon) return false;
+    const want = !!on;
+    if (want === !!this._cameraFree) return want; // idempotent — no double attach/detach
+    if (want) {
+      // Snapshot the locked limits so relock restores them byte-for-byte.
+      this._lockedCamLimits = {
+        lowerBeta: cam.lowerBetaLimit, upperBeta: cam.upperBetaLimit,
+        lowerRadius: cam.lowerRadiusLimit, upperRadius: cam.upperRadiusLimit,
+        panningSensibility: cam.panningSensibility,
+      };
+      this._cameraFree = true; // set FIRST so this frame's clamps already skip
+      cam.lowerBetaLimit   = 0.01;
+      cam.upperBetaLimit   = Math.PI - 0.01;
+      cam.lowerRadiusLimit = 0.25;
+      cam.upperRadiusLimit = 5000;
+      cam.panningSensibility = 80; // a touch faster for roaming
+      try { cam.attachControl(this.canvas, true); } catch { /* headless / no canvas */ }
+      // eslint-disable-next-line no-console
+      console.info('[freeCam] ON — drag = orbit (incl. tilt), wheel = zoom, ctrl/right-drag = pan. Call freeCam(false) to relock.');
+    } else {
+      try { cam.detachControl(); } catch { /* ignore */ }
+      const L = this._lockedCamLimits;
+      if (L) {
+        cam.lowerBetaLimit = L.lowerBeta; cam.upperBetaLimit = L.upperBeta;
+        cam.lowerRadiusLimit = L.lowerRadius; cam.upperRadiusLimit = L.upperRadius;
+        cam.panningSensibility = L.panningSensibility;
+      }
+      this._cameraFree = false;
+      // Snap beta/target back into the locked envelope; _onBeforeRender re-clamps.
+      const lo = cam.lowerBetaLimit ?? 0, hi = cam.upperBetaLimit ?? Math.PI;
+      cam.beta = Math.min(Math.max(cam.beta, lo), hi);
+      if (cam.target) cam.target.y = 0;
+      // eslint-disable-next-line no-console
+      console.info('[freeCam] OFF — camera relocked.');
+    }
+    return want;
   }
 
   // ─── Map construction ────────────────────────────────────────────────────
@@ -7584,9 +7638,326 @@ export class Renderer3D {
     // them lets the playable ground stay in the OPAQUE pass — keeps the
     // road/river transparent ribbons rendering correctly — while the border
     // mesh can do a real smooth alpha dissolve at its outer rings.
+    // Compute the border-band river continuation FIRST so the border splat can
+    // skip those hexes — otherwise a flat border hex and the river channel mesh
+    // occupy the same spot and z-fight.
+    this._computeBorderRiverPositions();
     const playableMesh = this._buildSplatPlayableMesh(parent);
     this._buildSplatBorderMesh(parent);
+    // Per-tile river meshes — solid cut-channel hexes that replace the old
+    // carved-splat + transparent water ribbon + bank ribbon.
+    this._buildRiverChannelMeshes(parent);
     return playableMesh;
+  }
+
+  /** Walk each river EXIT (a water hex with one water neighbour) STRAIGHT
+   *  outward through the border band, recording the off-grid hexes the river
+   *  continues through (with the rotation that orients a straight channel along
+   *  the flow). Cached as `_borderRiverList` (build) + `_borderRiverKeys` (so the
+   *  border splat skips them — no flat-hex/river z-fight). Re-run per map build. */
+  _computeBorderRiverPositions() {
+    this._borderRiverList = [];
+    this._borderRiverKeys = new Set();
+    const tiles = this.state?.tiles;
+    if (!tiles) return;
+    const isWater = (t) => t && (isRiver(t) || isBridge(t));
+    const bandDepth = this._splatBorderBandDepth ? this._splatBorderBandDepth() : 0;
+    if (bandDepth <= 0) return;
+    for (const tile of tiles.values()) {
+      if (!isWater(tile)) continue;
+      const wn = getNeighbors(tile.col, tile.row)
+        .filter((n) => isWater(tiles.get(hexKey(n.col, n.row))));
+      if (wn.length !== 1) continue; // exits only
+      const a = hexToWorld(tile.col, tile.row), b = hexToWorld(wn[0].col, wn[0].row);
+      let inAng = Math.atan2(b.z - a.z, b.x - a.x) * 180 / Math.PI;
+      if (inAng < 0) inAng += 360;
+      const outAng = (inAng + 180) % 360;
+      const rot = ((Math.round(outAng / 60) - 1) % 6 + 6) % 6;
+      let cur = { col: tile.col, row: tile.row };
+      for (let step = 0; step < bandDepth; step++) {
+        const nx = this._neighborInDirection(cur.col, cur.row, outAng);
+        if (!nx) break;
+        cur = nx;
+        const key = hexKey(cur.col, cur.row);
+        if (this._borderRiverKeys.has(key)) continue; // dedup overlapping exits
+        this._borderRiverKeys.add(key);
+        this._borderRiverList.push({ col: cur.col, row: cur.row, rot });
+      }
+    }
+  }
+
+  /** Build ONE solid cut-channel mesh per river/bridge hex — a flat coplanar
+   *  grass top with the channel cut INTO the geometry, skinned with a 3-submesh
+   *  MultiMaterial (grass / bank / river). The baked geometry comes from
+   *  `src/river-channel-mesh.js`; here we classify each tile's water-edges into a
+   *  shape + rotation, orient + place the template, and attach materials. This
+   *  replaces the old splat-carve + transparent water ribbon + bank ribbon.
+   *
+   *  The grass submesh uses the playable splat material with per-vertex
+   *  aSplat/aTint/aEdgeAlpha/aFog (barycentric-interpolated from the tile's
+   *  splat weights) so it blends, tints, and fogs exactly like its neighbours;
+   *  the channel's aFog is rewritten by `_writeRiverChannelFog`. */
+  _buildRiverChannelMeshes(parent) {
+    const BABYLON = this._babylon, scene = this._scene;
+    if (!BABYLON || !scene || !this.state?.tiles) return;
+    const tiles = this.state.tiles;
+    const isWater = (t) => t && (isRiver(t) || isBridge(t));
+    // #3 — one canonical flow direction for the whole river so every tile's
+    // water UVs stream the same world way (templates are rotated to fit, which
+    // otherwise leaves some tiles flowing backwards).
+    const flowRef = canonicalRiverFlowDir(null, riverExitPoints(tiles));
+    // Neighbour direction → water-edge index (0..5). Matches the geometry
+    // module's numbering: edge e faces outward at 60·(e+1)°, the same angles as
+    // a pointy-top world hex's six neighbours.
+    const edgeIndex = (tile, n) => {
+      const a = hexToWorld(tile.col, tile.row), b = hexToWorld(n.col, n.row);
+      let deg = Math.atan2(b.z - a.z, b.x - a.x) * 180 / Math.PI;
+      if (deg < 0) deg += 360;
+      return ((Math.round(deg / 60) - 1) % 6 + 6) % 6;
+    };
+    const channelAt = (col, row) => {
+      const t = tiles.get(hexKey(col, row));
+      return t ? splatChannelForTile(t) : null;
+    };
+    // Grass blends via the SAME splat material as the merged ground; bank/river
+    // are opaque solid surfaces.
+    const grassMat = (this._splatGround && this._splatGround.material)
+      || this._materialFor(TILE_COLOR[TileType.GRASS]);
+    // Bank is now dirt-weighted SPLAT (same material as grass) — no separate
+    // bank material; only the water bed has its own material.
+    const bedMat   = this._buildRiverBedMaterial();
+    const tmpl = new Map();
+    const templateFor = (shape) => {
+      if (!tmpl.has(shape)) {
+        const { entryEdge, exitEdge } = RIVER_SHAPES[shape];
+        tmpl.set(shape, buildRiverChannelGeometry(entryEdge, exitEdge));
+      }
+      return tmpl.get(shape);
+    };
+    this._riverChannelMeshes = [];
+    this._riverChannelFog = [];
+    const ctx = { grassMat, bedMat, flowRef, templateFor, channelAt };
+
+    // Playable river/bridge tiles — classify the two water-edges into a shape +
+    // rotation, then emit the cut-channel mesh.
+    for (const tile of tiles.values()) {
+      if (!isWater(tile)) continue;
+      const edges = getNeighbors(tile.col, tile.row)
+        .filter((n) => isWater(tiles.get(hexKey(n.col, n.row))))
+        .map((n) => edgeIndex(tile, n));
+      let shape = 'straight', rot = 0;
+      if (edges.length >= 2) {
+        const c = classifyRiverEdges(edges[0], edges[1]) || { shape: 'straight', rot: edges[0] };
+        shape = c.shape; rot = c.rot;
+      } else if (edges.length === 1) {
+        shape = 'straight'; rot = edges[0]; // endpoint: run straight to the opposite edge
+      } // 0 neighbours (lone pool) → canonical straight stub
+      this._emitRiverChannelTile(parent, tile.col, tile.row, shape, rot, ctx, false);
+    }
+
+    // Border-forest river continuation — the off-grid hexes the river runs
+    // through in the border band (computed in `_computeBorderRiverPositions`,
+    // which the border splat already skipped). Same cut-channel mesh, permanently
+    // fogged: the river flows unbroken across the map↔border seam (real geometry).
+    for (const { col, row, rot } of (this._borderRiverList || [])) {
+      this._emitRiverChannelTile(parent, col, row, 'straight', rot, ctx, true);
+    }
+
+    // Paint the initial fog state onto the freshly-built channel grass.
+    if (this._fogActiveSet) this._writeRiverChannelFog(this._fogActiveSet);
+  }
+
+  /** Emit ONE river-tile cut-channel mesh (grass/bank/river) + its alpha fringe,
+   *  oriented by `rot`, placed at (col,row). `permanent` marks an off-grid
+   *  border-band tile that is always fogged (no real `state.tiles` entry — it
+   *  uses a synthetic grass tile for the splat weights). Shared by the playable
+   *  and border passes in `_buildRiverChannelMeshes`. */
+  _emitRiverChannelTile(parent, col, row, shape, rot, ctx, permanent) {
+    const BABYLON = this._babylon, scene = this._scene;
+    const { grassMat, bedMat, flowRef, templateFor, channelAt } = ctx;
+    const g = templateFor(shape);
+    const phi = rot * Math.PI / 3, cs = Math.cos(phi), sn = Math.sin(phi);
+    const { x: cx, z: cz } = hexToWorld(col, row);
+    const V = g.positions.length / 3;
+    const pos = new Float32Array(g.positions.length);
+    // Splat/tint from the real tile if present; off-grid border tiles use a
+    // synthetic grass tile (they render fully fogged anyway).
+    const stateTile = this.state.tiles.get(hexKey(col, row)) || { col, row, base: TileType.GRASS };
+    const splatW = hexSplatWeights(stateTile, channelAt);
+    const tintW  = hexTintWeights(col, row);
+    const aSplat = new Float32Array(V * 3);
+    const aTint  = new Float32Array(V * 3);
+    const aEdge  = new Float32Array(V).fill(1);
+    const aFog   = new Float32Array(V); // rewritten by _writeRiverChannelFog (permanent ⇒ 1)
+    const bary   = new Array(V);
+    const BED = g.bedY || -0.18;
+    for (let vi = 0; vi < V; vi++) {
+      const x = g.positions[vi * 3], y = g.positions[vi * 3 + 1], z = g.positions[vi * 3 + 2];
+      pos[vi * 3]     = x * cs - z * sn + cx;
+      pos[vi * 3 + 1] = y;
+      pos[vi * 3 + 2] = x * sn + z * cs + cz;
+      const b = this._hexBary(x * cs - z * sn, x * sn + z * cs); // rotated hex-local
+      bary[vi] = b;
+      const ka = (b.k + 1) * 3, kb = (((b.k + 1) % 6) + 1) * 3;
+      // The bank is the SAME splat material as the grass: blend the splat weight
+      // from the tile's grass mix at the rim (Y=0) toward the terrain DIRT
+      // channel at the water line (Y=BED). The splat shader then blends grass→dirt
+      // down the wall exactly like grass meets dirt anywhere else on the map, so
+      // it lights, fogs, and shadows identically. `df` = how far down the wall.
+      const df = Math.max(0, Math.min(1, BED ? (y / BED) : 0));
+      for (let c = 0; c < 3; c++) {
+        const grassVal = b.wO * splatW[c] + b.wA * splatW[ka + c] + b.wB * splatW[kb + c];
+        const dirtVal  = (c === SPLAT_DIRT) ? 1 : 0;
+        aSplat[vi * 3 + c] = grassVal * (1 - df) + dirtVal * df;
+        aTint[vi * 3 + c]  = b.wO * tintW[c] + b.wA * tintW[ka + c] + b.wB * tintW[kb + c];
+      }
+    }
+    const indices = [...g.grass, ...g.bank, ...g.river];
+    const normals = [];
+    BABYLON.VertexData.ComputeNormals(pos, indices, normals);
+    const vd = new BABYLON.VertexData();
+    vd.positions = pos; vd.indices = indices; vd.normals = normals;
+    // Flip U so this tile's water flows the same world direction as the river.
+    let uvs = g.uvs;
+    if (flowRef && g.flowDir) {
+      const wfx = g.flowDir[0] * cs - g.flowDir[1] * sn;
+      const wfz = g.flowDir[0] * sn + g.flowDir[1] * cs;
+      if (wfx * flowRef.x + wfz * flowRef.z < 0) {
+        uvs = new Float32Array(g.uvs.length);
+        for (let i = 0; i < g.uvs.length; i += 2) { uvs[i] = g.flowLen - g.uvs[i]; uvs[i + 1] = g.uvs[i + 1]; }
+      }
+    }
+    vd.uvs = uvs;
+    const mesh = new BABYLON.Mesh(`river_tile_${col}_${row}`, scene);
+    vd.applyToMesh(mesh, false);
+    mesh.setVerticesData('aSplat', aSplat, false, 3);
+    mesh.setVerticesData('aTint',  aTint,  false, 3);
+    mesh.setVerticesData('aEdgeAlpha', aEdge, false, 1);
+    mesh.setVerticesData('aFog',   aFog,   true, 1);
+    // Two submeshes: [grass + bank] share the SPLAT material (the bank is just
+    // dirt-weighted splat); the bed gets the flowing-water material.
+    const splatCount = g.grass.length + g.bank.length;
+    mesh.subMeshes = [];
+    new BABYLON.SubMesh(0, 0, V, 0,          splatCount,     mesh);
+    new BABYLON.SubMesh(1, 0, V, splatCount, g.river.length, mesh);
+    // Per-tile water material clone (shares the base texture) so the bed darkens
+    // independently under fog; grass+bank fog via aFog in the splat shader.
+    const bedClone = bedMat.clone(`river_bed_${col}_${row}`);
+    if (bedMat.diffuseTexture) bedClone.diffuseTexture = bedMat.diffuseTexture;
+    const multi = new BABYLON.MultiMaterial(`river_tile_mat_${col}_${row}`, scene);
+    multi.subMaterials = [grassMat, bedClone];
+    mesh.material = multi;
+    mesh.parent = parent;
+    mesh.isPickable = false;
+    mesh.metadata = { kind: 'river-tile', col, row };
+    this._setShadowReceiver?.(mesh);
+    this._riverChannelMeshes.push(mesh);
+
+    this._riverChannelFog.push({
+      mesh, col, row, bary, fogBuf: aFog, permanent: !!permanent,
+      bedMat: bedClone,
+      bedDiff: bedClone.diffuseColor ? bedClone.diffuseColor.clone() : null,
+      bedEmis: bedClone.emissiveColor ? bedClone.emissiveColor.clone() : null,
+    });
+  }
+
+  /** Neighbour hex at a given WORLD angle (degrees), allowing negative coords
+   *  (border tiles are off-grid). Walks the river straight into the border band.
+   *  Returns null if no neighbour lies close to that direction. */
+  _neighborInDirection(col, row, angDeg) {
+    const DIRS_EVEN = [[-1, 0], [-1, -1], [0, -1], [1, 0], [0, 1], [-1, 1]];
+    const DIRS_ODD  = [[-1, 0], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1]];
+    const dirs = (row & 1) ? DIRS_ODD : DIRS_EVEN;
+    const here = hexToWorld(col, row);
+    let best = null, bestDiff = 999;
+    for (const [dc, dr] of dirs) {
+      const nc = col + dc, nr = row + dr;
+      const there = hexToWorld(nc, nr);
+      let ang = Math.atan2(there.z - here.z, there.x - here.x) * 180 / Math.PI;
+      if (ang < 0) ang += 360;
+      const diff = Math.abs(((ang - angDeg + 540) % 360) - 180);
+      if (diff < bestDiff) { bestDiff = diff; best = { col: nc, row: nr }; }
+    }
+    return bestDiff < 31 ? best : null;
+  }
+
+  /** Sector + barycentric weights for a point (lx,lz) in a unit hex's local XZ
+   *  frame, against the fan triangle (centre O, corner k, corner k+1). Lets a
+   *  river tile's grass interpolate the per-corner splat/tint/fog weights at any
+   *  point so it matches the merged ground's gradient. Pure. */
+  _hexBary(lx, lz) {
+    let deg = Math.atan2(lz, lx) * 180 / Math.PI;
+    if (deg < 0) deg += 360;
+    const k = Math.floor((deg - 30 + 360) / 60) % 6;
+    const ang = (kk) => (30 + 60 * kk) * Math.PI / 180;
+    const ax = Math.cos(ang(k)), az = Math.sin(ang(k));
+    const bx = Math.cos(ang((k + 1) % 6)), bz = Math.sin(ang((k + 1) % 6));
+    const det = ax * bz - bx * az;
+    let wA = 0, wB = 0;
+    if (Math.abs(det) > 1e-9) {
+      wA = (lx * bz - bx * lz) / det;
+      wB = (ax * lz - lx * az) / det;
+    }
+    return { k, wO: 1 - wA - wB, wA, wB };
+  }
+
+  /** Rewrite each river-tile mesh's grass `aFog` from the fogged set. Channel
+   *  meshes live outside the merged ground, so they get their own fog pass that
+   *  mirrors `_writeFogWeights` — per-corner `hexFogWeights`, barycentric-interped
+   *  to each vertex — so a river tile fogs in lockstep with its neighbours. */
+  _writeRiverChannelFog(fogged) {
+    if (!this._riverChannelFog || !this.state?.tiles) return;
+    const PERM = [1, 1, 1, 1, 1, 1, 1]; // off-grid border tile — always fully fogged
+    for (const ch of this._riverChannelFog) {
+      let w;
+      if (ch.permanent) {
+        w = PERM; // border-band continuation matches the always-fogged border ground
+      } else {
+        const key = hexKey(ch.col, ch.row);
+        const neighborKeys = neighborDeltas(ch.row).map(([dc, dr]) => {
+          const nk = hexKey(ch.col + dc, ch.row + dr);
+          return this.state.tiles.has(nk) ? nk : null;
+        });
+        w = hexFogWeights(key, neighborKeys, fogged); // 7: centre + 6 corners
+      }
+      const buf = ch.fogBuf;
+      for (let vi = 0; vi < ch.bary.length; vi++) {
+        const { k, wO, wA, wB } = ch.bary[vi];
+        buf[vi] = wO * w[0] + wA * w[k + 1] + wB * w[((k + 1) % 6) + 1];
+      }
+      if (typeof ch.mesh.updateVerticesData === 'function') ch.mesh.updateVerticesData('aFog', buf);
+      // Grass + bank fog via aFog (splat shader). The bed is a plain
+      // StandardMaterial (no aFog) — tint its per-tile clone toward the fog
+      // floor. The bright full-colour swirl texture reads much lighter than the
+      // dark terrain albedo, so at the terrain's `_fogTileDarken` a fogged river
+      // still stands out as bright water; darken it HARDER (squared) so it sinks
+      // into the fog like its banks. (f = 1 clear → `_fogTileDarken`² fogged.)
+      const floor = (this._fogTileDarken ?? 1) ** 2;
+      const f = 1 - w[0] * (1 - floor);
+      const bm = ch.bedMat;
+      if (bm && ch.bedDiff && bm.diffuseColor) {
+        bm.diffuseColor.r = ch.bedDiff.r * f; bm.diffuseColor.g = ch.bedDiff.g * f; bm.diffuseColor.b = ch.bedDiff.b * f;
+      }
+      if (bm && ch.bedEmis && bm.emissiveColor) {
+        bm.emissiveColor.r = ch.bedEmis.r * f; bm.emissiveColor.g = ch.bedEmis.g * f; bm.emissiveColor.b = ch.bedEmis.b * f;
+      }
+    }
+  }
+
+  /** Opaque water-bed material — the flowing river texture without the old
+   *  transparent ribbon's alpha feather (the channel is solid geometry now, so
+   *  the bed is a normal depth-writing opaque surface). Scrolls with the flow. */
+  _buildRiverBedMaterial() {
+    if (this._riverBedMat) return this._riverBedMat;
+    const mat = this._buildRibbonMaterial('river', TILE_COLOR[TileType.RIVER]);
+    mat.useAlphaFromDiffuseTexture = false;
+    if (mat.diffuseTexture) {
+      mat.diffuseTexture.hasAlpha = false;
+      this._riverFlowTextures.push(mat.diffuseTexture); // advance with the in-flow scroll
+    }
+    if (this._babylon?.Material) mat.transparencyMode = this._babylon.Material.MATERIAL_OPAQUE;
+    this._riverBedMat = mat;
+    return mat;
   }
 
   /** Per-vertex hex fan emit shared between playable + border splat builds.
@@ -7677,7 +8048,12 @@ export class Renderer3D {
   _buildSplatPlayableMesh(parent) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
-    const playable = [...this.state.tiles.values()];
+    // River/bridge hexes are NOT part of the merged ground any more — each is a
+    // standalone solid cut-channel mesh (see `_buildRiverChannelMeshes`), so the
+    // merged splat leaves a hex-shaped gap there that the channel mesh's flat
+    // grass top fills (coplanar at Y=0). No more channel carving here.
+    const playable = [...this.state.tiles.values()]
+      .filter((t) => !(isRiver(t) || isBridge(t)));
     const channelAt = (col, row) => {
       const t = this.state.tiles.get(hexKey(col, row));
       return t ? splatChannelForTile(t) : null;
@@ -7687,74 +8063,6 @@ export class Renderer3D {
       const tile = playable[ti];
       this._emitSplatHex(buffers, ti, tile.col, tile.row,
         hexSplatWeights(tile, channelAt), 1.0);
-    }
-    // R5 — sink the splat ground into a real channel under each river/bridge
-    // hex so the water ribbon at `RIVER_BED_Y` is actually visible instead of
-    // occluded by a flat Y=0 plane.
-    //
-    // Per river/bridge tile:
-    //   • CENTRE vertex AND the whole INNER RING drop to
-    //     `RIVER_BED_Y - SPLAT_RIVER_CENTRE_EPS` — 1 cm BELOW the water ribbon.
-    //     The inner ring (radius SPLAT_INNER_RING_FRAC·R ≈ 0.66, wider than the
-    //     0.45 max water half-width) carves a FLAT trench floor so the water at
-    //     RIVER_BED_Y clears the splat across its whole footprint. The centre
-    //     epsilon keeps the floor a hair below the coplanar water so it never
-    //     z-fights. Now that the floor genuinely sits under the water, the
-    //     playable splat writes depth normally (props/bridges occlude the
-    //     river correctly) instead of the old `disableDepthWrite` workaround.
-    //
-    // Per corner (ALL tiles, river OR not — symmetric):
-    //   • Each corner of `tile` is touched by THREE tiles total: `tile` plus
-    //     its two corner-adjacent neighbours (`CORNER_DIRS[j]` indexes into
-    //     the row-parity-aware neighbour DIRS, same algebra as
-    //     `hexSplatWeights`). Count how many of those THREE are water and
-    //     map the count through `riverCornerY()` to a Y. All three tiles
-    //     touching the same physical corner compute the SAME waterCount, so
-    //     all three emit the corner at the SAME Y → no seam gap.
-    //
-    // The vertex layout from `_emitSplatHex`:
-    //   baseV + 0       = centre
-    //   baseV + 1..6    = perimeter corners (j=0..5, angle π/6 + j·π/3)
-    //   baseV + 7..12   = inner ring (j=0..5, same angles, radius FRAC·R)
-    {
-      const isWater = (col, row) => {
-        const t = this.state.tiles.get(hexKey(col, row));
-        return t && (isRiver(t) || isBridge(t));
-      };
-      const range = buffers.range;
-      // Local copies of the splat-builder's neighbour DIRS + corner→edge map
-      // (private to terrain-splat.js). Same algebra as `hexSplatWeights` so
-      // the corner-incident neighbours match exactly.
-      const HEX_DIRS_EVEN = [[-1, 0], [-1, -1], [0, -1], [1, 0], [0, 1], [-1, 1]];
-      const HEX_DIRS_ODD  = [[-1, 0], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1]];
-      const CORNER_DIRS   = [[3, 4], [4, 5], [5, 0], [0, 1], [1, 2], [2, 3]];
-      for (const tile of playable) {
-        const baseV = range.get(hexKey(tile.col, tile.row));
-        if (baseV == null) continue;
-        const tileIsWater = isWater(tile.col, tile.row);
-        // Centre + inner ring — only river/bridge hexes get pushed below the
-        // water ribbon, carving the flat trench floor. Non-water hexes keep
-        // their centre + inner ring at Y=0.
-        if (tileIsWater) {
-          const floorY = RIVER_BED_Y - SPLAT_RIVER_CENTRE_EPS;
-          buffers.positions[baseV * 3 + 1] = floorY;
-          for (let j = 0; j < 6; j++) {
-            buffers.positions[(baseV + 7 + j) * 3 + 1] = floorY;
-          }
-        }
-        const dirs = (tile.row & 1) ? HEX_DIRS_ODD : HEX_DIRS_EVEN;
-        for (let j = 0; j < 6; j++) {
-          const [da, db] = CORNER_DIRS[j];
-          const naCol = tile.col + dirs[da][0], naRow = tile.row + dirs[da][1];
-          const nbCol = tile.col + dirs[db][0], nbRow = tile.row + dirs[db][1];
-          const waterCount =
-            (tileIsWater ? 1 : 0)
-            + (isWater(naCol, naRow) ? 1 : 0)
-            + (isWater(nbCol, nbRow) ? 1 : 0);
-          if (waterCount === 0) continue; // pure-ground corner — leave at Y=0
-          buffers.positions[(baseV + 1 + j) * 3 + 1] = riverCornerY(waterCount);
-        }
-      }
     }
     const mesh = new BABYLON.Mesh('splatGround', scene);
     const vd = new BABYLON.VertexData();
@@ -7785,7 +8093,11 @@ export class Renderer3D {
     const scene   = this._scene;
     const bandDepth = this._splatBorderBandDepth();
     const ext = tilesExtent(this.state.tiles);
-    const borderPositions = borderTilePositions(this.state.tiles, bandDepth);
+    // Skip hexes the border-band river runs through — those get a solid
+    // cut-channel mesh instead (else a flat border hex z-fights the river).
+    const riverKeys = this._borderRiverKeys || new Set();
+    const borderPositions = borderTilePositions(this.state.tiles, bandDepth)
+      .filter((p) => !riverKeys.has(hexKey(p.col, p.row)));
     if (borderPositions.length === 0) { this._splatBorderGround = null; return null; }
     const FOREST_ONLY = new Float32Array([
       0, 0, 1,  0, 0, 1,  0, 0, 1,  0, 0, 1,
@@ -7799,6 +8111,9 @@ export class Renderer3D {
       const baseV = bi * SPLAT_VERTS_PER_TILE;
       for (let v = 0; v < SPLAT_VERTS_PER_TILE; v++) buffers.fog[baseV + v] = 1.0;
     }
+    // Border ground stays flat (Y=0) — river/bridge hexes are standalone
+    // cut-channel meshes now (see `_buildRiverChannelMeshes`), so there's no
+    // carve to match; the channel grass meets this flat ground coplanar.
     const mesh = new BABYLON.Mesh('splatBorderGround', scene);
     const vd = new BABYLON.VertexData();
     vd.positions = buffers.positions;
@@ -8601,15 +8916,12 @@ export class Renderer3D {
     const scene   = this._scene;
     if (!BABYLON || !scene || !this.state?.tiles) return;
 
-    const riverStrokes = buildRiverNetworkStrokes(this.state.tiles);
     const roadStrokes  = buildRoadNetworkStrokes(this.state.tiles);
 
-    if (riverStrokes.length > 0) {
-      this._riverNetworkMesh = this._buildNetworkMesh(
-        'river', riverStrokes, RIVER_RIBBON_WIDTH, RIVER_RIBBON_Y,
-        TILE_COLOR[TileType.RIVER],
-      );
-    }
+    // River is now drawn per-tile as solid cut-channel meshes
+    // (`_buildRiverChannelMeshes`); the old transparent water ribbon + bank
+    // ribbon + border extension are retired. Roads still use the ribbon path.
+    this._riverNetworkMesh = null;
     if (roadStrokes.length > 0) {
       this._roadNetworkMesh = this._buildNetworkMesh(
         'road', roadStrokes, ROAD_RIBBON_WIDTH, ROAD_RIBBON_Y,
@@ -9192,15 +9504,13 @@ export class Renderer3D {
     if (this._riverBankBaseMat) return this._riverBankBaseMat;
     const mat = new BABYLON.StandardMaterial('river_bank_base_mat', scene);
     mat.diffuseColor    = new BABYLON.Color3(0.62, 0.50, 0.38); // warm dirt tint
-    // The bank ribbon's cross-section is a U-trench, so the slope walls face
-    // mostly sideways/downward. At 45° camera tilt under the directional sun
-    // the slope normals catch almost no diffuse and the dirt reads near-black.
-    // A modest warm emissive gives the dirt a baseline colour regardless of
-    // lighting angle, lifting the slope faces into the readable brown range
-    // without making the well-lit top faces glow. Fog parity: `baseEmissive`
-    // is snapshotted in `_buildRiverBankMeshes` so `_setTilePropsFogged` darkens
-    // the emissive alongside the diffuse when the tile is fogged.
-    mat.emissiveColor   = new BABYLON.Color3(0.25, 0.20, 0.15);
+    // No emissive: the bank is real solid cut-channel geometry now (computed
+    // normals catch the sun + hemispheric light), so the old emissive hack —
+    // added when the bank was a flat ribbon whose sideways normals read black —
+    // is gone. It was SELF-LIT, which ignored shadows and left the bank/fringe a
+    // bright grey band where the surrounding grass was shadowed. A tiny ambient
+    // floor keeps the deep-trench faces from going pure black.
+    mat.emissiveColor   = new BABYLON.Color3(0.04, 0.035, 0.025);
     mat.specularColor   = new BABYLON.Color3(0.04, 0.04, 0.04);
     mat.backFaceCulling = false;
     mat.disableLighting = false;
@@ -10036,6 +10346,7 @@ export class Renderer3D {
    *  No-op when the engine or camera hasn't initialised yet. */
   _recomputeMaxZoomCap() {
     if (!this._camera) return;
+    if (this._cameraFree) return; // leave limits lifted while the debug free-cam is active
     // Operator-fixed bounds — same range across every map size, no map-fit
     // derivation. Clamp the current radius if a previous map's limits left it
     // outside the new (tighter) window.
@@ -15434,7 +15745,7 @@ export class Renderer3D {
     // position is target + radius offset, that drift propagates into camera
     // Y. Clamping target.y here keeps the camera at a fixed height (radius
     // offset above the ground) no matter how the operator pans.
-    if (this._camera && this._camera.target && this._camera.target.y !== 0) {
+    if (!this._cameraFree && this._camera && this._camera.target && this._camera.target.y !== 0) {
       this._camera.target.y = 0;
     }
     // Pan extent clamp — runs every frame so inertial overshoot past the map
@@ -15442,7 +15753,7 @@ export class Renderer3D {
     // `panBoundsForPlayableExtent`, which keeps the camera target inside the
     // playable bbox plus a half-hex fudge so even at max zoom-out + max pan
     // the playable map stays clearly the visible subject.
-    if (this._camera && (this._panClampBounds || this._mapPanBounds)) {
+    if (!this._cameraFree && this._camera && (this._panClampBounds || this._mapPanBounds)) {
       const t = this._camera.target;
       const bounds = this._panClampBounds
         || panBoundsForPlayableExtent(this._mapPanBounds);
@@ -15463,7 +15774,7 @@ export class Renderer3D {
     // radius and assign it directly; the relaxed [LOCKED, TOPDOWN] beta limits
     // (see _initBabylon) keep Babylon from clamping it back. No user tilt input
     // feeds this — radius is the sole driver.
-    if (this._camera) {
+    if (!this._cameraFree && this._camera) {
       const cam = this._camera;
       cam.beta = betaForRadius(
         cam.radius,
@@ -16006,6 +16317,9 @@ export class Renderer3D {
       // One vertex-buffer rewrite covers the whole ground's soft veil; props
       // (standees/discs/labels) still flip per-hex via _setTilePropsFogged.
       this._writeFogWeights(fogged);
+      // River tiles are standalone meshes outside the merged ground — fog their
+      // grass on the same schedule so they darken in lockstep with neighbours.
+      this._writeRiverChannelFog(fogged);
       for (const k of allKeys) {
         const shouldBeFogged = fogged.has(k);
         const isFogged = this._fogActiveSet.has(k);

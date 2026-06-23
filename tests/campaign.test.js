@@ -769,13 +769,11 @@ describe('Campaign class', () => {
   test('getMissionList returns correct statuses', () => {
     const c = new Campaign(hollowDef);
     const list = c.getMissionList();
-    assert.equal(list.length, 13);     // tutorial + 7 story + 5 villages (tutorial still LISTED, greyed)
-    // The tutorial is disabled — listed but never playable.
-    assert.ok(list[0].disabled);       // tutorial — shelved
-    assert.ok(!list[0].available);     // disabled ⇒ never launchable
+    assert.equal(list.length, 12);     // 7 story + 5 villages (tutorial is disabled ⇒ DROPPED)
+    assert.ok(!list.some(m => m.id === 'tutorial'), 'disabled tutorial never appears in the list');
     // On a fresh save only the prereq-free opener (prologue) is playable.
-    assert.ok(list[1].available);      // prologue (The Awakening) — no prereqs
-    for (let i = 2; i < list.length; i++) {
+    assert.ok(list[0].available);      // prologue (The Awakening) — no prereqs, first listed
+    for (let i = 1; i < list.length; i++) {
       assert.ok(!list[i].available, `${list[i].id} should be locked on a fresh save`);
     }
   });
@@ -783,10 +781,9 @@ describe('Campaign class', () => {
   test('getMissionList visibility shows only completed + playable + immediate-next', () => {
     const c = new Campaign(hollowDef);
     const list = c.getMissionList();
-    assert.ok(list[0].visible && list[0].disabled);  // tutorial — shown greyed, non-selectable
-    assert.ok(list[1].visible);        // prologue — playable now (no prereqs)
-    assert.ok(list[2].visible);        // gathering_survivors — one step away from prologue
-    for (let i = 3; i < list.length; i++) {
+    assert.ok(list[0].visible);        // prologue — playable now (no prereqs)
+    assert.ok(list[1].visible);        // gathering_survivors — one step away from prologue
+    for (let i = 2; i < list.length; i++) {
       assert.ok(!list[i].visible, `${list[i].id} should be hidden on a fresh save`);
     }
 
@@ -794,11 +791,10 @@ describe('Campaign class', () => {
     // reveals the next mission after it.
     c.completedMissions.add('prologue');
     const list2 = c.getMissionList();
-    assert.ok(list2[0].visible && list2[0].disabled);  // tutorial — still shown greyed
-    assert.ok(list2[1].visible && list2[1].completed); // prologue — completed
-    assert.ok(list2[2].visible && list2[2].available); // gathering_survivors — now playable
-    assert.ok(list2[3].visible && !list2[3].available);// first_night — now one step away
-    assert.ok(!list2[4].visible);                      // river_crossing — still hidden
+    assert.ok(list2[0].visible && list2[0].completed); // prologue — completed
+    assert.ok(list2[1].visible && list2[1].available); // gathering_survivors — now playable
+    assert.ok(list2[2].visible && !list2[2].available);// first_night — now one step away
+    assert.ok(!list2[3].visible);                      // river_crossing — still hidden
   });
 
   test('getMissionDef looks up from campaignDef missions', () => {

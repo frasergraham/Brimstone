@@ -417,30 +417,26 @@ describe('disabled missions — ignored by game logic, listed greyed by the view
     assert.equal(c.isMissionUnlocked(missions[5]), true, 'disabled mA + 2 done = 3 of 5');
   });
 
-  test('getMissionList still LISTS the disabled mission, flagged + non-selectable', () => {
+  test('getMissionList DROPS the disabled mission entirely (distinct from locked)', () => {
     const missions = [
       { id: 'tutorial', title: 'Tutorial', disabled: true },
       { id: 'prologue', title: 'Prologue' },
     ];
     const list = makeCampaign(missions).getMissionList();
-    assert.equal(list.length, 2, 'disabled row is NOT dropped from the list');
-    const [tut] = list;
-    assert.equal(tut.disabled, true);
-    assert.equal(tut.available, false, 'never playable');
-    assert.equal(tut.completed, false);
-    assert.equal(tut.current, false);
-    assert.equal(tut.visible, true, 'shown greyed, not hidden');
+    assert.equal(list.length, 1, 'disabled row vanishes — as if it were not in the campaign');
+    assert.ok(!list.some(m => m.id === 'tutorial'), 'disabled mission is gone');
+    assert.equal(list[0].id, 'prologue', 'only the real (non-disabled) mission remains');
   });
 
-  test('a completedMissions entry for a disabled mission never marks it completed', () => {
+  test('a completedMissions entry for a disabled mission never inflates progress', () => {
     // alsoCompletes / the v3→v4 migration may add `tutorial` to completedMissions;
-    // it must still read as not-completed and not inflate progress.
+    // a shelved mission must never count toward completion or appear in the list.
     const missions = [
       { id: 'tutorial', title: 'Tutorial', disabled: true },
       { id: 'prologue', title: 'Prologue' },
     ];
     const c = makeCampaign(missions, { completed: ['tutorial'] });
-    assert.equal(c.getMissionList()[0].completed, false);
+    assert.ok(!c.getMissionList().some(m => m.id === 'tutorial'), 'disabled mission not listed');
     assert.equal(c.getCompletedCount(), 0, 'a disabled mission never counts as completed');
   });
 

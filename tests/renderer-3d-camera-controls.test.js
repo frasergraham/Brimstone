@@ -614,3 +614,60 @@ describe('shouldRecaptureGrab — invalidate stale world-grab on pose change', (
     assert.ok(GRAB_POSE_EPSILON > 0 && GRAB_POSE_EPSILON < 0.1);
   });
 });
+
+describe('Renderer3D.toggleFreeCamera — debug free-cam unlock/relock', () => {
+  function makeInst() {
+    const fakeCanvas = { parentElement: null, width: 800, height: 600, addEventListener() {}, style: {} };
+    const inst = new Renderer3D(fakeCanvas, {});
+    inst._babylon = {}; // truthy so toggleFreeCamera proceeds (it no-ops without)
+    let attached = 0, detached = 0;
+    inst._camera = {
+      lowerBetaLimit: 0.087, upperBetaLimit: 0.6,   // normal locked envelope
+      lowerRadiusLimit: 4, upperRadiusLimit: 80, panningSensibility: 250,
+      beta: 0.3, radius: 20, target: { x: 1, y: 2, z: 3 },
+      attachControl() { attached++; }, detachControl() { detached++; },
+    };
+    inst._spies = () => ({ attached, detached });
+    return inst;
+  }
+
+  test('no camera → no-op returns false', () => {
+    const fakeCanvas = { parentElement: null, width: 800, height: 600, addEventListener() {}, style: {} };
+    const inst = new Renderer3D(fakeCanvas, {});
+    assert.equal(inst.toggleFreeCamera(true), false);
+    assert.ok(!inst._cameraFree);
+  });
+
+  test('unlock lifts the beta + radius limits, sets the flag, attaches Babylon controls', () => {
+    const inst = makeInst();
+    assert.equal(inst.toggleFreeCamera(true), true);
+    assert.equal(inst._cameraFree, true);
+    assert.equal(inst._spies().attached, 1);
+    assert.equal(inst._camera.lowerBetaLimit, 0.01);
+    assert.ok(inst._camera.upperBetaLimit > 3, 'upper beta lifted toward π');
+    assert.ok(inst._camera.upperRadiusLimit >= 5000, 'radius limit lifted');
+  });
+
+  test('unlock is idempotent — no double attach', () => {
+    const inst = makeInst();
+    inst.toggleFreeCamera(true);
+    inst.toggleFreeCamera(true);
+    assert.equal(inst._spies().attached, 1, 'attachControl called exactly once');
+  });
+
+  test('relock restores the saved limits, detaches, re-snaps beta + target.y', () => {
+    const inst = makeInst();
+    inst.toggleFreeCamera(true);
+    inst._camera.beta = 1.4;       // user flew to a steep, normally-illegal angle
+    inst._camera.target.y = 5;     // and lifted the target off the ground
+    inst.toggleFreeCamera(false);
+    assert.equal(inst._cameraFree, false);
+    assert.equal(inst._spies().detached, 1);
+    assert.equal(inst._camera.upperBetaLimit, 0.6, 'upper beta limit restored');
+    assert.equal(inst._camera.lowerBetaLimit, 0.087);
+    assert.equal(inst._camera.upperRadiusLimit, 80, 'radius limit restored');
+    assert.equal(inst._camera.panningSensibility, 250);
+    assert.ok(inst._camera.beta <= 0.6 && inst._camera.beta >= 0.087, 'beta snapped back into the locked range');
+    assert.equal(inst._camera.target.y, 0, 'target pinned back to the ground plane');
+  });
+});

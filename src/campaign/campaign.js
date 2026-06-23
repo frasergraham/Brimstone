@@ -887,7 +887,8 @@ export class Campaign {
    * game logic: it is never playable, never the next mission, never counted in
    * progression totals, and any `requires`/`unlock` dependency that points at it
    * is treated as already satisfied (so downstream missions still unlock). The
-   * campaign viewer still LISTS it (greyed, non-selectable) — see getMissionList.
+   * campaign viewer drops it entirely too (see getMissionList) — distinct from a
+   * merely LOCKED mission, which stays listed (greyed) until its prereqs are met.
    * @param {object} mission  a runtime mission def
    * @returns {boolean}
    */
@@ -909,8 +910,8 @@ export class Campaign {
 
   /** The list of NON-disabled missions — the set game logic should ever act on
    *  (next mission, available, progression totals, completion). The viewer reads
-   *  the full `campaignDef.missions` (via getMissionList) to still SHOW disabled
-   *  rows greyed; everything else goes through here. */
+   *  this same set (via getMissionList) so disabled missions never surface in the
+   *  UI either; the full `campaignDef.missions` is only for raw def lookups. */
   playableMissions() {
     return this.campaignDef.missions.filter(m => !this._isMissionDisabled(m));
   }
@@ -1152,27 +1153,22 @@ export class Campaign {
    * playable missions always show; a locked mission shows only when it's the
    * immediate next one ("one step from playable", see `_isMissionVisible`).
    *
-   * Disabled missions are SHOWN here (so the viewer can render them greyed and
-   * non-selectable) but are never `available`, never `completed`, never the
-   * `current` mission. The `disabled` flag lets the viewer style + block them;
-   * all gameplay enumeration goes through playableMissions() and ignores them.
+   * Disabled missions (shelved via `disabled: true`) are DROPPED entirely — they
+   * never appear in the returned list, as if they weren't in the campaign. This
+   * is deliberately distinct from a LOCKED mission (prerequisites unmet), which
+   * is still listed (greyed, `available: false`) so the player can see what's
+   * coming. All gameplay enumeration likewise flows through playableMissions().
    */
   getMissionList() {
-    return this.campaignDef.missions.map(m => {
-      const disabled = this._isMissionDisabled(m);
-      return {
-        id: m.id,
-        title: m.title,
-        briefing: m.briefing,
-        disabled,
-        completed: !disabled && this.completedMissions.has(m.id),
-        available: this._canPlayMission(m), // already false when disabled
-        // Disabled rows are always visible (greyed) so the player sees the
-        // shelved mission rather than it silently vanishing from the list.
-        visible: disabled || this._isMissionVisible(m),
-        current: !disabled && m.id === this.currentMission,
-      };
-    });
+    return this.playableMissions().map(m => ({
+      id: m.id,
+      title: m.title,
+      briefing: m.briefing,
+      completed: this.completedMissions.has(m.id),
+      available: this._canPlayMission(m),
+      visible: this._isMissionVisible(m),
+      current: m.id === this.currentMission,
+    }));
   }
 
   /**
