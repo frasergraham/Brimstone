@@ -1723,6 +1723,13 @@ export function executeFortify(state, actor) {
 // only summons minions. A request for a forbidden type falls back to the
 // auto-pick path constrained to the allowed list.
 export function executeSummon(state, actor, requestedType = null) {
+  // Learn-to-Play caps the witch's TOTAL summons so the post-tutorial AI can't
+  // raise an unbeatable horde (set by _learnHandoff; null in every other game,
+  // so normal/online/headless play is unaffected). Only the witch summons, so a
+  // bare count check needs no faction-string comparison.
+  if (state.maxWitchSummons != null && state.witchSummonCount >= state.maxWitchSummons) {
+    return { success: false, log: ['The witch\'s power is spent — she can summon no more.'] };
+  }
   const faction         = getFaction(actor.owner);
   const concreteFaction = concreteFactionOf(actor);
   const inv     = faction.getInventory(state);

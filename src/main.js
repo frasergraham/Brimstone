@@ -9670,6 +9670,11 @@ function _learnHandoff() {
   _missionConductor = null;          // already destroyed itself before this fires
   if (ui) ui.tutorialMode = false;
   state.witchIsAI = true;            // _enterLocalPlanningMode routes to the AI submit path
+  // Keep the free-play battle winnable for a first-timer: strip the witch's
+  // summon resources and hard-cap her total summons so she can't immediately
+  // raise golems / a horde for the rest of the fight.
+  state.inventory.witch = normalizeItems({});
+  state.maxWitchSummons = 2;
   witchAI = new WitchAIEngine(state, redraw);
   witchAI.onBattleResult = (actorSnap, targetSnap, result) =>
     new Promise(resolve => ui._showBattleDialog(actorSnap, targetSnap, result, resolve));

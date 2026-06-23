@@ -10,8 +10,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { GameState } from '../src/game.js';
-import { EntityType } from '../src/entities.js';
-import { getReachableHexes, computeLineOfSight, hasLineOfSight } from '../src/actions.js';
+import { EntityType, normalizeItems } from '../src/entities.js';
+import { getReachableHexes, computeLineOfSight, hasLineOfSight, executeSummon } from '../src/actions.js';
 import { hexDistance, hexKey } from '../src/hex.js';
 import { isBuildingFootprint } from '../src/tiles.js';
 import {
@@ -173,6 +173,19 @@ test('learn steps: each Submit step locks the map (no stray actions while awaiti
       assert.deepEqual(s.allowHexes, [], `submit step ${s.id} must lock the map with allowHexes: []`);
     }
   }
+});
+
+test('learn handoff: state.maxWitchSummons hard-caps the witch\'s total summons', () => {
+  const { state, witch } = buildBoard();
+  state.inventory.witch = normalizeItems({ wood: 20, metal: 20 }); // plenty of fuel
+  state.maxWitchSummons = 2;
+  let summoned = 0;
+  for (let i = 0; i < 6; i++) { if (executeSummon(state, witch).success) summoned++; }
+  assert.equal(summoned, 2, 'the witch must be capped at exactly maxWitchSummons summons');
+  // No cap (the default everywhere else) leaves summoning unrestricted.
+  const { state: s2, witch: w2 } = buildBoard();
+  s2.inventory.witch = normalizeItems({ wood: 20, metal: 20 });
+  assert.ok(executeSummon(s2, w2).success, 'with no cap set, the witch can still summon');
 });
 
 test('learn config: round-step map points at real steps and ends in a handoff', () => {
