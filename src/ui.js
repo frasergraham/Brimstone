@@ -47,6 +47,19 @@ export function isDebugToggleClick(e) {
   return !!(t.classList && t.classList.contains('actions-label'));
 }
 
+/** Canonical in-game header title state. The top bar shows exactly ONE of three
+ *  titles: PLANNING (building a plan), WAITING (plan locked, awaiting opponents
+ *  online), or RESOLUTION (the round resolving / being replayed — this also
+ *  covers the offline round summary and AI-vs-AI auto-play). Pure so it can be
+ *  unit-tested without a DOM.
+ *  @param {{planMode:boolean, planSubmitted:boolean}} [s]
+ *  @returns {'PLANNING'|'WAITING'|'RESOLUTION'} */
+export function headerTitleState({ planMode = false, planSubmitted = false } = {}) {
+  if (planMode && !planSubmitted) return 'PLANNING';
+  if (planMode &&  planSubmitted) return 'WAITING';
+  return 'RESOLUTION';
+}
+
 export class UIController {
   /**
    * @param {HTMLCanvasElement} canvas
@@ -731,9 +744,9 @@ export class UIController {
 
     this._syncAIAssistButton();
 
-    // Show replay button if there's history to replay
-    const replayBtn = this._el('replay-turn-btn');
-    if (replayBtn) replayBtn.style.display = this._hasReplayHistory ? '' : 'none';
+    // The Last Turn (↺) replay button's visibility is centralised in
+    // _renderEndTurnBtn (called via _updateSidebar below) so it tracks the
+    // three header states (PLANNING-only) rather than being set once here.
 
     const panel = this._el('plan-panel');
     if (panel) {
@@ -3047,87 +3060,63 @@ export class UIController {
       }
     }
 
-    // During planning phase, show planning info
-    if (this._planMode) {
-      const faction = this._planFaction;
-      const glyph   = faction === 'hero' ? '\uE000' : '\uE001';
-      if (this._planSubmitted) {
-        el.innerHTML = `
-          <span class="turn-faction player-${faction}">${glyph}</span>
-          <span class="turn-line">Waiting for opponent…</span>
-        `;
-      } else {
-        const used = interleavePlan(this._unitPlans).filter(a => actionCosts(a.type)).length;
-        const { parts, rows, total, foodLabel } = this._computeActionBudget();
-        const pips = buildActionPipsHtml(parts, used);
-        const tip  = buildActionBudgetTooltipHtml(rows, total, foodLabel);
-        // Action budget anchored right (above the plan panel): label + colour-coded
-        // pips; the breakdown is a hover tooltip (tap to toggle on touch).
-        el.innerHTML = `
-          <span class="turn-faction player-${faction}">${glyph}</span>
-          <div class="action-budget">
-            <span class="actions-label">Action Budget</span>
-            <div class="actions-remaining" tabindex="0" aria-label="Action budget breakdown">${pips}<div id="budget-breakdown" class="budget-breakdown">${tip}</div></div>
-          </div>
-        `;
-        const pipsEl = el.querySelector('.actions-remaining');
-        if (pipsEl) pipsEl.addEventListener('click', (e) => { e.stopPropagation(); this._toggleBudgetTip(pipsEl); });
-      }
+    // ── Header title — exactly three canonical states ─────────────────────
+    // PLANNING (building a plan) · WAITING FOR OPPONENTS (plan locked, online)
+    // · RESOLUTION (the round resolving / being replayed). The menu button
+    // (top-left) is a header sibling and stays put across all three; the
+    // Submit / Last Turn buttons live in .header-buttons and are gated to the
+    // PLANNING state by _renderEndTurnBtn.
+    const titleState = headerTitleState({
+      planMode: this._planMode, planSubmitted: this._planSubmitted,
+    });
+
+    if (titleState === 'PLANNING') {
+      // Title + action-budget pips: colour-coded pips with a hover/tap tooltip
+      // breakdown. The budget anchors right (above the plan panel).
+      const used = interleavePlan(this._unitPlans).filter(a => actionCosts(a.type)).length;
+      const { parts, rows, total, foodLabel } = this._computeActionBudget();
+      const pips = buildActionPipsHtml(parts, used);
+      const tip  = buildActionBudgetTooltipHtml(rows, total, foodLabel);
+      el.innerHTML = `
+        <span class="turn-title">Planning</span>
+        <div class="action-budget">
+          <span class="actions-label">Action Budget</span>
+          <div class="actions-remaining" tabindex="0" aria-label="Action budget breakdown">${pips}<div id="budget-breakdown" class="budget-breakdown">${tip}</div></div>
+        </div>
+      `;
+      const pipsEl = el.querySelector('.actions-remaining');
+      if (pipsEl) pipsEl.addEventListener('click', (e) => { e.stopPropagation(); this._toggleBudgetTip(pipsEl); });
       return;
     }
 
-    // During resolution, show neutral resolution label
-    if (state.resolving) {
-      el.innerHTML = `<span class="turn-line">Resolving Actions…</span>`;
+    if (titleState === 'WAITING') {
+      el.innerHTML = `<span class="turn-title">Waiting for Opponents…</span>`;
       return;
     }
 
-    // Online mode: if we reach here without plan mode or resolving, the client
-    // may be in a transient state (summary, animation) or genuinely stuck.
-    // Only attempt recovery if we're supposed to be in PLANNING mode.
-    if (this.mp) {
-      if (this.appMode === 'PLANNING' && !this._stateRecoveryPending) {
-        this._stateRecoveryPending = true;
-        // Delay before requesting state — gives enterPlanningMode time to fire
+    // RESOLUTION — the round is resolving or being replayed. Also covers the
+    // offline round summary, the online summary/sync window, and AI-vs-AI
+    // auto-play. Keep the online state-recovery watchdog: a PLANNING appMode
+    // reached here means our planning payload never arrived, so request a
+    // resync (and bail to menu if it never recovers).
+    if (this.mp && this.appMode === 'PLANNING' && !this._stateRecoveryPending) {
+      this._stateRecoveryPending = true;
+      // Delay before requesting state — gives enterPlanningMode time to fire.
+      this._stateRecoveryTimer = setTimeout(() => {
+        this._stateRecoveryPending = false;
+        if (this._planMode || this.state.resolving || this.appMode !== 'PLANNING') return;
+        console.warn('[ui] Invalid online state — requesting state refresh.');
+        this.mp._send({ type: 'requestState' });
+        // If still stuck after another 5 seconds, bail to menu
         this._stateRecoveryTimer = setTimeout(() => {
-          this._stateRecoveryPending = false;
-          if (this._planMode || this.state.resolving || this.appMode !== 'PLANNING') return;
-          console.warn('[ui] Invalid online state — requesting state refresh.');
-          this.mp._send({ type: 'requestState' });
-          // If still stuck after another 5 seconds, bail to menu
-          this._stateRecoveryTimer = setTimeout(() => {
-            if (!this._planMode && !this.state.resolving && this.appMode === 'PLANNING') {
-              console.error('[ui] State recovery failed — returning to menu');
-              if (this.onQuitToMenu) this.onQuitToMenu();
-            }
-          }, 5000);
-        }, 2000);
-      }
-      // Show appropriate label based on current app mode
-      if (this.appMode === 'SUMMARY') {
-        el.innerHTML = `<span class="turn-line">Round Summary</span>`;
-      } else {
-        el.innerHTML = `<span class="turn-line" style="color:var(--muted)">Syncing…</span>`;
-      }
-      return;
+          if (!this._planMode && !this.state.resolving && this.appMode === 'PLANNING') {
+            console.error('[ui] State recovery failed — returning to menu');
+            if (this.onQuitToMenu) this.onQuitToMenu();
+          }
+        }, 5000);
+      }, 2000);
     }
-
-    // Offline / local mode: show legacy sequential-turn display
-    const glyph  = state.activePlayer === 'hero' ? '\uE000' : '\uE001';
-    const player = state.activePlayer === 'hero' ? 'Hero' : 'Witch';
-    const isAI   = (state.activePlayer === 'witch' && state.witchIsAI) ||
-                   (state.activePlayer === 'hero'  && state.heroIsAI);
-
-    const diamonds = state.actionsLeft > 0
-      ? '◆'.repeat(state.actionsLeft)
-      : '◇';
-
-    el.innerHTML = `
-      <span class="turn-faction player-${state.activePlayer}">${glyph}</span>
-      <span class="turn-line">${player}'s Turn ${isAI ? '<span class="ai-badge">AI</span>' : ''}</span>
-      <span class="actions-label">Actions</span>
-      <div class="actions-remaining">${diamonds}</div>
-    `;
+    el.innerHTML = `<span class="turn-title">Resolution</span>`;
   }
 
   _renderObjectives() {
@@ -3271,6 +3260,15 @@ export class UIController {
   }
 
   _renderEndTurnBtn() {
+    // Last Turn (↺) lives in the header during PLANNING only, and only once a
+    // prior round exists to replay (i.e. not turn 1). Hidden while waiting for
+    // opponents and throughout RESOLUTION so those states are title-only.
+    const replayBtn = this._el('replay-turn-btn');
+    if (replayBtn) {
+      const showReplay = this._planMode && !this._planSubmitted && this._hasReplayHistory;
+      replayBtn.style.display = showReplay ? '' : 'none';
+    }
+
     const btn = this._el('end-turn-btn');
     const returnBtn = this._el('plan-return-btn');
     if (!btn) return;
@@ -3291,11 +3289,11 @@ export class UIController {
                    && !panel.classList.contains('collapsed');
 
     if (this._planSubmitted) {
-      // After submission: hide submit, show return-to-menu
+      // WAITING FOR OPPONENTS — a title-only state. Hide the submit button AND
+      // the return-to-menu (← Menu) button: the top-left menu (☰) is the single,
+      // consistent exit across all three header states.
       btn.style.display = 'none';
-      if (returnBtn) {
-        returnBtn.style.display = panelOpen ? 'none' : '';
-      }
+      if (returnBtn) returnBtn.style.display = 'none';
     } else {
       // During planning: show submit, hide return-to-menu
       btn.style.display = '';

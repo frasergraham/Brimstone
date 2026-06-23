@@ -1199,6 +1199,19 @@ input, textarea, select, [contenteditable], [contenteditable] * {
 
 .turn-line { font-size: var(--fs-sm); color: #b8ac98; }
 
+/* Top-bar title — the single canonical header label. Exactly one of three
+   states shows at a time: PLANNING · WAITING FOR OPPONENTS · RESOLUTION
+   (see _renderTurnInfo / headerTitleState in ui.js). Uppercased + letter-spaced
+   so it reads as a status banner rather than body copy. */
+.turn-title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text-bright);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  white-space: nowrap;
+}
+
 .turn-faction {
   font-size: var(--fs-base);
   line-height: 1;
