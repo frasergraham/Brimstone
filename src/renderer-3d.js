@@ -2318,8 +2318,8 @@ export class Renderer3D {
     this._useSplatTerrain = true; // 1-line rollback: set false for legacy per-hex path
     this._splatGround   = null;  // the single merged ground mesh (flag on)
     this._splatPlugin   = null;  // TerrainSplatPlugin instance on the ground material
-    this._hexVertexRange = new Map(); // hexKey → base vertex index (×7 per tile)
-    this._splatFogBuf    = null; // Float32Array(tiles×7) backing the aFog attribute
+    this._hexVertexRange = new Map(); // hexKey → base vertex index (×13 per tile)
+    this._splatFogBuf    = null; // Float32Array(tiles×13) backing the aFog attribute
     // Per-map deterministic season tag — picked in `_buildMap` from a hash of
     // the tile layout (or `state.mapSeed` if exposed later). Drives seasonal
     // tree palettes + geometry. Null until the map is built.
@@ -7568,9 +7568,9 @@ export class Renderer3D {
 
   // ─── Splat terrain: one merged ground mesh ───────────────────────────────
   //
-  // Build a single mesh whose geometry is the playable-hex fans (7 verts each,
-  // identical layout to `_buildFlatHexMesh`) concatenated into shared buffers,
-  // in WORLD coordinates. Two custom vertex attributes drive the shader:
+  // Build a single mesh whose geometry is the playable-hex fans (13 verts each
+  // — centre + outer corner ring + inner ring; see `_emitSplatHex`) concatenated
+  // into shared buffers, in WORLD coordinates. Two custom vertex attributes drive the shader:
   //   • `aSplat` (vec3, static)  — per-vertex grass/dirt/forest blend weights.
   //   • `aFog`   (float, dynamic) — per-vertex fog veil 0..1, rewritten by
   //                                 `_writeFogWeights` as visibility changes.
@@ -7590,10 +7590,22 @@ export class Renderer3D {
   }
 
   /** Per-vertex hex fan emit shared between playable + border splat builds.
-   *  Writes one hex's 7 verts into the supplied buffers at `baseV`. */
+   *  Writes one hex's 13 verts into the supplied buffers at `baseV`.
+   *
+   *  Vertex layout (chosen so the centre+corner block stays byte-identical to
+   *  the legacy 7-vert fan — `aSplat` / corner-Y consumers read it unchanged):
+   *    baseV + 0       = centre
+   *    baseV + 1..6    = OUTER corners (radius R,      angle π/6 + j·π/3)
+   *    baseV + 7..12   = INNER ring    (radius R·FRAC, same angles)
+   *
+   *  The inner ring's splat/tint are linearly interpolated centre→corner at the
+   *  ring fraction, reproducing the exact gradient the old single fan drew — so
+   *  flat (non-river) tiles render pixel-identically. The river channel-sink
+   *  pass lowers the inner ring on water hexes to carve the flat trench floor. */
   _emitSplatHex(buffers, ti, col, row, splatWeights, edgeAlpha) {
     const R = HEX_RADIUS_WORLD;
-    const VPT = 7;
+    const VPT = SPLAT_VERTS_PER_TILE;
+    const FRAC = SPLAT_INNER_RING_FRAC;
     const { x, z } = hexToWorld(col, row, R);
     const baseV = ti * VPT;
     buffers.range.set(hexKey(col, row), baseV);
@@ -7601,28 +7613,53 @@ export class Renderer3D {
     buffers.positions[baseV * 3 + 2] = z;
     for (let j = 0; j < 6; j++) {
       const a = Math.PI / 6 + j * Math.PI / 3;
-      const vi = baseV + 1 + j;
-      buffers.positions[vi * 3]     = x + R * Math.cos(a);
-      buffers.positions[vi * 3 + 2] = z + R * Math.sin(a);
+      const cosA = Math.cos(a), sinA = Math.sin(a);
+      const outV = baseV + 1 + j;
+      buffers.positions[outV * 3]     = x + R * cosA;
+      buffers.positions[outV * 3 + 2] = z + R * sinA;
+      const inV = baseV + 7 + j;
+      buffers.positions[inV * 3]      = x + R * FRAC * cosA;
+      buffers.positions[inV * 3 + 2]  = z + R * FRAC * sinA;
     }
     for (let v = 0; v < VPT; v++) {
       buffers.normals[(baseV + v) * 3 + 1] = 1;
       buffers.edgeA[baseV + v] = edgeAlpha;
     }
+    // Centre + 6 corners copied straight from the 21-float inputs (verts 0..6).
     buffers.splat.set(splatWeights, baseV * 3);
     // Per-vertex tint — hashed purely by world XZ so coincident corners on
     // adjacent hexes get identical tints (no boundary seam).
-    buffers.tint.set(hexTintWeights(col, row, { radius: R }), baseV * 3);
-    const baseI = ti * 6 * 3;
+    const tint = hexTintWeights(col, row, { radius: R });
+    buffers.tint.set(tint, baseV * 3);
+    // Inner ring (verts 7..12): lerp centre→corner at FRAC for splat + tint so
+    // the cross-hex gradient matches the legacy flat fan exactly.
     for (let j = 0; j < 6; j++) {
-      buffers.indices[baseI + j * 3]     = baseV;
-      buffers.indices[baseI + j * 3 + 1] = baseV + 1 + j;
-      buffers.indices[baseI + j * 3 + 2] = baseV + 1 + ((j + 1) % 6);
+      const inBase = (baseV + 7 + j) * 3;
+      for (let c = 0; c < 3; c++) {
+        const ctrS = splatWeights[c], corS = splatWeights[(j + 1) * 3 + c];
+        buffers.splat[inBase + c] = ctrS + (corS - ctrS) * FRAC;
+        const ctrT = tint[c], corT = tint[(j + 1) * 3 + c];
+        buffers.tint[inBase + c] = ctrT + (corT - ctrT) * FRAC;
+      }
+    }
+    // 18 triangles: 6 inner-fan + 12 outer-band (two per sector). All wound to
+    // match the legacy fan's front-facing orientation (verified by area sign).
+    let o = ti * 18 * 3;
+    for (let j = 0; j < 6; j++) {
+      const j1 = (j + 1) % 6;
+      const c    = baseV;
+      const out  = baseV + 1 + j,  out1 = baseV + 1 + j1;
+      const inn  = baseV + 7 + j,  inn1 = baseV + 7 + j1;
+      // inner fan
+      buffers.indices[o++] = c;   buffers.indices[o++] = inn;  buffers.indices[o++] = inn1;
+      // outer band (inner ring → outer corners)
+      buffers.indices[o++] = inn; buffers.indices[o++] = out;  buffers.indices[o++] = out1;
+      buffers.indices[o++] = inn; buffers.indices[o++] = out1; buffers.indices[o++] = inn1;
     }
   }
 
   _allocateSplatBuffers(tileCount) {
-    const VPT = 7;
+    const VPT = SPLAT_VERTS_PER_TILE;
     return {
       positions: new Float32Array(tileCount * VPT * 3),
       normals:   new Float32Array(tileCount * VPT * 3),
@@ -7630,7 +7667,7 @@ export class Renderer3D {
       fog:       new Float32Array(tileCount * VPT),
       edgeA:     new Float32Array(tileCount * VPT),
       tint:      new Float32Array(tileCount * VPT * 3),
-      indices:   new Uint32Array(tileCount * 6 * 3),
+      indices:   new Uint32Array(tileCount * 18 * 3),
       range:     new Map(),
     };
   }
@@ -7656,11 +7693,15 @@ export class Renderer3D {
     // occluded by a flat Y=0 plane.
     //
     // Per river/bridge tile:
-    //   • CENTRE vertex drops to `RIVER_BED_Y - SPLAT_RIVER_CENTRE_EPS` —
-    //     1 cm BELOW the water ribbon. Without this extra epsilon the splat
-    //     centre is coplanar with the water at `RIVER_BED_Y` and z-fights
-    //     against it; the opaque splat (sampling grass for the surrounding
-    //     hex) wins the depth test and hides the animated water entirely.
+    //   • CENTRE vertex AND the whole INNER RING drop to
+    //     `RIVER_BED_Y - SPLAT_RIVER_CENTRE_EPS` — 1 cm BELOW the water ribbon.
+    //     The inner ring (radius SPLAT_INNER_RING_FRAC·R ≈ 0.66, wider than the
+    //     0.45 max water half-width) carves a FLAT trench floor so the water at
+    //     RIVER_BED_Y clears the splat across its whole footprint. The centre
+    //     epsilon keeps the floor a hair below the coplanar water so it never
+    //     z-fights. Now that the floor genuinely sits under the water, the
+    //     playable splat writes depth normally (props/bridges occlude the
+    //     river correctly) instead of the old `disableDepthWrite` workaround.
     //
     // Per corner (ALL tiles, river OR not — symmetric):
     //   • Each corner of `tile` is touched by THREE tiles total: `tile` plus
@@ -7674,6 +7715,7 @@ export class Renderer3D {
     // The vertex layout from `_emitSplatHex`:
     //   baseV + 0       = centre
     //   baseV + 1..6    = perimeter corners (j=0..5, angle π/6 + j·π/3)
+    //   baseV + 7..12   = inner ring (j=0..5, same angles, radius FRAC·R)
     {
       const isWater = (col, row) => {
         const t = this.state.tiles.get(hexKey(col, row));
@@ -7690,10 +7732,15 @@ export class Renderer3D {
         const baseV = range.get(hexKey(tile.col, tile.row));
         if (baseV == null) continue;
         const tileIsWater = isWater(tile.col, tile.row);
-        // Centre — only river/bridge hexes get their centre pushed below the
-        // water ribbon. Non-water hexes keep their centre at Y=0.
+        // Centre + inner ring — only river/bridge hexes get pushed below the
+        // water ribbon, carving the flat trench floor. Non-water hexes keep
+        // their centre + inner ring at Y=0.
         if (tileIsWater) {
-          buffers.positions[baseV * 3 + 1] = RIVER_BED_Y - SPLAT_RIVER_CENTRE_EPS;
+          const floorY = RIVER_BED_Y - SPLAT_RIVER_CENTRE_EPS;
+          buffers.positions[baseV * 3 + 1] = floorY;
+          for (let j = 0; j < 6; j++) {
+            buffers.positions[(baseV + 7 + j) * 3 + 1] = floorY;
+          }
         }
         const dirs = (tile.row & 1) ? HEX_DIRS_ODD : HEX_DIRS_EVEN;
         for (let j = 0; j < 6; j++) {
@@ -7749,8 +7796,8 @@ export class Renderer3D {
       const pos = borderPositions[bi];
       const a   = borderForestAlphaForTile(pos.col, pos.row, ext, bandDepth);
       this._emitSplatHex(buffers, bi, pos.col, pos.row, FOREST_ONLY, a);
-      const baseV = bi * 7;
-      for (let v = 0; v < 7; v++) buffers.fog[baseV + v] = 1.0;
+      const baseV = bi * SPLAT_VERTS_PER_TILE;
+      for (let v = 0; v < SPLAT_VERTS_PER_TILE; v++) buffers.fog[baseV + v] = 1.0;
     }
     const mesh = new BABYLON.Mesh('splatBorderGround', scene);
     const vd = new BABYLON.VertexData();
@@ -7912,16 +7959,21 @@ export class Renderer3D {
       }
       mat.disableDepthWrite = true;
     } else {
-      // R5 polish 3 — the playable splat carries a sunken hex centre + tilted
-      // corner displacement on river hexes (riverCornerY → -0.06..-0.18). At
-      // RIVER_BED_Y=-0.18 the water ribbon depth-fails against the splat cone
-      // everywhere except a tiny circle at each tile centre — producing the
-      // "~3 isolated arrow patches in a wide dirt channel" bug. Mirror the
-      // border splat: render the splat colours normally but skip the depth
-      // write so the water ribbon at -0.18 wins everywhere along the channel.
-      // Trees, buildings, and other props still write depth normally and
-      // continue to occlude the river where they sit on top.
-      mat.disableDepthWrite = true;
+      // Z-buffer refit — the playable splat WRITES DEPTH normally (Babylon
+      // default), so it is a true depth occluder: bridge decks, props, and the
+      // playable/border seam all sort against it correctly via the z-buffer
+      // instead of the fragile transparent-pass alphaIndex stacking the old
+      // `disableDepthWrite` workaround forced.
+      //
+      // The river ribbon stays visible because the channel-sink pass now carves
+      // a FLAT trench floor — centre + inner ring (radius SPLAT_INNER_RING_FRAC·R,
+      // wider than the max water half-width) dropped to RIVER_BED_Y minus the
+      // centre epsilon — so the water at RIVER_BED_Y clears the splat across its
+      // whole footprint, not just a pinhole at the tile centre (the old
+      // single-fan failure that motivated disabling depth write). Trees +
+      // buildings (which also write depth) keep occluding the water where they
+      // sit on top.
+      mat.disableDepthWrite = false;
     }
     mat.backFaceCulling = true;
     const PluginClass = makeTerrainSplatPlugin(BABYLON);
@@ -8896,12 +8948,14 @@ export class Renderer3D {
       // terrain reads wavy/dirt-path rather than two clean parallel lines.
       // River keeps its tight straight banks (a river edge IS sharp).
       if (networkName === 'road') attachRoadEdgeToMaterial(BABYLON, mat);
-      // R5 polish 3 — water renders with the NORMAL depth test now that the
-      // playable splat material runs `disableDepthWrite = true` (see
-      // `_buildSplatMaterial`). Trees + buildings continue to write depth and
-      // correctly occlude the water where they sit on top, instead of the
-      // previous `depthFunction = ALWAYS` workaround that let the river paint
-      // over everything in the scene.
+      // Water renders with the NORMAL depth test. The playable splat now writes
+      // depth (see `_buildSplatMaterial`) but the channel-sink pass carves a
+      // flat trench floor below RIVER_BED_Y across the inner ring, so the water
+      // ribbon clears the splat everywhere along the channel. Trees + buildings
+      // write depth and correctly occlude the water where they sit on top —
+      // no `depthFunction = ALWAYS` override (which let the river paint over the
+      // whole scene) and no terrain `disableDepthWrite` (which forced the
+      // fragile transparent-sort stacking).
       merged.material        = mat;
       // Register this tile clone's diffuse texture for per-frame flow scroll.
       // (Babylon's StandardMaterial.clone() deep-clones textures, so each tile
@@ -16048,8 +16102,14 @@ export class Renderer3D {
         // the veil edge doesn't average against non-existent tiles.
         return tiles && tiles.has(nk) ? nk : null;
       });
-      const w = hexFogWeights(key, neighborKeys, fogged);
-      buf.set(w, baseV);
+      const w = hexFogWeights(key, neighborKeys, fogged); // 7: centre + 6 corners
+      buf[baseV] = w[0];
+      for (let j = 0; j < 6; j++) {
+        buf[baseV + 1 + j] = w[1 + j];
+        // Inner ring (verts 7..12): lerp centre→corner at the ring fraction,
+        // matching the splat/tint interpolation so the veil stays continuous.
+        buf[baseV + 7 + j] = w[0] + (w[1 + j] - w[0]) * SPLAT_INNER_RING_FRAC;
+      }
     }
     ground.updateVerticesData('aFog', buf);
   }
@@ -16858,6 +16918,25 @@ export const RIVER_BED_Y         = -0.18;
  *  buffer at the default near plane to consistently resolve "water above
  *  bed". Operator-tunable. */
 export const SPLAT_RIVER_CENTRE_EPS = 0.01;
+/** Z-buffer refit — the splat ground fan is subdivided from a flat 7-vertex
+ *  fan (centre + 6 corners) into a 13-vertex two-ring fan (centre + an INNER
+ *  ring of 6 + the 6 outer corners). The extra inner ring lets a river hex
+ *  carry a FLAT sunken channel floor out to `SPLAT_INNER_RING_FRAC·R` while the
+ *  outer corners still rise to the banks — so the water ribbon at `RIVER_BED_Y`
+ *  clears the terrain across its whole footprint, not just a pinhole at the
+ *  tile centre. That, in turn, lets the playable splat write depth normally
+ *  (props/bridges/seams sort correctly) instead of the old `disableDepthWrite`
+ *  workaround. On NON-river tiles the subdivision is a visual no-op: the inner
+ *  ring's splat/tint/fog are linearly interpolated centre→corner at the ring
+ *  fraction, exactly reproducing the gradient the GPU drew across the old flat
+ *  triangle. */
+export const SPLAT_VERTS_PER_TILE = 13;
+/** Z-buffer refit — inner-ring radius as a fraction of `HEX_RADIUS_WORLD`. Must
+ *  exceed `RIVER_HALF_WIDTH_MAX` (0.45) so the flat channel floor fully covers
+ *  the widest water cross-section, and stay below the hex apothem (√3/2 ≈ 0.866)
+ *  so the ring stays interior (its verts are NOT shared with neighbours → no
+ *  seam-continuity constraint, the inner attributes can be derived locally). */
+export const SPLAT_INNER_RING_FRAC = 0.66;
 /** R5 follow-up — pure helper computing the Y a splat-ground CORNER vertex
  *  should sit at, given how many of the THREE tiles touching that corner
  *  (`tile + 2 corner-neighbours`) are water (river or bridge). Symmetric:
@@ -16866,18 +16945,26 @@ export const SPLAT_RIVER_CENTRE_EPS = 0.01;
  *  river-only corner-drop loop used to produce.
  *
  *  Mapping:
- *    0 → 0           (no drop — normal ground)
- *    1 → -0.06       (shallow, bank slope start)
- *    2 → -0.12       (mid bank)
- *    3 → RIVER_BED_Y (full bed — corner is interior to the channel)
+ *    0 → 0              (no drop — normal ground)
+ *    1 → RIVER_BED_Y/2  (shallow — dry OUTER bank, water doesn't reach it)
+ *    2 → RIVER_BED_Y    (full bed — the water FLOWS over this corner)
+ *    3 → RIVER_BED_Y    (full bed — corner is interior to the channel)
  *
- *  Linear in `waterCount` against `RIVER_BED_Y` so changing the bed depth
- *  rescales the slope automatically. */
+ *  Z-buffer refit — the step at `waterCount === 2` is load-bearing. Now that the
+ *  playable splat WRITES depth, the terrain occludes the water ribbon anywhere
+ *  it pokes above `RIVER_BED_Y`. A corner touched by ≥2 water tiles is a corner
+ *  the water flows ACROSS (e.g. the shared boundary between two consecutive
+ *  river tiles on a straight reach); it must sit at full bed depth or the river
+ *  reads as disconnected blue patches with dry gaps at every tile seam. A
+ *  `waterCount === 1` corner is the dry OUTER bank — the water's perpendicular
+ *  half-width (≤0.45) never reaches it (corner is ~0.5 off the centreline), so
+ *  it stays a shallow bank slope. */
 export function riverCornerY(waterCount) {
   const c = Math.max(0, Math.min(3, waterCount | 0));
+  if (c >= 2) return RIVER_BED_Y;
   // `|| 0` collapses the JS `-0` you'd otherwise get from `RIVER_BED_Y * 0`
   // when waterCount is 0 — callers compare against `0` strictly.
-  return RIVER_BED_Y * (c / 3) || 0;
+  return RIVER_BED_Y * (c / 2) || 0;
 }
 /** R5 — bank top Y. Sits a hair ABOVE the ground (Y=0) so the dirt-textured
  *  bank deck wins the depth fight against the underlying terrain disc at the

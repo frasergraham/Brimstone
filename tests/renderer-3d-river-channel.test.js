@@ -402,12 +402,15 @@ describe('R5 — _buildRiverBankMeshes integration', () => {
       `_riverFlowTextures should hold one diffuse texture per per-tile river clone (expected ${segments.length}, got ${inst._riverFlowTextures.length})`);
   });
 
-  // R5 polish 3 — the playable splat material must `disableDepthWrite` so the
-  // displaced river-hex cone (centre/corners at riverCornerY) does not
-  // depth-occlude the water ribbon at RIVER_BED_Y. Border splat already does
-  // this via its alpha-blend pipeline; the opaque playable splat needs the
-  // explicit flag.
-  test('_buildSplatMaterial(opaque) sets disableDepthWrite so the river-hex cone does not occlude the water', () => {
+  // Z-buffer refit — the playable splat now WRITES DEPTH (disableDepthWrite
+  // false). The river stays visible because the channel-sink pass carves a flat
+  // trench floor (centre + inner ring below RIVER_BED_Y across a radius wider
+  // than the max water half-width), so the water clears the splat without the
+  // old workaround. Writing depth makes the terrain a true occluder so bridge
+  // decks + the playable/border seam sort correctly via the z-buffer instead of
+  // fragile transparent-pass alphaIndex stacking. The BORDER splat keeps
+  // disableDepthWrite (it is alpha-blended — separate test).
+  test('_buildSplatMaterial(opaque) WRITES depth (no disableDepthWrite) — terrain is a real occluder', () => {
     const inst = Object.create(Renderer3D.prototype);
     inst._babylon = {
       StandardMaterial: function (name) {
@@ -424,8 +427,32 @@ describe('R5 — _buildRiverBankMeshes integration', () => {
     inst._fogTileDarken = 1;
     inst._terrainDetailTexture = () => null;
     const mat = inst._buildSplatMaterial({ alphaBlend: false });
+    assert.equal(mat.disableDepthWrite, false,
+      'playable (opaque) splat must write depth so props/bridges/seams occlude correctly via the z-buffer');
+  });
+
+  // The BORDER (alpha-blended wilderness) splat must STILL skip depth-write so
+  // its per-ring edge dissolve composites cleanly — only the playable splat
+  // flipped to writing depth.
+  test('_buildSplatMaterial(border) keeps disableDepthWrite for the alpha dissolve', () => {
+    const inst = Object.create(Renderer3D.prototype);
+    inst._babylon = {
+      StandardMaterial: function (name) {
+        this.name = name;
+        this.disableDepthWrite = false;
+        this.transparencyMode = 0;
+        this.backFaceCulling = true;
+        this.specularColor = null;
+      },
+      Color3: function (r, g, b) { this.r = r; this.g = g; this.b = b; },
+      Material: { MATERIAL_ALPHABLEND: 2 },
+    };
+    inst._scene = {};
+    inst._fogTileDarken = 1;
+    inst._terrainDetailTexture = () => null;
+    const mat = inst._buildSplatMaterial({ alphaBlend: true });
     assert.equal(mat.disableDepthWrite, true,
-      'playable (opaque) splat material must disableDepthWrite so the river-hex cone does not depth-occlude the water ribbon');
+      'border (alpha-blend) splat must keep disableDepthWrite so the edge dissolve composites cleanly');
   });
 });
 
@@ -438,10 +465,20 @@ describe('riverCornerY (pure helper)', () => {
   test('3 water neighbours → full bed depth', () => {
     assert.equal(riverCornerY(3), RIVER_BED_Y);
   });
-  test('monotonic in waterCount (1 < 2 in magnitude)', () => {
-    assert.ok(riverCornerY(1) < 0 && riverCornerY(1) > RIVER_BED_Y);
-    assert.ok(riverCornerY(2) < riverCornerY(1)); // deeper
-    assert.ok(riverCornerY(2) > RIVER_BED_Y);
+  test('2 water neighbours → full bed depth (water flows across this corner)', () => {
+    // Z-buffer refit — a corner shared by ≥2 water tiles is on the river's flow
+    // path; with the depth-writing splat it MUST reach full bed depth or the
+    // terrain occludes the water at every straight-reach tile seam.
+    assert.equal(riverCornerY(2), RIVER_BED_Y);
+  });
+  test('1 water neighbour → shallow dry bank (between ground and bed)', () => {
+    assert.ok(riverCornerY(1) < 0 && riverCornerY(1) > RIVER_BED_Y,
+      `waterCount 1 should be a partial bank slope, got ${riverCornerY(1)}`);
+  });
+  test('monotonic deepening 0 → 1 → 2 in magnitude', () => {
+    assert.equal(riverCornerY(0), 0);
+    assert.ok(riverCornerY(1) < riverCornerY(0)); // deeper than ground
+    assert.ok(riverCornerY(2) < riverCornerY(1)); // deeper than the bank
   });
   test('clamps negative / out-of-range input', () => {
     assert.equal(riverCornerY(-2), 0);
@@ -531,6 +568,10 @@ describe('_buildSplatPlayableMesh — symmetric channel displacement', () => {
     const baseV = range.get(hexKey(col, row));
     return mesh.positions[baseV * 3 + 1];
   }
+  function innerY(mesh, range, col, row, j) {
+    const baseV = range.get(hexKey(col, row));
+    return mesh.positions[(baseV + 7 + j) * 3 + 1];
+  }
   function cornerXZ(mesh, range, col, row, j) {
     const baseV = range.get(hexKey(col, row));
     return {
@@ -553,6 +594,30 @@ describe('_buildSplatPlayableMesh — symmetric channel displacement', () => {
     // Grass hex centre stays at ground level.
     assert.equal(centreY(mesh, range, 0, 0), 0);
     assert.equal(centreY(mesh, range, 2, 0), 0);
+  });
+
+  test('river hex INNER RING carves a flat trench floor below the water ribbon', () => {
+    // The inner ring (radius SPLAT_INNER_RING_FRAC·R ≈ 0.66, wider than the max
+    // water half-width 0.45) must sit below RIVER_BED_Y on every water hex so
+    // the water ribbon clears the depth-writing splat across its whole
+    // footprint — not just the tile centre (the single-fan failure that
+    // previously forced disableDepthWrite on the terrain).
+    const tiles = makeMap(new Set(['1,1', '2,1', '3,1']));
+    const inst = setupSplatInst(tiles);
+    inst._buildSplatPlayableMesh({ name: 'root' });
+    const mesh  = inst._splatGround;
+    const range = inst._hexVertexRange;
+    for (const [c, r] of [[1, 1], [2, 1], [3, 1]]) {
+      for (let j = 0; j < 6; j++) {
+        assert.ok(innerY(mesh, range, c, r, j) <= RIVER_BED_Y + 1e-6,
+          `river hex (${c},${r}) inner vert ${j} Y ${innerY(mesh, range, c, r, j)} should sit at/below RIVER_BED_Y ${RIVER_BED_Y}`);
+      }
+    }
+    // Grass hex inner ring stays at ground level (subdivision is a no-op there).
+    for (let j = 0; j < 6; j++) {
+      assert.equal(innerY(mesh, range, 0, 0, j), 0,
+        `grass hex inner vert ${j} should stay at Y=0`);
+    }
   });
 
   test('corner shared by 3 grass hexes stays at Y=0', () => {

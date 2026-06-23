@@ -20,9 +20,9 @@ function makeRenderer() {
 // Stand up the minimum splat-ground state `_writeFogWeights` needs: a fog
 // buffer, a vertex-range map, a stub ground mesh that records updateVerticesData.
 function withSplatGround(r, tileKeys) {
-  const buf = new Float32Array(tileKeys.length * 7);
+  const buf = new Float32Array(tileKeys.length * 13);
   const range = new Map();
-  tileKeys.forEach((k, i) => range.set(k, i * 7));
+  tileKeys.forEach((k, i) => range.set(k, i * 13));
   const updates = [];
   r._splatFogBuf = buf;
   r._hexVertexRange = range;
