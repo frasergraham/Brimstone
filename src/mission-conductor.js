@@ -121,8 +121,11 @@ export class MissionConductor {
     this._skipLink = this._tooltip?.querySelector('.tut-skip-link');
     this._voiceBtn = this._tooltip?.querySelector('.tut-voice-btn');
     this._arrowEl  = document.getElementById('tutorial-arrow');
+    this._pulseEl  = document.getElementById('tutorial-pulse-circle');
     this._spotlitEl = null;
     this._hexArrowRAF = null; // rAF handle re-anchoring an arrow to a map hex
+    this._hexPulseRAF = null; // rAF handle re-anchoring the pulse ring to a hex
+    this._elemAnchorRAF = null; // rAF handle re-anchoring arrow + pulse to a DOM element
     this._voiceAudio  = null; // currently playing narration clip
 
     // Bind handlers once so destroy() can remove them. The tooltip buttons are
@@ -144,6 +147,19 @@ export class MissionConductor {
       this._voiceBtn.addEventListener('click', this._onVoiceBtnBound);
       this._voiceBtn.style.display = this._config.voiceKey ? '' : 'none';
       this._syncVoiceBtn();
+    }
+
+    // Scripted guidance owns the plan: disable the Clear and Auto-Guard buttons
+    // so the player can't discard the scripted plan or queue stray actions and
+    // break the deterministic flow. Restored in destroy() at the handoff.
+    if (this._mode === 'scripted') this._lockPlanControls(true);
+  }
+
+  /** Enable/disable the plan controls the tutorial must own (Clear, Auto-Guard). */
+  _lockPlanControls(locked) {
+    for (const id of ['plan-clear-btn', 'plan-autoguard-btn']) {
+      const btn = document.getElementById(id);
+      if (btn) { btn.disabled = locked; btn.style.opacity = locked ? '0.4' : ''; }
     }
   }
 
@@ -235,6 +251,18 @@ export class MissionConductor {
         const actor = this.state?.entities?.find(e => e.id === action.entityId);
         if (!actor || actor.type !== t.entityType) return;
       }
+      // Optional destination filter — gate a MOVE on REACHING a specific hex, so
+      // a multi-hop advance only completes the step on the final leg (teaching
+      // two move actions to cross the bridge).
+      if (t.toCol != null && (action.toCol !== t.toCol || action.toRow !== t.toRow)) return;
+      // Optional count — require N matching actions before advancing (e.g. stack
+      // two attacks on the zombie before moving on).
+      if ((++this._stepActionCount) < (t.count ?? 1)) return;
+      // A MOVE that completes a step switches to a new (often different) unit:
+      // suppress the UI's chaining re-select for this one move so the next click
+      // selects fresh. A mid-chain MOVE (toCol mismatch above) returns before
+      // here, leaving the selection intact so the player keeps moving this unit.
+      if (action.type === PlanActionType.MOVE && this.ui) this.ui._tutorialSuppressReselect = true;
       this._completeStep();
     }
   }
@@ -299,12 +327,16 @@ export class MissionConductor {
     }
     this._stopVoice();
     this._clearSpotlight();
+    if (this._mode === 'scripted') this._lockPlanControls(false);
     if (this._tooltip) this._tooltip.style.display = 'none';
     if (this._skipLink) this._skipLink.style.display = 'none';
     if (this.renderer) this.renderer.tutorialSpotlightHex = null;
     if (this.ui) {
       this.ui.tutorialClickBlocked = false;
       this.ui.tutorialSubmitBlocked = false;
+      this.ui.tutorialAllowedHexes = null;
+      this.ui.tutorialAllowedActions = null;
+      this.ui.tutorialAllowedUnits = null;
     }
     // Detach the shared-button listeners added in the constructor. Without this
     // a destroyed conductor lingers (held alive by the DOM listener) and re-runs
@@ -338,6 +370,7 @@ export class MissionConductor {
     this._step = idx;
     const step = this._steps[idx];
     this._shownStepIds.add(step.id);
+    this._stepActionCount = 0;  // matching action_queued count for `count`-gated steps
 
     // Update tooltip content
     if (this._titleEl) this._titleEl.textContent = step.title;
@@ -345,7 +378,7 @@ export class MissionConductor {
 
     // Position tooltip. Blocking dialogs are ALWAYS centered — off-to-the-side
     // dialogs don't get read (see tests/tutorial.test.js step lint).
-    const isDialogStep = (step.trigger === 'click' || step.trigger === 'complete');
+    const isDialogStep = (step.trigger === 'click' || step.trigger === 'complete' || step.trigger === 'handoff');
     if (this._tooltip) {
       const pos = isDialogStep ? 'center' : (step.tooltipPos ?? 'center');
       this._tooltip.className = `tutorial-tooltip tutorial-tooltip--${pos}`;
@@ -354,7 +387,7 @@ export class MissionConductor {
 
     // Button label
     if (this._nextBtn) {
-      if (step.trigger === 'complete') {
+      if (step.trigger === 'complete' || step.trigger === 'handoff') {
         this._nextBtn.textContent   = step.buttonLabel ?? 'Continue →';
         this._nextBtn.style.display = 'block';
       } else if (step.trigger === 'click') {
@@ -380,12 +413,36 @@ export class MissionConductor {
       this.ui.tutorialSubmitBlocked = !optional && step.trigger?.type !== 'plan_submitted';
     }
 
-    // Spotlight
+    // Strict-gating allowlists (Learn-to-Play). A non-null allowedHexes set
+    // restricts which map hexes are clickable; allowedActions restricts the arc
+    // menu. Dialog steps block the map outright, so their lists don't matter.
+    this._publishGating(step);
+
+    // Spotlight (+ optional pulsing red circle on the same target)
     this._clearSpotlight();
-    if (step.spotlight) this._applySpotlight(step.spotlight);
+    if (step.spotlight) this._applySpotlight(step.spotlight, step.pulse === true);
 
     // Narration
     this._playVoice(step);
+  }
+
+  /** Publish per-step click/action allowlists onto the UIController. */
+  _publishGating(step) {
+    if (!this.ui) return;
+    this.ui.tutorialAllowedHexes = Array.isArray(step.allowHexes)
+      ? new Set(step.allowHexes.map(h => `${h.col},${h.row}`))
+      : null;
+    const acts = step.allowActions !== undefined ? step.allowActions : this._config.actionWhitelist;
+    this.ui.tutorialAllowedActions = Array.isArray(acts) ? new Set(acts) : null;
+    this.ui.tutorialAllowedUnits = Array.isArray(step.allowUnits) ? new Set(step.allowUnits) : null;
+
+    // Clear any lingering selection when JUMPING into a gated step out of band
+    // (roundStepMap jumps at planning start). For a step reached by completing a
+    // move, the suppress-reselect flag (set in onActionQueued, consumed by the
+    // same click handler's post-move re-select) handles deselection — so we must
+    // NOT touch that flag here or we'd clobber it before it's consumed.
+    const gated = step.trigger && typeof step.trigger === 'object';
+    if (gated && typeof this.ui._clearSelection === 'function') this.ui._clearSelection();
   }
 
   /** A step's goal was met. Scripted: advance the sequence. Hints: dismiss. */
@@ -415,6 +472,9 @@ export class MissionConductor {
     if (this.ui) {
       this.ui.tutorialClickBlocked  = false;
       this.ui.tutorialSubmitBlocked = false;
+      this.ui.tutorialAllowedHexes = null;
+      this.ui.tutorialAllowedActions = null;
+      this.ui.tutorialAllowedUnits = null;
     }
   }
 
@@ -425,6 +485,13 @@ export class MissionConductor {
     if (step.trigger === 'complete') {
       this.destroy();
       this._config.onComplete?.();
+      return;
+    }
+
+    // Release control to free play (witch AI takes over) without ending the game.
+    if (step.trigger === 'handoff') {
+      this.destroy();
+      this._config.onHandoff?.();
       return;
     }
 
@@ -439,23 +506,96 @@ export class MissionConductor {
     this.destroy();
   }
 
-  _applySpotlight(target) {
+  _applySpotlight(target, pulse = false) {
     if (target.type === 'hex') {
-      this.renderer.tutorialSpotlightHex = { col: target.col, row: target.row };
-      if (this._redraw) this._redraw();
+      // With the pulsing circle + arrow (Learn-to-Play) we deliberately DON'T
+      // draw the gold hex disc — three overlapping highlights is too much.
+      if (!pulse) {
+        this.renderer.tutorialSpotlightHex = { col: target.col, row: target.row };
+        if (this._redraw) this._redraw();
+      }
       if (target.arrow && this._arrowEl) {
         this._startHexArrow(target.col, target.row, target.arrow);
       }
+      if (pulse && this._pulseEl) this._startHexPulse(target.col, target.row);
     } else if (target.type === 'element') {
       const el = document.querySelector(target.selector);
       if (el) {
         el.classList.add('tutorial-spotlit');
         this._spotlitEl = el;
       }
-      if (target.arrow && this._arrowEl) {
-        this._showArrow(target.selector, target.arrow);
+      // Re-anchor the arrow + pulse to the element EVERY frame so they track
+      // layout/scroll and never stick at 0,0 when the element isn't laid out yet
+      // (the mobile submit button reported at the top-left corner).
+      if ((target.arrow || pulse) && (this._arrowEl || this._pulseEl)) {
+        this._startElementAnchor(target.selector, target.arrow, pulse);
       }
     }
+  }
+
+  /** Track a DOM element across frames, positioning the arrow + pulse on it. */
+  _startElementAnchor(selector, direction, pulse) {
+    const place = (r) => {
+      const visible = r && (r.width > 0 || r.height > 0) && r.bottom > 0 && r.right > 0;
+      if (visible) {
+        if (direction && this._arrowEl) this._positionArrow(r, direction);
+        if (pulse && this._pulseEl) this._positionPulse(r);
+      } else {
+        if (direction && this._arrowEl) this._arrowEl.style.display = 'none';
+        if (pulse && this._pulseEl) this._pulseEl.style.display = 'none';
+      }
+    };
+    if (typeof requestAnimationFrame !== 'function') {
+      place(document.querySelector(selector)?.getBoundingClientRect());
+      return;
+    }
+    this._stopElementAnchor();
+    const tick = () => {
+      place(document.querySelector(selector)?.getBoundingClientRect());
+      this._elemAnchorRAF = requestAnimationFrame(tick);
+    };
+    tick();
+  }
+
+  _stopElementAnchor() {
+    if (this._elemAnchorRAF != null) {
+      cancelAnimationFrame(this._elemAnchorRAF);
+      this._elemAnchorRAF = null;
+    }
+  }
+
+  /** Center the pulsing red ring on a screen-space rect. */
+  _positionPulse(rect) {
+    const el = this._pulseEl;
+    if (!el) return;
+    el.style.left = (rect.left + rect.width / 2) + 'px';
+    el.style.top  = (rect.top + rect.height / 2) + 'px';
+    el.style.display = 'block';
+  }
+
+  /** Anchor the pulse ring to a map hex, re-projecting every frame (camera pan/zoom). */
+  _startHexPulse(col, row) {
+    if (typeof this.renderer?.getHexScreenPosition !== 'function') return;
+    if (typeof requestAnimationFrame !== 'function') return;
+    this._stopHexPulse();
+    const tick = () => {
+      const pos = this.renderer.getHexScreenPosition(col, row);
+      if (pos) {
+        this._positionPulse({ left: pos.x, top: pos.y, width: 0, height: 0 });
+      } else if (this._pulseEl) {
+        this._pulseEl.style.display = 'none';
+      }
+      this._hexPulseRAF = requestAnimationFrame(tick);
+    };
+    tick();
+  }
+
+  _stopHexPulse() {
+    if (this._hexPulseRAF !== null) {
+      cancelAnimationFrame(this._hexPulseRAF);
+      this._hexPulseRAF = null;
+    }
+    if (this._pulseEl) this._pulseEl.style.display = 'none';
   }
 
   _showArrow(selector, direction) {
@@ -539,6 +679,8 @@ export class MissionConductor {
     if (this.renderer) this.renderer.tutorialSpotlightHex = null;
     if (this._backdrop) this._backdrop.classList.remove('active');
     this._stopHexArrow();
+    this._stopHexPulse();
+    this._stopElementAnchor();
     if (this._arrowEl) this._arrowEl.style.display = 'none';
   }
 

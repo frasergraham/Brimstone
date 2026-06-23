@@ -16,7 +16,7 @@ import { isModeAvailable, isFactionAvailable, COMING_SOON_LABEL } from '../demo-
 
 /** The six rail destinations, top to bottom (mirrors the mock). */
 const DESTINATIONS = [
-  { id: 'continue', icon: ICON.play,  label: 'Continue',         title: 'Continue',         tag: 'Games in Progress',            accent: 'gold' },
+  { id: 'continue', icon: ICON.play,  label: 'Battle Log',       title: 'Battle Log',       tag: 'Games in Progress',            accent: 'gold' },
   { id: 'campaign', icon: '\uE021',  label: 'Campaign',         title: 'The Campaign',     tag: 'Assemble a party of survivors and follow the story of Ishmael and the Witch',    accent: 'gold' },
   { id: 'skirmish', icon: '\uE061', label: 'Skirmish',         title: 'Skirmish',         tag: 'Single player battle vs. AI - hold the majority of power nodes to win', accent: 'gold' },
   { id: 'others',   icon: '\uE023', label: 'Play Online',       title: 'Play Online',      tag: 'Multiplayer single battles, or join the persistent two-week long async battle for Caleb\'s Hollow',      accent: 'purple' },
@@ -182,15 +182,19 @@ const PANELS = {
 
 /** Continue — your last save as the hero object, then everything else waiting. */
 function _panelContinue(body) {
-  if (!_data?.activeGames) return _placeholderPanel(body, { label: 'Continue' });
+  if (!_data?.activeGames) return _placeholderPanel(body, { label: 'Battle Log' });
   const token = ++_renderToken;
   body.innerHTML = `<p class="ledger-placeholder">Reading the ledger…</p>`;
   _data.activeGames().then((rows) => {
     if (token !== _renderToken) return;              // a newer render superseded us
     const sorted = mmSortRows(rows || []);
     body.replaceChildren();
+    // New players (nothing in progress) see Learn to Play as the headline; once
+    // there are games to resume, it slips below them as a quiet refresher option.
+    const firstTime = !sorted.length;
+    if (firstTime) body.appendChild(_learnToPlayCard(true));
     if (!sorted.length) {
-      body.appendChild(_empty('Nothing in progress. Begin a Campaign or a Skirmish from the rail.'));
+      body.appendChild(_empty('Or begin a Campaign or a Skirmish from the rail.'));
       return;
     }
     const [hero, ...rest] = sorted;
@@ -202,7 +206,28 @@ function _panelContinue(body) {
       for (const r of rest.slice(0, 5)) list.appendChild(_feedRow(r));
       body.appendChild(list);
     }
+    body.appendChild(_learnToPlayCard(false));
   }).catch(() => { if (token === _renderToken) body.replaceChildren(_empty('Could not read the ledger.')); });
+}
+
+/** "Learn to Play" — launches the standalone guided tutorial. */
+function _learnToPlayCard(headline) {
+  const card = document.createElement('div');
+  card.className = 'lg-learn-card' + (headline ? ' is-headline' : '');
+  card.setAttribute('role', 'button');
+  card.tabIndex = 0;
+  card.innerHTML =
+    `<div class="lg-learn-thumb" aria-hidden="true" style="background-image:url(assets/mission-maps/learn.jpg)"></div>` +
+    `<div class="lg-learn-body">` +
+      `<div class="lg-learn-kicker">${headline ? 'New here?' : 'Refresher'}</div>` +
+      `<div class="lg-learn-title gthc">Learn to Play</div>` +
+      `<div class="lg-learn-sub">A short guided battle — plan, fight, and hold a Power Node.</div>` +
+    `</div>` +
+    `<span class="lg-learn-cta">${ICON.play} Start</span>`;
+  const go = () => _data?.startLearnToPlay?.();
+  card.addEventListener('click', go);
+  card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
+  return card;
 }
 
 /** Campaign — pick a playthrough slot, then play any available mission. */

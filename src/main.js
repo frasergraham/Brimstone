@@ -52,6 +52,9 @@ import { makeShowLoadingAndReveal } from './loading-reveal.js';
 import { MAP_SIZES } from './map.js';
 import { nodeController } from './game.js';
 import { MissionConductor, areHintsSuppressed, markHintsSeen, resetAllHintsForCampaign } from './mission-conductor.js';
+import {
+  buildLearnMap, placeLearnUnits, LEARN_STEPS, LEARN_CONDUCTOR_CONFIG,
+} from './learn/learn-config.js';
 import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel, getEquippedWeaponIdOf, normalizeItems, flattenItemCounts } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, CAMPAIGN_SLOT_COUNT, getActiveSlot, setActiveSlot, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout, deploySpots } from './campaign/campaign.js';
@@ -9425,6 +9428,13 @@ const _genThumbParam = new URLSearchParams(location.search).get('genMissionThumb
 if (_genThumbParam) {
   (async () => {
     try {
+      // The standalone Learn-to-Play tutorial isn't a campaign mission — boot its
+      // board directly (fog cleared so the whole map shows in the card image).
+      if (_genThumbParam === 'learn') {
+        _startLearnToPlay();
+        if (state) { state.fogOfWar = 'none'; redraw(); }
+        return;
+      }
       const camp = CAMPAIGNS.find(c => !c.disabled && (c.missions || []).some(m => m.id === _genThumbParam));
       if (!camp) { console.error('genMissionThumb: no campaign has mission', _genThumbParam); return; }
       _activeCampaign = new Campaign(camp, 1);
@@ -9599,6 +9609,83 @@ function _ledgerStartSkirmish(factionId, opts = {}) {
   const enemyFactionId = enemies.length ? enemies[Math.floor(Math.random() * enemies.length)] : null;
   document.getElementById('ledger-screen')?.classList.remove('is-active');
   init(/*witchIsAI*/ isDay, /*heroIsAI*/ !isDay, /*autoplay*/ false, factionId, { ...opts, enemyFactionId });
+}
+
+// ── Learn to Play (standalone guided tutorial) ──────────────────────────────
+// A self-contained onboarding flow, NOT a campaign mission: a fixed smallest-size
+// map, the MissionConductor steering the first three rounds with strict click /
+// action gating, then a handoff to the witch AI for a real, winnable battle.
+function _startLearnToPlay() {
+  _autoplay = false;
+  _gameStartTime = Date.now();
+  _missionConductor?.destroy();
+  _missionConductor = null;
+  _activeCampaign   = null;
+  _activeMissionDef = null;
+  _roundHistory     = [];
+  _spSaveId         = null;   // never persists to the Continue feed
+
+  document.getElementById('ledger-screen')?.classList.remove('is-active');
+  document.getElementById('setup-screen').style.display = 'none';
+  document.getElementById('game-screen').style.display  = 'flex';
+  const canvas = document.getElementById('game-canvas');
+
+  const mapData = buildLearnMap();
+  state = new GameState(false /* witchIsAI */, false /* heroIsAI */, 'tutorial', null, mapData);
+  state.fogOfWar = 'partial';   // so the Witch's forces "appear" as they close in
+
+  // A melee townsperson who shares the hero's tile + Isaac the archer, plus the
+  // Witch's two (fragile) zombies. Shared with the validation test.
+  placeLearnUnits(state);
+
+  // Starting wood so the fortify lesson is affordable.
+  state.inventory.hero = normalizeItems({ wood: 2, food: 1 });
+
+  witchAI = null; heroAI = null;
+  _setupLocalUI(canvas, null, null, false);
+  // Verification probes (mirror the campaign loader); inert in normal play.
+  if (typeof window !== 'undefined') {
+    if (!Object.getOwnPropertyDescriptor(window, '__ui')) {
+      Object.defineProperty(window, '__ui', { configurable: true, get: () => ui });
+    }
+    window.__learnState = state;
+    window.__renderer3d = renderer;
+  }
+  ui.tutorialMode = true;
+  ui.onPlanActionAdded = (action) => _missionConductor?.onActionQueued(action);
+  ui.onEntitySelected  = (entity) => _missionConductor?.onEntitySelected(entity);
+  ui._setChronicleOpen(false);
+
+  _missionConductor = new MissionConductor(
+    state, ui, renderer, redraw, LEARN_STEPS,
+    { ...LEARN_CONDUCTOR_CONFIG, onHandoff: () => _learnHandoff() },
+  );
+
+  redraw();
+  _enterGameView();
+  _missionConductor.start();
+  _startLocalPlanningPhase();
+}
+
+// Release the guided overlay and let the Witch fight as a normal AI from here:
+// the tiny map plays out as a real, winnable game (hold the node to 4 points or
+// slay the Witch). Fired by the conductor's `handoff` step.
+function _learnHandoff() {
+  _missionConductor = null;          // already destroyed itself before this fires
+  if (ui) ui.tutorialMode = false;
+  state.witchIsAI = true;            // _enterLocalPlanningMode routes to the AI submit path
+  // Keep the free-play battle winnable for a first-timer: strip the witch's
+  // summon resources and hard-cap her total summons so she can't immediately
+  // raise golems / a horde for the rest of the fight.
+  state.inventory.witch = normalizeItems({});
+  state.maxWitchSummons = 2;
+  witchAI = new WitchAIEngine(state, redraw);
+  witchAI.onBattleResult = (actorSnap, targetSnap, result) =>
+    new Promise(resolve => ui._showBattleDialog(actorSnap, targetSnap, result, resolve));
+  const resignBtn = document.getElementById('menu-resign-btn');
+  if (resignBtn) resignBtn.style.display = '';
+  ui.onResignGame = () => _resignLocalGame('hero');
+  _enterLocalPlanningMode();
 }
 
 // Online snapshot for Play With Others: signed-in flag, live games, and the
@@ -9802,6 +9889,7 @@ function _buildLedgerData() {
     partyAction:      (kind, target, weapon) => _ledgerPartyAction(kind, target, weapon),
     skirmishFactions: () => _ledgerSkirmishFactions(),
     startSkirmish:    (factionId, opts) => _ledgerStartSkirmish(factionId, opts),
+    startLearnToPlay: () => _startLearnToPlay(),
     online:           () => _ledgerOnline(),
     signOut:          () => _signOut(),
     activate:         (row) => _mmDefaultRowClick(row),   // resume / open / replay
@@ -9835,10 +9923,10 @@ function _buildLedgerData() {
     ss?.style.setProperty('display', 'none');
     import('./menu/ledger.js').then(({ initLedger }) => {
       const session = loadSession();
-      // Land a brand-new player (nothing to resume) on Campaign so they head
-      // straight for the tutorial; anyone with a game in progress opens on
-      // Continue. Uses the same active-slot-aware continuable check.
-      const start = hasContinuableGames() ? 'continue' : 'campaign';
+      // Everyone opens on Continue: returning players resume in-progress games,
+      // and brand-new players (nothing to resume) see the Learn to Play card as
+      // the headline there — the first thing a first-timer sees.
+      const start = 'continue';
       const api = initLedger({ playerName: session?.username || 'Wanderer', data: _buildLedgerData(), start });
       // Stash the api module-side so the campaign debrief's Continue can route
       // back into the Campaign panel (api.show() + api.select('campaign')) without
@@ -9849,6 +9937,8 @@ function _buildLedgerData() {
       // can reach a specific mission's debrief. Inert in normal play.
       window.__startCampaignMission = (missionId, slot = 1, resume = false) =>
         _ledgerStartCampaignMission(slot, missionId, resume);
+      // Verification hook: launch the standalone Learn-to-Play tutorial directly.
+      window.__startLearnToPlay = () => _startLearnToPlay();
       api?.show();
       // Re-show the ledger if anything reveals the legacy #setup-screen (e.g.
       // game-over → back to menu) while we're not in a game.

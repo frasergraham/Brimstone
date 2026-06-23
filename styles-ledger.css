@@ -124,6 +124,24 @@
 .lg-resume-meta { font-size:14px; color:var(--lg-dim); margin:6px 0 2px; }
 .lg-resume-actions { margin-top:auto; display:flex; gap:10px; padding-top:10px; }
 
+/* Learn to Play card (Continue) */
+.lg-learn-card { display:flex; align-items:center; gap:16px; cursor:pointer; margin-bottom:18px;
+  background:rgba(40,32,18,.42); border:1px solid rgba(212,167,44,.34); border-radius:6px; padding:14px 16px;
+  transition:border-color .15s, background .15s; }
+.lg-learn-card:hover, .lg-learn-card:focus-visible { border-color:rgba(212,167,44,.7);
+  background:rgba(54,42,22,.55); outline:none; }
+.lg-learn-card.is-headline { padding:18px 20px;
+  background:linear-gradient(120deg, rgba(54,42,22,.6), rgba(40,32,18,.42)); }
+.lg-learn-thumb { width:96px; height:64px; flex:none; border-radius:4px; background-size:cover;
+  background-position:center; border:1px solid rgba(212,167,44,.34); }
+.lg-learn-card.is-headline .lg-learn-thumb { width:140px; height:90px; }
+.lg-learn-body { flex:1; min-width:0; }
+.lg-learn-kicker { font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--lg-gold-dim); margin-bottom:3px; }
+.lg-learn-title { font-family:var(--lg-display); font-weight:600; font-size:22px; color:var(--lg-ink); line-height:1.05; }
+.lg-learn-card.is-headline .lg-learn-title { font-size:28px; }
+.lg-learn-sub { font-size:13px; color:var(--lg-dim); margin-top:4px; }
+.lg-learn-cta { font-size:14px; color:var(--lg-gold); white-space:nowrap; flex:none; }
+
 /* feed rows (Continue "also waiting", Replays) */
 .lg-feed { display:flex; flex-direction:column; gap:9px; }
 .lg-feed-row { display:flex; align-items:center; gap:14px; background:rgba(16,18,26,.66); border:1px solid #232036;

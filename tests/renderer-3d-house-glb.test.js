@@ -58,13 +58,16 @@ function makeFakeBabylon({ importImpl, mergeImpl } = {}) {
   };
 }
 
-/** Make a fake mesh that records createInstance calls + dispose state. */
+/** Make a fake mesh that records clone calls + dispose state. Buildings are
+ *  rendered as CLONES (each with its own material) so fog can darken one
+ *  building independently — the fake `clone()` returns an instance-like mesh. */
 function makeFakeMesh(name, opts = {}) {
   return {
     name,
     isPickable: true,
     metadata: null,
     isEnabled: true,
+    material: opts.material ?? null,
     renderingGroupId: 7, // start non-zero so the world-group write is observable
     position: { x: 0, y: 0, z: 0 },
     scaling: null,
@@ -75,11 +78,12 @@ function makeFakeMesh(name, opts = {}) {
     getTotalIndices:  () => opts.indices ?? 36,
     setEnabled(b) { this.isEnabled = b; },
     dispose() { this._disposed = true; },
-    createInstance(n) {
-      const inst = makeFakeInstance(n, this);
-      this._instances = this._instances || [];
-      this._instances.push(inst);
-      return inst;
+    clone(n) {
+      const c = makeFakeInstance(n, this);
+      c.material = this.material;
+      this._clones = this._clones || [];
+      this._clones.push(c);
+      return c;
     },
   };
 }
@@ -89,6 +93,9 @@ function makeFakeInstance(name, source) {
     name,
     source,
     isPickable: true,
+    isEnabled: true,
+    receiveShadows: false,
+    material: null,
     metadata: null,
     position: { x: 0, y: 0, z: 0 },
     scaling: null,
@@ -98,6 +105,7 @@ function makeFakeInstance(name, source) {
     _frozen: false,
     isWorldMatrixFrozen: false,
     doNotSyncBoundingInfo: false,
+    setEnabled(b) { this.isEnabled = b; },
     freezeWorldMatrix() { this._frozen = true; this.isWorldMatrixFrozen = true; },
     dispose() { this._disposed = true; },
   };
@@ -352,14 +360,18 @@ describe('_buildBuildingInstance — positioning + jitter + metadata', () => {
     assert.equal(result, null);
   });
 
-  test('createInstance is called with a per-hex unique name', () => {
+  test('clone is created with a per-hex unique name and re-enabled', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
     stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.INN][0]);
     const a = r._buildBuildingInstance({ building: BuildingType.INN, col: 3, row: 5 }, 0, 0, null);
     const b = r._buildBuildingInstance({ building: BuildingType.INN, col: 4, row: 5 }, 0, 0, null);
-    assert.equal(a.name, 'bldgInst_3_5');
-    assert.equal(b.name, 'bldgInst_4_5');
+    assert.equal(a.name, 'bldgGlb_3_5');
+    assert.equal(b.name, 'bldgGlb_4_5');
+    // Template is hidden; the clone must be re-enabled to render.
+    assert.equal(a.isEnabled, true);
+    // Tracked for the fog-darken pass.
+    assert.ok(r._buildingMeshes.has(a) && r._buildingMeshes.has(b));
   });
 
   test('positions the instance at the NE building slot, anchored at tile-top', () => {
@@ -402,17 +414,17 @@ describe('_buildBuildingInstance — positioning + jitter + metadata', () => {
     assert.ok(Math.abs(inst.rotation.y - houseYawForHex(4, 9)) < 1e-9);
   });
 
-  test('instance is unpickable, fog-immune, and on world-geometry render group', () => {
+  test('building is unpickable, skips the prop veil, carries its fog hex, and is on world group', () => {
     const r = newInst();
     r._babylon = makeFakeBabylon();
     stubTemplate(r, BUILDING_GLB_BY_TYPE[BuildingType.CHURCH][0]);
     const inst = r._buildBuildingInstance({ building: BuildingType.CHURCH, col: 0, row: 0 }, 0, 0, null);
     assert.equal(inst.isPickable, false);
-    // Buildings ignore fog (render full-brightness regardless) until the
-    // per-instance fog-darken path can be made robust against Babylon's
-    // PBR-multi-submesh instancing pipeline — see _loadBuildingModel.
+    // `respectsFog:false` keeps the per-prop veil from touching it; darkening is
+    // the dedicated `_applyBuildingFogDarken` pass, keyed on `fogHexKey`.
     assert.equal(inst.metadata.respectsFog, false);
     assert.equal(inst.metadata.kind, 'building-glb');
+    assert.equal(inst.metadata.fogHexKey, '0,0');
     assert.equal(inst.renderingGroupId, 0);
   });
 
@@ -477,24 +489,6 @@ describe('_loadBuildingModel — async load + retrofit + fallback', () => {
     assert.equal(tpl.mesh, fakeMesh);
     // No measurable bbox on the fake mesh → fallback scale.
     assert.equal(tpl.scale, HOUSE_INSTANCE_BASE_SCALE);
-  });
-
-  test('passes the source MATERIAL (not the mesh) to the fog plugin attach', async () => {
-    // Regression: a prior wiring bug passed `source` (the merged mesh) to
-    // `_attachBuildingFogPlugin`, which crashed inside MaterialPluginBase's
-    // _enable — silently aborting the load promise and leaving the procedural
-    // box+roof in place. The attach must receive the mesh's material.
-    const r = newInst();
-    r._scene = {};
-    const fakeMaterial = { name: 'inn_mat', subMaterials: null, pluginManager: null };
-    const fakeMesh = makeFakeMesh('imported', { vertices: 100, indices: 90 });
-    fakeMesh.material = fakeMaterial;
-    r._babylon = makeFakeBabylon({ importImpl: async () => ({ meshes: [fakeMesh] }) });
-    let attachedArg = 'unset';
-    r._attachBuildingFogPlugin = (arg) => { attachedArg = arg; };
-    await r._loadBuildingModel('models/buildings/inn.glb', 'assets');
-    assert.equal(attachedArg, fakeMaterial, 'should receive source.material, not source');
-    assert.notEqual(attachedArg, fakeMesh, 'must NOT be the mesh itself');
   });
 
   test('computes a bbox-derived scale so the template fills ~1 hex of ground (larger XZ axis)', async () => {
