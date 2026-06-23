@@ -84,31 +84,32 @@ function addRoad(tiles, from, to) {
 // townsfolk + two zombies are placed by the launcher. The Witch leader starts far
 // on the east bank (fogged) and is held idle by the conductor until the handoff.
 
-export const LEARN_HERO_START  = { col: 2, row: 5 };   // Inn — Ishmael Charger
-export const LEARN_WITCH_START  = { col: 7, row: 3 };   // far bank, fogged
+export const LEARN_HERO_START  = { col: 3, row: 5 };   // Inn — Ishmael Charger (1 move to the church)
+export const LEARN_WITCH_START  = { col: 7, row: 4 };   // far bank, fogged
 
 // The forward strongpoint the party advances onto — a CHURCH (so FORTIFY works),
 // across the bridge and holding the Power Node.
 export const LEARN_CHURCH = { col: 5, row: 5 };
 export const LEARN_BRIDGE = { col: 4, row: 5 };
 
-// Townsfolk. The melee soldier advances onto Ishmael's tile (teaching tile
-// sharing); Isaac carries a bow and takes a vantage where he can see the enemy.
-export const LEARN_SOLDIER = { col: 3, row: 6 };                 // melee
-export const LEARN_ISAAC   = { col: 2, row: 4, weapon: 'bow', name: 'Isaac' }; // archer
-export const LEARN_ISAAC_VANTAGE = { col: 3, row: 4 };          // clearing — sees across
+// Townsfolk — fixed roster characters so they never change between playthroughs.
+// Thomas the soldier advances onto Ishmael's tile in TWO moves (teaching the
+// intermediate click + tile sharing); Isaac carries a bow and takes a vantage.
+export const LEARN_SOLDIER = { col: 3, row: 6, name: 'Thomas Putnam' };          // melee
+export const LEARN_ISAAC   = { col: 2, row: 4, weapon: 'bow', name: 'Isaac Graves' }; // archer
+export const LEARN_ISAAC_VANTAGE = { col: 2, row: 3 };          // clearing — sees across
 
 // Two zombies start deep on the east bank (behind the trees) and advance into
 // view during the first resolution.
 export const LEARN_ZOMBIES = [
-  { id: 'z1', start: { col: 7, row: 5 }, advance: { col: 6, row: 5 } }, // → beside the church (melee)
-  { id: 'z2', start: { col: 7, row: 4 }, advance: { col: 6, row: 4 } }, // → within Isaac's bow range
+  { id: 'z1', start: { col: 8, row: 5 }, advance: { col: 6, row: 5 } }, // → beside the church (melee)
+  { id: 'z2', start: { col: 6, row: 3 }, advance: { col: 5, row: 3 } }, // → within Isaac's bow range
 ];
 
 // The Witch's two-step approach into the guard trap (rounds 1 then 2).
 export const LEARN_WITCH_APPROACH = [
-  { col: 6, row: 3 },   // round 1: emerges into view
-  { col: 6, row: 4 },   // round 2: steps adjacent to the church (the guard trap)
+  { col: 6, row: 4 },   // round 1: emerges into view
+  { col: 5, row: 4 },   // round 2: steps adjacent to the church (the guard trap)
 ];
 
 // ── Map builder ──────────────────────────────────────────────────────────────
@@ -119,7 +120,7 @@ export function buildLearnMap() {
   const tiles = makeTiles(COLS, ROWS);
 
   // Buildings (entrance + impassable footprint wall).
-  setBuilding(tiles, LEARN_HERO_START.col, LEARN_HERO_START.row, BuildingType.INN,   { col: 2, row: 6 }, 1);
+  setBuilding(tiles, LEARN_HERO_START.col, LEARN_HERO_START.row, BuildingType.INN,   { col: 3, row: 4 }, 1);
   setBuilding(tiles, LEARN_CHURCH.col,      LEARN_CHURCH.row,     BuildingType.CHURCH, { col: 5, row: 6 }, 0);
   setBuilding(tiles, 7, 2, BuildingType.GRAVEYARD, { col: 7, row: 1 }, 0);
 
@@ -127,22 +128,28 @@ export function buildLearnMap() {
   for (const row of [0, 1, 2, 3, 4, 6, 7]) setRiver(tiles, 4, row);
   setBridge(tiles, LEARN_BRIDGE.col, LEARN_BRIDGE.row);
 
-  // Road across the bridge linking the Inn to the church and the node beyond.
-  addRoad(tiles, { col: 2, row: 5 }, { col: 3, row: 5 });
+  // Road across the bridge linking the Inn to the church and the node beyond,
+  // continuing east so the melee zombie can advance a road-hop into reach while
+  // starting far enough to stay out of sight.
   addRoad(tiles, { col: 3, row: 5 }, { col: 4, row: 5 });
   addRoad(tiles, { col: 4, row: 5 }, { col: 5, row: 5 });
   addRoad(tiles, { col: 5, row: 5 }, { col: 6, row: 5 });
+  addRoad(tiles, { col: 6, row: 5 }, { col: 7, row: 5 });
+  addRoad(tiles, { col: 7, row: 5 }, { col: 8, row: 5 });
 
-  // Trees shroud both banks so the Witch's forces stay hidden until the party
-  // crosses — leaving a CLEARING to the north (cols 2-4, rows 0-2, and Isaac's
-  // vantage at (3,4)) where the bow can see across, and the road corridor open.
+  // Trees shroud both banks so the Witch's forces stay out of sight until the
+  // party crosses — leaving a CLEARING to the north (cols 1-3, rows 1-3, incl.
+  // Isaac's vantage at (2,3)) where the bow can see across, and the road open.
   setForest(tiles, [
     // east-bank screen in front of the enemy starts
-    { col: 7, row: 3 }, { col: 7, row: 4 }, { col: 7, row: 5 }, { col: 7, row: 6 },
+    { col: 7, row: 3 }, { col: 7, row: 6 },
     { col: 8, row: 4 }, { col: 8, row: 6 }, { col: 8, row: 3 },
-    { col: 6, row: 6 }, { col: 6, row: 7 }, { col: 5, row: 7 }, { col: 5, row: 2 },
-    { col: 6, row: 2 }, { col: 5, row: 3 },
-    // west-bank cover hemming the approach (south of the road)
+    { col: 6, row: 6 }, { col: 6, row: 7 }, { col: 5, row: 7 },
+    { col: 6, row: 2 }, { col: 6, row: 4 }, { col: 5, row: 6 },
+    // screen the hero's cross-river view of the far zombie (Isaac, north of this,
+    // still sees the zombie's advance hex — an endpoint — clearly)
+    { col: 5, row: 3 }, { col: 5, row: 2 },
+    // west-bank cover south of the road
     { col: 3, row: 7 }, { col: 2, row: 7 }, { col: 1, row: 6 }, { col: 6, row: 1 },
   ]);
 
@@ -186,14 +193,14 @@ function _stripScout(e) {
 }
 
 export function placeLearnUnits(state) {
-  const soldier = createSurvivor(LEARN_SOLDIER.col, LEARN_SOLDIER.row, null, state);
+  // Fixed roster characters (forcedName) so the party is identical every time.
+  const soldier = createSurvivor(LEARN_SOLDIER.col, LEARN_SOLDIER.row, null, state, LEARN_SOLDIER.name);
   soldier.owner = 'hero';
   _stripScout(soldier);
 
-  const isaac = createSurvivor(LEARN_ISAAC.col, LEARN_ISAAC.row, null, state);
+  const isaac = createSurvivor(LEARN_ISAAC.col, LEARN_ISAAC.row, null, state, LEARN_ISAAC.name);
   isaac.owner = 'hero';
   isaac.equipWeapon(LEARN_ISAAC.weapon);
-  isaac.name = LEARN_ISAAC.name;
   _stripScout(isaac);
 
   state.entities.push(soldier, isaac);
@@ -298,31 +305,31 @@ export const LEARN_STEPS = [
   {
     id: 'welcome',
     title: 'Caleb\'s Hollow',
-    body: 'A turn-based strategy game. You command a Day or Night faction in a battle waged over many days.',
+    body: 'Caleb\'s Hollow is a turn based strategy game. You control either a Day or Night faction in a battle over multiple days.',
     trigger: 'click', spotlight: null, tooltipPos: 'center',
   },
   {
     id: 'modes',
     title: 'Plan, Then Resolve',
-    body: 'Each round has two modes. In PLANNING you spend an action budget to queue moves, attacks and explores, then SUBMIT.',
+    body: 'The game is in one of two modes: planning or resolution. In plan mode you see all your units and what they can see. In PLANNING mode you spend your ACTION BUDGET to plan moves, attacks or exploration. When you\'re happy with your plan you SUBMIT.',
     trigger: 'click', spotlight: null, tooltipPos: 'center',
   },
   {
     id: 'resolution',
     title: 'Resolution',
-    body: 'In RESOLUTION your plan plays out beside everyone else\'s — step through it and see whether each attack landed or the enemy slipped away.',
+    body: 'In RESOLUTION mode you get to see the plan play out alongside the plans of all the other players in the game. We step through each action and see if your plan was successful. Did the attack land? Did they flee before you struck?',
     trigger: 'click', spotlight: null, tooltipPos: 'center',
   },
   {
     id: 'day_night',
     title: 'The Turning Day',
-    body: 'The day-cycle advances every round. Human factions are strong in daylight; the Witch\'s grow stronger by moonlight.',
+    body: 'The day cycle advances every turn, as the sun sets the power dynamics shift. The human factions are stronger when the sun is out, the witch factions stronger by moonlight.',
     trigger: 'click', spotlight: null, tooltipPos: 'center',
   },
   {
     id: 'arena',
     title: 'Ishmael\'s Stand',
-    body: 'Your hero Ishmael Charger and two townsfolk face the Witch\'s forces across the river. Advance over the bridge to find the enemy.',
+    body: 'In this battle arena Ishmael and two townsfolk face off against the witch\'s forces.',
     trigger: 'click', spotlight: null, tooltipPos: 'center',
   },
 
@@ -330,16 +337,16 @@ export const LEARN_STEPS = [
   {
     id: 'move_hero',
     title: 'Advance the Hero',
-    body: 'Select Ishmael, then move him across the bridge to the church. It takes two moves — click the bridge, then the church.',
+    body: 'Plan a move forward for your hero across the bridge to the church to try and find the enemy. He reaches it in a single move.',
     trigger: { type: 'action_queued', actionType: PlanActionType.MOVE, entityType: EntityType.HERO, toCol: CHURCH.col, toRow: CHURCH.row },
     spotlight: { type: 'hex', col: CHURCH.col, row: CHURCH.row, arrow: 'down' },
     pulse: true, tooltipPos: 'bottom-left',
-    allowHexes: [HERO, BRIDGE, CHURCH], allowActions: [],
+    allowHexes: [HERO, CHURCH], allowActions: [],
   },
   {
     id: 'move_soldier',
     title: 'Friendly Units Share a Tile',
-    body: 'Now bring a townsperson alongside the hero. Friendly units can share a tile — move the soldier across to the church too.',
+    body: 'Now move the townsfolk alongside him. Friendly units can share a tile. Thomas is further back, so it takes two moves — click the bridge first, then the church.',
     trigger: { type: 'action_queued', actionType: PlanActionType.MOVE, entityType: EntityType.SURVIVOR, toCol: CHURCH.col, toRow: CHURCH.row },
     spotlight: { type: 'hex', col: CHURCH.col, row: CHURCH.row, arrow: 'down' },
     pulse: true, tooltipPos: 'bottom-left',
@@ -348,16 +355,22 @@ export const LEARN_STEPS = [
   {
     id: 'move_isaac',
     title: 'Eyes Across the River',
-    body: 'Isaac has a bow. Move him to the clearing on the north bank where he can see across the river.',
+    body: 'Isaac has a bow, so let\'s move him to a spot where he can see the enemy — the clearing on the north bank, looking across the river.',
     trigger: { type: 'action_queued', actionType: PlanActionType.MOVE, entityType: EntityType.SURVIVOR, toCol: VANTAGE.col, toRow: VANTAGE.row },
     spotlight: { type: 'hex', col: VANTAGE.col, row: VANTAGE.row, arrow: 'down' },
     pulse: true, tooltipPos: 'bottom-left',
     allowHexes: [LEARN_ISAAC, VANTAGE], allowActions: [],
   },
   {
+    id: 'selection_hint',
+    title: 'Selecting Units',
+    body: 'The plan mode shows you what each unit is planning to do. You can select your units in the viewport, in the plan panel, or cycle through them with the Tab key.',
+    trigger: 'click', spotlight: null, tooltipPos: 'center',
+  },
+  {
     id: 'submit_r0',
     title: 'Submit Your Plan',
-    body: 'Your plan is set. Click Submit to lock it in.',
+    body: 'Now you have your turn planned you can SUBMIT it.',
     trigger: { type: 'plan_submitted' },
     spotlight: { type: 'element', selector: '#plan-submit-btn', arrow: 'right' },
     pulse: true, tooltipPos: 'bottom-left',
@@ -365,7 +378,7 @@ export const LEARN_STEPS = [
   {
     id: 'watch_r0',
     title: 'Resolution',
-    body: 'Watch both sides move at once — the Witch\'s forces creep out of the trees.',
+    body: 'Now we enter the resolution mode. Here you can step through each action and see how your plan played out.',
     trigger: 'auto', spotlight: null, tooltipPos: 'top',
   },
 
@@ -373,8 +386,8 @@ export const LEARN_STEPS = [
   {
     id: 'combat_intro',
     title: 'Strike!',
-    body: 'A zombie stands beside you. Click the church, choose Ishmael from the two units there, then click the zombie. Click again to stack a second strike.',
-    trigger: { type: 'action_queued', actionType: PlanActionType.BATTLE_UNIT, entityType: EntityType.HERO },
+    body: 'Now you saw the witch\'s forces enter your field of view. Let\'s attack them. Select the hex with your hero — there are two units there, so choose Ishmael. You can see the % chance to HIT or CRUSH the target next to its icon. Click the zombie to add an ATTACK, then click again to stack two attacks in a row.',
+    trigger: { type: 'action_queued', actionType: PlanActionType.BATTLE_UNIT, entityType: EntityType.HERO, count: 2 },
     spotlight: { type: 'hex', col: Z1.col, row: Z1.row, arrow: 'down' },
     pulse: true, tooltipPos: 'bottom-left',
     allowHexes: [CHURCH, Z1], allowActions: [],
@@ -382,13 +395,13 @@ export const LEARN_STEPS = [
   {
     id: 'combat_explain',
     title: 'How Combat Works',
-    body: 'Each target shows your chance to HIT or CRUSH it. Allies beside the target join your attack — and defenders join theirs. Numbers decide the day.',
+    body: 'Allies next to your target join any attacks and make a big difference, but defenders also join in to balance it out. The sure-fire way to win a battle is with strength in numbers.',
     trigger: 'click', spotlight: null, tooltipPos: 'center',
   },
   {
     id: 'ranged',
     title: 'Loose an Arrow',
-    body: 'Isaac can strike at range. Select him and click the far zombie to queue a ranged attack.',
+    body: 'Now let\'s get the other zombie. Isaac has a bow so he can attack at a distance. Select Isaac and click on the other zombie.',
     trigger: { type: 'action_queued', actionType: PlanActionType.BATTLE_UNIT, entityType: EntityType.SURVIVOR },
     spotlight: { type: 'hex', col: Z2.col, row: Z2.row, arrow: 'down' },
     pulse: true, tooltipPos: 'bottom-left',
@@ -397,7 +410,7 @@ export const LEARN_STEPS = [
   {
     id: 'submit_r1',
     title: 'Submit and Fight',
-    body: 'Lock in your attacks and watch the dice fall.',
+    body: 'Ok, you\'ve loaded up some actions, now let\'s SUBMIT.',
     trigger: { type: 'plan_submitted' },
     spotlight: { type: 'element', selector: '#plan-submit-btn', arrow: 'right' },
     pulse: true, tooltipPos: 'bottom-left',
@@ -405,7 +418,7 @@ export const LEARN_STEPS = [
   {
     id: 'watch_r1',
     title: 'The Zombies Fall',
-    body: 'Both zombies are slain — but the Witch herself emerges a few hexes away.',
+    body: 'Great work, the zombies are gone but the witch is coming. Prepare for an assault.',
     trigger: 'auto', spotlight: null, tooltipPos: 'top',
   },
 
@@ -413,7 +426,7 @@ export const LEARN_STEPS = [
   {
     id: 'fortify_intro',
     title: 'Dig In',
-    body: 'The Witch is coming. Hold this church: select a unit here and choose Fortify to spend resources hardening it.',
+    body: 'You can fortify locations by using resources. Select a unit and have them fortify the building they are in.',
     trigger: { type: 'action_queued', actionType: PlanActionType.FORTIFY },
     spotlight: { type: 'hex', col: CHURCH.col, row: CHURCH.row, arrow: 'down' },
     pulse: true, tooltipPos: 'bottom-left',
@@ -422,7 +435,7 @@ export const LEARN_STEPS = [
   {
     id: 'guard_intro',
     title: 'Set a Trap',
-    body: 'Now choose Guard — the unit readies an opportunity attack if an enemy steps within reach. Stack guards for more reactions.',
+    body: 'We\'re not going to leave this spot, but we know the witch is coming — so we should be ready. Select the Guard action: your unit will prep for one opportunity attack if an enemy moves within range. You can stack multiple guards for more reactions, and Auto-Guard fills the rest of your budget with guards.',
     trigger: { type: 'action_queued', actionType: PlanActionType.GUARD },
     spotlight: { type: 'hex', col: CHURCH.col, row: CHURCH.row, arrow: 'down' },
     pulse: true, tooltipPos: 'bottom-left',
@@ -431,7 +444,7 @@ export const LEARN_STEPS = [
   {
     id: 'submit_r2',
     title: 'Submit and Hold',
-    body: 'Lock in your defenses and brace for the assault.',
+    body: 'Submit your plan and brace for the assault.',
     trigger: { type: 'plan_submitted' },
     spotlight: { type: 'element', selector: '#plan-submit-btn', arrow: 'right' },
     pulse: true, tooltipPos: 'bottom-left',
@@ -439,7 +452,7 @@ export const LEARN_STEPS = [
   {
     id: 'watch_r2',
     title: 'Into the Trap',
-    body: 'The Witch steps into your guard — yet still lands a blow on you and your works.',
+    body: 'The witch stepped right into your trap, but she still managed to do some damage to you AND your fortifications.',
     trigger: 'auto', spotlight: null, tooltipPos: 'top',
   },
 
@@ -447,7 +460,7 @@ export const LEARN_STEPS = [
   {
     id: 'node_intro',
     title: 'Power Nodes',
-    body: 'Slaying the Witch wins the battle — but the surer path is the Power Nodes. The highlighted hexes belong to whoever has the most units there; hold the most at dawn and dusk to score. First to four points wins.',
+    body: 'Killing the witch is one way to win the battle, but the more tactical path is to control the majority of POWER NODES on the map. The highlighted hexes are controlled by whoever has the most units present. At dawn and dusk each day, the faction with the most power nodes in their control scores. Four points and the battle is yours.',
     trigger: 'click',
     spotlight: { type: 'hex', col: CHURCH.col, row: CHURCH.row, arrow: 'down' },
     pulse: true, tooltipPos: 'center',
@@ -455,7 +468,7 @@ export const LEARN_STEPS = [
   {
     id: 'good_luck',
     title: 'The Battle Is Yours',
-    body: 'That is the loop: plan, submit, watch, repeat. Now hold the Crossing or strike down the Witch. Good luck.',
+    body: 'Now, try and hold the power node or defeat the witch. Good luck.',
     trigger: 'handoff', buttonLabel: 'Play on →',
     spotlight: null, tooltipPos: 'center',
   },

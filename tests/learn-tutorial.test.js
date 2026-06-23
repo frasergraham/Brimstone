@@ -38,13 +38,16 @@ test('learn map: nobody starts on the bridge', () => {
   }
 });
 
-test('learn map: the hero advances across the bridge in TWO moves', () => {
+test('learn map: the hero reaches the church in ONE move', () => {
   const { state, hero } = buildBoard();
-  assert.ok(!reaches(state, hero, LEARN_CHURCH, 1), 'church should NOT be reachable in one move');
-  assert.ok(reaches(state, hero, LEARN_BRIDGE, 1), 'the bridge is the first-move waypoint');
-  // From the bridge, the church is one more move.
-  hero.col = LEARN_BRIDGE.col; hero.row = LEARN_BRIDGE.row;
-  assert.ok(reaches(state, hero, LEARN_CHURCH, 1), 'church reachable from the bridge in the second move');
+  assert.ok(reaches(state, hero, LEARN_CHURCH, 1), 'church should be reachable in a single move');
+});
+
+test('learn units: the two townsfolk are the fixed named characters', () => {
+  const { soldier, isaac } = buildBoard();
+  assert.equal(soldier.name, LEARN_SOLDIER.name);
+  assert.equal(isaac.name, LEARN_ISAAC.name);
+  assert.ok(isaac.getEquippedWeaponId?.() === 'bow' || isaac.items?.bow, 'Isaac carries a bow');
 });
 
 test('learn map: the soldier needs TWO move actions to reach the hero\'s tile', () => {
@@ -150,6 +153,11 @@ test('learn config: scripted MOVE plans use toCol/toRow (resolver field), so the
   assert.ok(move && Number.isInteger(move.toCol), 'witch MOVE must carry toCol');
   const battle = r2.find(a => a.type === 'battle-unit');
   assert.ok(battle && Number.isInteger(battle.targetCol), 'witch BATTLE must carry targetCol');
+});
+
+test('learn steps: the combat step requires stacking TWO attacks before advancing', () => {
+  const combat = LEARN_STEPS.find(s => s.id === 'combat_intro');
+  assert.equal(combat.trigger.count, 2, 'combat_intro must gate on two attacks so the player can stack');
 });
 
 test('learn config: round-step map points at real steps and ends in a handoff', () => {

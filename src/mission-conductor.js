@@ -242,6 +242,9 @@ export class MissionConductor {
       // a multi-hop advance only completes the step on the final leg (teaching
       // two move actions to cross the bridge).
       if (t.toCol != null && (action.toCol !== t.toCol || action.toRow !== t.toRow)) return;
+      // Optional count — require N matching actions before advancing (e.g. stack
+      // two attacks on the zombie before moving on).
+      if ((++this._stepActionCount) < (t.count ?? 1)) return;
       // A MOVE that completes a step switches to a new (often different) unit:
       // suppress the UI's chaining re-select for this one move so the next click
       // selects fresh. A mid-chain MOVE (toCol mismatch above) returns before
@@ -352,6 +355,7 @@ export class MissionConductor {
     this._step = idx;
     const step = this._steps[idx];
     this._shownStepIds.add(step.id);
+    this._stepActionCount = 0;  // matching action_queued count for `count`-gated steps
 
     // Update tooltip content
     if (this._titleEl) this._titleEl.textContent = step.title;
