@@ -337,7 +337,7 @@ export const LEARN_STEPS = [
   {
     id: 'move_hero',
     title: 'Advance the Hero',
-    body: 'Plan a move forward for your hero across the bridge to the church to try and find the enemy. He reaches it in a single move.',
+    body: 'Click your hero, Ishmael, to select him — then plan a move forward across the bridge to the church to try and find the enemy. He reaches it in a single move.',
     trigger: { type: 'action_queued', actionType: PlanActionType.MOVE, entityType: EntityType.HERO, toCol: CHURCH.col, toRow: CHURCH.row },
     spotlight: { type: 'hex', col: CHURCH.col, row: CHURCH.row, arrow: 'down' },
     pulse: true, tooltipPos: 'bottom-left',
@@ -346,7 +346,7 @@ export const LEARN_STEPS = [
   {
     id: 'move_soldier',
     title: 'Friendly Units Share a Tile',
-    body: 'Now move the townsfolk alongside him. Friendly units can share a tile. Thomas is further back, so it takes two moves — click the bridge first, then the church.',
+    body: 'Now move the townsfolk alongside him. Click Thomas to select him, then move him across — friendly units can share a tile. He is further back, so it takes two moves: click the bridge first, then the church.',
     trigger: { type: 'action_queued', actionType: PlanActionType.MOVE, entityType: EntityType.SURVIVOR, toCol: CHURCH.col, toRow: CHURCH.row },
     spotlight: { type: 'hex', col: CHURCH.col, row: CHURCH.row, arrow: 'down' },
     pulse: true, tooltipPos: 'bottom-left',
@@ -355,7 +355,7 @@ export const LEARN_STEPS = [
   {
     id: 'move_isaac',
     title: 'Eyes Across the River',
-    body: 'Isaac has a bow, so let\'s move him to a spot where he can see the enemy — the clearing on the north bank, looking across the river.',
+    body: 'Isaac has a bow, so let\'s move him where he can see the enemy. Click Isaac to select him, then send him to the clearing on the north bank, looking across the river.',
     trigger: { type: 'action_queued', actionType: PlanActionType.MOVE, entityType: EntityType.SURVIVOR, toCol: VANTAGE.col, toRow: VANTAGE.row },
     spotlight: { type: 'hex', col: VANTAGE.col, row: VANTAGE.row, arrow: 'down' },
     pulse: true, tooltipPos: 'bottom-left',
