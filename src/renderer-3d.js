@@ -101,7 +101,6 @@ import {
   worldToHex, neighborDeltas, DEFAULT_TERRAIN_TINTS,
 } from './terrain-splat.js';
 import { makeTerrainSplatPlugin, SPLAT_UNIFORM_DEFAULTS } from './terrain-splat-plugin.js';
-import { attachFogDarkenToMaterial, MAX_FOG_TILES } from './fog-darken-plugin.js';
 import { attachRoadEdgeToMaterial } from './road-edge-plugin.js';
 
 // Babylon core + glTF loaders are served from the packaged `assets/vendor/`
@@ -2234,12 +2233,16 @@ export class Renderer3D {
     //                          of that type keep the procedural box+roof.
     this._buildingTemplates   = new Map();
     this._buildingLoadPromises = new Map();
-    // FogDarkenPlugin instances attached to building template materials. All
-    // share one global fogged-tile uniform list (no per-instance attribute —
-    // see src/fog-darken-plugin.js for why the May per-instance attempt failed).
-    // `_updateBuildingFogUniform` pushes the current fogged-building XZ centres
-    // into every plugin whenever the fog veil changes.
-    this._buildingFogPlugins = new Set();
+    // Live building meshes (CLONES of the GLB templates, each with its own
+    // cloned material) tracked so `_applyBuildingFogDarken` can tint an
+    // individual fogged building without touching the shared template. This
+    // replaces the old per-fragment FogDarkenPlugin shader, which was fragile
+    // across WebGL drivers (Chrome/ANGLE left fogged buildings bright while
+    // Safari darkened them). Fog is per-tile and a building is wholly fogged or
+    // wholly visible, so plain material darkening — the same mechanism roads and
+    // rivers already use (`_setTilePropsFogged`'s 'darken' policy) — is all that
+    // is needed, and it behaves identically on every browser.
+    this._buildingMeshes = new Set();
     this._assetsBasePath   = null; // captured by loadImages()
     // ── Tree-pack GLB state (see `_loadTreePackManifest`) ─────────────────
     // `_treeTemplates`     : Map<filename, mesh>   — hidden source meshes,
@@ -3202,16 +3205,8 @@ export class Renderer3D {
 
       this._buildingTemplates.set(relPath, { mesh: source, scale });
 
-      // Fog darken: attach the FogDarkenPlugin to this template's material(s)
-      // (recursing into a MultiMaterial's submaterials). Every instance of this
-      // variant shares the template material, so the plugin's global fogged-tile
-      // uniform — pushed by `_updateBuildingFogUniform` — darkens whichever
-      // instances stand on a fogged hex, keyed by the fragment's own world XZ.
-      // This deliberately replaces the failed per-instance-attribute path.
-      // NB: we attach to the MATERIAL, not the mesh. Passing a mesh trips
-      // `MaterialPluginBase._enable` against a non-material and throws inside
-      // the load promise — silently leaving the procedural fallback in place.
-      this._attachBuildingFogPlugin(source.material);
+      // Fog darkening is handled per-building at clone time + in
+      // `_applyBuildingFogDarken` (material tint), not on the shared template.
 
       // If the map's already built (the common case — GLB load is slow,
       // _buildMap runs synchronously right after Babylon init), retrofit the
@@ -3254,14 +3249,19 @@ export class Renderer3D {
     };
   }
 
-  /** Create one BABYLON.InstancedMesh of the building tile's chosen GLB variant
-   *  template, positioned on the tile's FOOTPRINT hex (centred, facing the
-   *  entrance) — or the legacy NE building slot for an orphan building with no
-   *  footprint (see `_buildingPlacement`). Scale is the template's bbox-derived
-   *  base (every type fills ~1 hex of ground) times a small *uniform* per-hex
-   *  jitter so a cluster doesn't look stamped. Returns the instance, or null if
-   *  no template for this tile's variant is loaded yet (caller falls back to
-   *  procedural box+roof). */
+  /** Create one building mesh from the tile's chosen GLB variant template,
+   *  positioned on the tile's FOOTPRINT hex (centred, facing the entrance) — or
+   *  the legacy NE building slot for an orphan building with no footprint (see
+   *  `_buildingPlacement`). Scale is the template's bbox-derived base (every type
+   *  fills ~1 hex of ground) times a small *uniform* per-hex jitter so a cluster
+   *  doesn't look stamped. Returns the mesh, or null if no template for this
+   *  tile's variant is loaded yet (caller falls back to procedural box+roof).
+   *
+   *  CLONE, not InstancedMesh: each building gets its OWN mesh + material so
+   *  fog-of-war can darken a single fogged building's material independently
+   *  (`_applyBuildingFogDarken`). The clone SHARES the template's geometry, so
+   *  the only added cost is one draw call + one (geometry-free) material clone
+   *  per building — negligible at the handful of buildings per map. */
   _buildBuildingInstance(tile, x, z, parent) {
     if (!this._babylon) return null;
     const variant = buildingGlbVariantForHex(tile);
@@ -3270,47 +3270,77 @@ export class Renderer3D {
     if (!tpl || !tpl.mesh) return null;
     const BABYLON = this._babylon;
     const source  = tpl.mesh;
-    if (typeof source.createInstance !== 'function') return null;
+    if (typeof source.clone !== 'function') return null;
     // Tile-top anchor — matches the procedural building's base Y (0.43 - 0.7/2).
     const tileTopY = 0.43 - 0.7 / 2;
     const baseScale = tpl.scale != null ? tpl.scale : HOUSE_INSTANCE_BASE_SCALE;
     const { bx, bz, yaw } = this._buildingPlacement(tile, x, z);
 
-    const inst = source.createInstance(`bldgInst_${tile.col}_${tile.row}`);
-    if (parent && 'parent' in inst) inst.parent = parent;
-    if (inst.position && typeof inst.position === 'object') {
-      inst.position.x = bx;
-      inst.position.y = tileTopY;
-      inst.position.z = bz;
+    const mesh = source.clone(`bldgGlb_${tile.col}_${tile.row}`);
+    if (!mesh) return null;
+    // The template is hidden (`setEnabled(false)`) — instances rendered on its
+    // behalf; a clone inherits that disabled state, so re-enable it.
+    if (typeof mesh.setEnabled === 'function') mesh.setEnabled(true);
+    // Give the clone its own material so darkening it never touches the template
+    // (or sibling buildings). `clone()` shares the material by reference.
+    const ownMat = this._cloneBuildingMaterial(source.material, `${tile.col}_${tile.row}`);
+    if (ownMat) mesh.material = ownMat;
+    if (parent && 'parent' in mesh) mesh.parent = parent;
+    if (mesh.position && typeof mesh.position === 'object') {
+      mesh.position.x = bx;
+      mesh.position.y = tileTopY;
+      mesh.position.z = bz;
     }
     const sc = houseInstanceScalingForHex(tile.col, tile.row);
     if (BABYLON.Vector3) {
-      inst.scaling = new BABYLON.Vector3(
+      mesh.scaling = new BABYLON.Vector3(
         baseScale * sc.x,
         baseScale * sc.y,
         baseScale * sc.z,
       );
-      inst.rotation = new BABYLON.Vector3(0, yaw, 0);
+      mesh.rotation = new BABYLON.Vector3(0, yaw, 0);
     }
-    inst.isPickable = false;
+    mesh.isPickable = false;
     // `respectsFog: false` keeps the per-prop veil loop (`_setTilePropsFogged`)
-    // from touching the building — its fog darkening is handled globally by the
-    // FogDarkenPlugin uniform (`_updateBuildingFogUniform`), which dims the
-    // template material's fragments wherever they land on a fogged hex.
-    inst.metadata = {
+    // from hiding/touching the building — its fog darkening is the dedicated
+    // `_applyBuildingFogDarken` pass, keyed on the building's RENDER hex
+    // (`fogHexKey`) so a footprinted building darkens with the hex it visibly
+    // stands on, matching the old behaviour.
+    mesh.metadata = {
       respectsFog: false,
       kind: 'building-glb',
       col: tile.col,
       row: tile.row,
+      fogHexKey: buildingRenderHex(tile),
     };
-    // Belt-and-suspenders: the template already carries receiveShadows (so the
-    // instance inherits it), but set it explicitly too — mirrors the tree path.
-    if ('receiveShadows' in inst) inst.receiveShadows = true;
-    this._addShadowCaster(inst);
+    if ('receiveShadows' in mesh) mesh.receiveShadows = true;
+    this._addShadowCaster(mesh);
     // World-geometry render group, same as the procedural box+roof + tile
     // cylinders — keeps the depth buffer consistent for unit/building overlap.
-    if (typeof inst.renderingGroupId !== 'undefined') inst.renderingGroupId = WORLD_GROUP;
-    return inst;
+    if (typeof mesh.renderingGroupId !== 'undefined') mesh.renderingGroupId = WORLD_GROUP;
+    // Track for the fog-darken pass and seed its current fogged state.
+    this._buildingMeshes.add(mesh);
+    this._applyBuildingFogDarkenTo(mesh);
+    return mesh;
+  }
+
+  /** Clone a building template's material (recursing into a MultiMaterial's
+   *  sub-materials) so each building can be fog-darkened independently. Returns
+   *  the cloned material, or the original if it can't be cloned (test stubs). */
+  _cloneBuildingMaterial(srcMat, tag) {
+    if (!srcMat) return null;
+    if (Array.isArray(srcMat.subMaterials)) {
+      if (typeof srcMat.clone !== 'function') return srcMat;
+      const multi = srcMat.clone(`bldgMat_${tag}`);
+      // MultiMaterial.clone keeps sub-material references; clone each so tinting
+      // one building never bleeds into another sharing the template.
+      if (multi && Array.isArray(multi.subMaterials)) {
+        multi.subMaterials = srcMat.subMaterials.map((m, i) =>
+          (m && typeof m.clone === 'function') ? m.clone(`bldgSub_${tag}_${i}`) : m);
+      }
+      return multi || srcMat;
+    }
+    return typeof srcMat.clone === 'function' ? (srcMat.clone(`bldgMat_${tag}`) || srcMat) : srcMat;
   }
 
   /** Sweep `_tilePropsByKey` for every building tile, dispose the procedural
@@ -3357,54 +3387,54 @@ export class Renderer3D {
     return upgraded;
   }
 
-  /** Attach the FogDarkenPlugin to a building template's material(s) and track
-   *  the resulting plugin instances so `_updateBuildingFogUniform` can feed them
-   *  the fogged-tile list. Seeds the per-plugin darken/radius from the current
-   *  fog floor, then primes the uniform with whatever is fogged right now (so a
-   *  template that loads AFTER the first fog pass dims immediately). No-op
-   *  without Babylon (node tests can still drive the uniform helper directly). */
-  _attachBuildingFogPlugin(material) {
-    if (!this._babylon || !material) return;
-    const plugins = attachFogDarkenToMaterial(this._babylon, material) || [];
-    for (const p of plugins) {
-      // Match the terrain/road "occluded read" floor so a fogged building reads
-      // the same darkness as the ground beneath it.
-      p.fogDarkenAmount = FOG_HIDDEN_DARKEN;
-      this._buildingFogPlugins.add(p);
+  /** Darken every fogged building and restore every visible one. Called from
+   *  `_applyFogVeil` after the fogged set is resolved. Walks the tracked building
+   *  meshes (a handful per map) and tints each one's material based on whether
+   *  its render hex is fogged — plain material darkening that behaves identically
+   *  on every WebGL driver (no shader injection). */
+  _applyBuildingFogDarken() {
+    if (!this._buildingMeshes || this._buildingMeshes.size === 0) return;
+    for (const mesh of this._buildingMeshes) {
+      if (!mesh || (typeof mesh.isDisposed === 'function' && mesh.isDisposed())) {
+        this._buildingMeshes.delete(mesh);
+        continue;
+      }
+      this._applyBuildingFogDarkenTo(mesh);
     }
-    if (plugins.length) this._updateBuildingFogUniform();
   }
 
-  /** Recompute the fogged-building XZ-centre list and push it into every
-   *  attached FogDarkenPlugin. Called from `_applyFogVeil` after the fogged set
-   *  is resolved. Cheap: walks `_fogActiveSet` (already the diffed fogged keys),
-   *  keeps only building tiles, and writes a flat Float32Array the shader reads
-   *  per fragment. Caps at MAX_FOG_TILES — surplus fogged buildings render
-   *  un-dimmed and are logged once per overflow. */
-  _updateBuildingFogUniform() {
-    if (this._buildingFogPlugins.size === 0) return;
-    const centres = buildFoggedBuildingTileList(this.state, this._fogActiveSet);
-    const n = Math.min(centres.length, MAX_FOG_TILES);
-    if (centres.length > MAX_FOG_TILES && !this._fogTileOverflowWarned) {
-      console.warn(
-        `[Renderer3D] ${centres.length} fogged building tiles exceed MAX_FOG_TILES=`
-        + `${MAX_FOG_TILES}; extras render un-dimmed.`,
-      );
-      this._fogTileOverflowWarned = true;
-    }
-    for (const p of this._buildingFogPlugins) {
-      const buf = p.fogTiles;
-      for (let i = 0; i < n; i++) {
-        buf[i * 2]     = centres[i].x;
-        buf[i * 2 + 1] = centres[i].z;
-      }
-      // Park unused slots at the far sentinel so a stale value can't match.
-      for (let i = n; i < MAX_FOG_TILES; i++) {
-        buf[i * 2]     = 1e8;
-        buf[i * 2 + 1] = 1e8;
-      }
-      p.fogCount = n;
-    }
+  /** Tint a single building mesh's material(s) to the fogged "occluded" floor
+   *  when its render hex is in `_fogActiveSet`, or back to full brightness when
+   *  it isn't. Idempotent — base colours are stashed on each material the first
+   *  time so re-revealing restores the exact original tint. */
+  _applyBuildingFogDarkenTo(mesh) {
+    const key = mesh.metadata?.fogHexKey;
+    const fogged = !!(key && this._fogActiveSet && this._fogActiveSet.has(key));
+    // Same "occluded read" floor the terrain / road veil uses.
+    const k = fogged ? FOG_HIDDEN_DARKEN : 1.0;
+    const mat = mesh.material;
+    if (!mat) return;
+    const mats = Array.isArray(mat.subMaterials) ? mat.subMaterials : [mat];
+    for (const m of mats) this._setBuildingMatDarken(m, k);
+  }
+
+  /** Multiply a building material's colour(s) by `k` (1.0 = original). Handles
+   *  both PBR (`albedoColor`) and Standard (`diffuseColor`) GLB materials, plus
+   *  emissive. Base colours are cached on the material on first touch so the
+   *  multiply never compounds across fog flickers. */
+  _setBuildingMatDarken(m, k) {
+    if (!m) return;
+    const scale = (color, baseKey) => {
+      if (!color) return;
+      let base = m[baseKey];
+      if (!base) { base = m[baseKey] = { r: color.r, g: color.g, b: color.b }; }
+      color.r = base.r * k;
+      color.g = base.g * k;
+      color.b = base.b * k;
+    };
+    scale(m.albedoColor, '_fogBaseAlbedo');    // PBRMaterial
+    scale(m.diffuseColor, '_fogBaseDiffuse');  // StandardMaterial
+    scale(m.emissiveColor, '_fogBaseEmissive');
   }
 
   /** Lazy-load the tree-pack manifest at `<basePath>/<TREE_PACK_DIR>manifest.json`
@@ -16077,10 +16107,9 @@ export class Renderer3D {
       }
     }
 
-    // Push the fogged building-tile centres into the building shader plugins so
-    // GLB buildings on fogged hexes darken (global uniform, not per-instance —
-    // see `_updateBuildingFogUniform` / src/fog-darken-plugin.js).
-    this._updateBuildingFogUniform();
+    // Darken GLB buildings standing on fogged hexes (per-building material tint,
+    // driver-independent — see `_applyBuildingFogDarken`).
+    this._applyBuildingFogDarken();
   }
 
   /** Rewrite the merged ground's `aFog` vertex attribute from the fogged-hex
@@ -16126,8 +16155,8 @@ export class Renderer3D {
       //   • undefined / true     → hide on fog (standees, HP bars, node discs)
       //   • false                → ignore this loop (permanent geometry like
       //                            trees; also GLB buildings, which darken via
-      //                            the global FogDarkenPlugin uniform instead —
-      //                            see `_updateBuildingFogUniform`)
+      //                            their own per-building material tint instead —
+      //                            see `_applyBuildingFogDarken`)
       //   • 'darken'             → tint dimmer (roads, rivers) — per-tile material
       const policy = p.metadata?.respectsFog;
       if (policy === false) continue;
@@ -16628,49 +16657,6 @@ export const TILE_SLOTS = Object.freeze([
 export const CENTRE_SLOT_INDEX = 0;
 /** Index of the slot a building always occupies. */
 export const BUILDING_SLOT_INDEX = 1;
-
-/** Pure helper: the world XZ centres of every fogged building tile, used to feed
- *  the FogDarkenPlugin uniform. Returns `[{x, z}, ...]` for buildings whose
- *  render hex is fogged. No DOM/Babylon dependency.
- *
- *  The building's render position depends on whether the building is a
- *  modern footprint-bearing entrance or a legacy 1-hex orphan:
- *  - footprint-bearing: the GLB sits at `buildingNudgedPosition(footprintWorld,
- *    entranceWorld, BUILDING_ENTRANCE_NUDGE)` — the footprint hex centre
- *    nudged ~15% toward the entrance (P4/P4a). The fog hex is the FOOTPRINT
- *    (the visible building's hex), not the entrance — a building "reads as
- *    in fog" when its visible geometry sits on a fogged hex.
- *  - orphan (empty `footprintHexes`): the GLB sits at `entrance + slot`
- *    (legacy NE-slot position) and the fog hex is the entrance. Matches the
- *    pre-P4 behavior that shipped in prod.
- */
-export function buildFoggedBuildingTileList(state, fogActiveSet) {
-  const out = [];
-  if (!state?.tiles || !fogActiveSet || fogActiveSet.size === 0) return out;
-  const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
-  for (const tile of state.tiles.values()) {
-    if (!hasBuilding(tile)) continue;
-    const fpKey = Array.isArray(tile.footprintHexes) && tile.footprintHexes.length > 0
-      ? tile.footprintHexes[0] : null;
-    if (fpKey) {
-      // Modern compound building: fog test against the footprint hex, render
-      // position is the nudged footprint→entrance midpoint.
-      if (!fogActiveSet.has(fpKey)) continue;
-      const [fcStr, frStr] = fpKey.split(',');
-      const fc = +fcStr, fr = +frStr;
-      const fW = hexToWorld(fc, fr);
-      const eW = hexToWorld(tile.col, tile.row);
-      const p = buildingNudgedPosition(fW, eW, BUILDING_ENTRANCE_NUDGE);
-      out.push({ x: p.x, z: p.z });
-    } else {
-      // Legacy orphan: building still at entrance + slot offset.
-      if (!fogActiveSet.has(hexKey(tile.col, tile.row))) continue;
-      const { x, z } = hexToWorld(tile.col, tile.row);
-      out.push({ x: x + slot.x, z: z + slot.z });
-    }
-  }
-  return out;
-}
 
 /**
  * Pure slot assignment for a hex's occupants.

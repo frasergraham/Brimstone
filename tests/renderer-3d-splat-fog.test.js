@@ -95,24 +95,22 @@ describe('Renderer3D splat fog — _setTilePropsFogged', () => {
     assert.ok(!r._fogActiveSet.has(hexK));
   });
 
-  test('GLB building instances (respectsFog:false) are left untouched by the prop loop', () => {
-    // GLB buildings darken via a GLOBAL shader uniform (the fogged-tile XZ list
-    // fed by `_updateBuildingFogUniform` / FogDarkenPlugin), NOT the per-prop
-    // veil loop — the May per-instance-attribute path produced all-black
-    // buildings and was reverted. So building instances carry
-    // `respectsFog: false`, and `_setTilePropsFogged` must neither hide nor
-    // mutate them. (The darkening itself is covered in fog-darken-plugin.test.js.)
+  test('GLB buildings (respectsFog:false) are left untouched by the prop loop', () => {
+    // GLB buildings darken via their own per-building material tint
+    // (`_applyBuildingFogDarken`), NOT the per-prop veil loop. So building meshes
+    // carry `respectsFog: false`, and `_setTilePropsFogged` must neither hide nor
+    // mutate them. (The darkening itself is covered below.)
     const r = makeRenderer();
     const hexK = '6,2';
     const bldg = {
       isVisible: true,
-      instancedBuffers: { fogDarken: 1.0 },
+      material: { diffuseColor: { r: 1, g: 1, b: 1 } },
       metadata: { respectsFog: false, kind: 'building-glb' },
     };
     r._tilePropsByKey.set(hexK, [bldg]);
     r._setTilePropsFogged(hexK, true);
     assert.equal(bldg.isVisible, true, 'building stays visible under fog');
-    assert.equal(bldg.instancedBuffers.fogDarken, 1.0, 'prop loop does not mutate it');
+    assert.equal(bldg.material.diffuseColor.r, 1, 'prop loop does not mutate it');
     assert.ok(r._fogActiveSet.has(hexK), 'tile still tracked as fogged');
   });
 
@@ -143,6 +141,69 @@ describe('Renderer3D splat fog — _setTilePropsFogged', () => {
     r._setTilePropsFogged(hexK, false);
     assert.equal(road.material.diffuseTexture.level, 1, 'level restored on un-fog');
     assert.equal(road.material.diffuseColor.r, 1.0, 'colour restored on un-fog');
+  });
+});
+
+describe('Renderer3D building fog — _applyBuildingFogDarken', () => {
+  function bldg(fogHexKey, mat) {
+    return { metadata: { kind: 'building-glb', respectsFog: false, fogHexKey }, material: mat,
+      isDisposed: () => false };
+  }
+
+  test('PBR building on a fogged hex darkens albedo+emissive to FOG_HIDDEN_DARKEN; visible one untouched', async () => {
+    const { FOG_HIDDEN_DARKEN } = await import('../src/renderer-3d.js');
+    const r = makeRenderer();
+    const fogged  = bldg('3,3', { albedoColor: { r: 1, g: 0.8, b: 0.6 }, emissiveColor: { r: 0.2, g: 0.2, b: 0.2 } });
+    const visible = bldg('9,9', { albedoColor: { r: 1, g: 0.8, b: 0.6 } });
+    r._buildingMeshes.add(fogged);
+    r._buildingMeshes.add(visible);
+    r._fogActiveSet = new Set(['3,3']);
+
+    r._applyBuildingFogDarken();
+
+    assert.ok(Math.abs(fogged.material.albedoColor.r - 1 * FOG_HIDDEN_DARKEN) < 1e-9, 'albedo r darkened');
+    assert.ok(Math.abs(fogged.material.albedoColor.g - 0.8 * FOG_HIDDEN_DARKEN) < 1e-9, 'albedo g darkened');
+    assert.ok(Math.abs(fogged.material.emissiveColor.r - 0.2 * FOG_HIDDEN_DARKEN) < 1e-9, 'emissive darkened');
+    assert.equal(visible.material.albedoColor.r, 1, 'visible building unchanged');
+  });
+
+  test('Standard building darkens diffuseColor and restores exactly on un-fog (idempotent)', () => {
+    const r = makeRenderer();
+    const b = bldg('2,2', { diffuseColor: { r: 0.9, g: 0.7, b: 0.5 } });
+    r._buildingMeshes.add(b);
+
+    r._fogActiveSet = new Set(['2,2']);
+    r._applyBuildingFogDarken();
+    r._applyBuildingFogDarken(); // re-apply must not compound
+    const k = 0.40;
+    assert.ok(Math.abs(b.material.diffuseColor.r - 0.9 * k) < 1e-9, 'no compounding on re-apply');
+
+    r._fogActiveSet = new Set(); // un-fog
+    r._applyBuildingFogDarken();
+    assert.ok(Math.abs(b.material.diffuseColor.r - 0.9) < 1e-9, 'restored to base');
+    assert.ok(Math.abs(b.material.diffuseColor.g - 0.7) < 1e-9, 'restored to base g');
+  });
+
+  test('MultiMaterial building tints every sub-material', () => {
+    const r = makeRenderer();
+    const sub0 = { albedoColor: { r: 1, g: 1, b: 1 } };
+    const sub1 = { diffuseColor: { r: 0.6, g: 0.6, b: 0.6 } };
+    const b = bldg('4,4', { subMaterials: [sub0, sub1] });
+    r._buildingMeshes.add(b);
+    r._fogActiveSet = new Set(['4,4']);
+
+    r._applyBuildingFogDarken();
+    assert.ok(Math.abs(sub0.albedoColor.r - 0.40) < 1e-9, 'sub0 darkened');
+    assert.ok(Math.abs(sub1.diffuseColor.r - 0.6 * 0.40) < 1e-9, 'sub1 darkened');
+  });
+
+  test('disposed building is dropped from the tracking set', () => {
+    const r = makeRenderer();
+    const b = bldg('1,1', { diffuseColor: { r: 1, g: 1, b: 1 } });
+    b.isDisposed = () => true;
+    r._buildingMeshes.add(b);
+    r._applyBuildingFogDarken();
+    assert.equal(r._buildingMeshes.size, 0, 'disposed mesh pruned');
   });
 });
 
