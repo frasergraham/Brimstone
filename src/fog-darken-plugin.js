@@ -153,12 +153,19 @@ export function makeFogDarkenPlugin(BABYLON) {
           // edge) avoids an aliased cutoff while keeping the building body
           // uniformly dark. `mix(1.0, fogDarkenAmount, dk)` => unfogged
           // fragments are untouched (dk=0 → ×1.0).
+          //
+          // smoothstep REQUIRES edge0 < edge1 — results are UNDEFINED when
+          // edge0 >= edge1 (GLSL ES spec). A reversed-edge call darkened
+          // correctly on Safari/Metal but evaluated to 0.0 on Chrome/ANGLE, so
+          // fogged buildings stayed bright in Chrome. We instead ramp with
+          // ascending edges (inner→outer) and invert with `1.0 -`, giving the
+          // same inside-bright / outside-feathered curve on every driver.
           CUSTOM_FRAGMENT_MAIN_END: `#ifdef FOG_DARKEN
             float fogDk = 0.0;
             for (int i = 0; i < MAX_FOG_TILES; i++) {
               if (float(i) >= fogCount) break;
               float dist = distance(vFogWorldXZ, fogTiles[i]);
-              fogDk = max(fogDk, smoothstep(fogTileRadius, fogTileRadius * 0.7, dist));
+              fogDk = max(fogDk, 1.0 - smoothstep(fogTileRadius * 0.7, fogTileRadius, dist));
             }
             gl_FragColor.rgb *= mix(1.0, fogDarkenAmount, fogDk);
           #endif`,

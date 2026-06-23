@@ -166,6 +166,25 @@ describe('makeFogDarkenPlugin', () => {
     assert.match(f.CUSTOM_FRAGMENT_MAIN_END, /for \(int i = 0; i < MAX_FOG_TILES/);
   });
 
+  test('smoothstep uses ascending edges (edge0 < edge1) — reversed edges are UB and stayed bright on Chrome/ANGLE', () => {
+    const Plugin = makeFogDarkenPlugin(FakeBABYLON);
+    const p = new Plugin({});
+    const src = p.getCustomCode('fragment').CUSTOM_FRAGMENT_MAIN_END;
+
+    // Every smoothstep(edge0, edge1, x) must have edge0 strictly < edge1, or the
+    // result is undefined per the GLSL ES spec (Safari darkened, Chrome didn't).
+    const calls = [...src.matchAll(/smoothstep\(([^,]+),([^,]+),/g)];
+    assert.ok(calls.length > 0, 'shader should call smoothstep');
+    for (const [, e0, e1] of calls) {
+      // The two edges here are `fogTileRadius * 0.7` and `fogTileRadius`; the
+      // multiplier ordering tells us which is smaller. Reject the reversed form.
+      const e0HasScale = /0\.7/.test(e0);
+      const e1HasScale = /0\.7/.test(e1);
+      assert.ok(e0HasScale && !e1HasScale,
+        `smoothstep edges reversed (edge0 must be the smaller inner radius): ${e0.trim()}, ${e1.trim()}`);
+    }
+  });
+
   test('bindForSubMesh writes all uniforms when enabled, nothing when disabled', () => {
     const Plugin = makeFogDarkenPlugin(FakeBABYLON);
     const p = new Plugin({});
