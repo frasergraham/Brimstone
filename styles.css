@@ -6622,6 +6622,29 @@ body.spectator-mode #game-screen   { display: flex !important; }
   right: 1.2rem;
   bottom: 5.5rem;
 }
+/* Top-center — used for resolution/replay steps so the dialog never covers the
+   bottom replay controls (which sit centered near the bottom of the screen). */
+.tutorial-tooltip--top {
+  left: 50%;
+  top: 1rem;
+  transform: translateX(-50%);
+}
+
+/* Mobile: keep the dialog within the viewport and clear of the bottom replay
+   HUD + score bar, so the player can always reach the replay controls. */
+@media (max-width: 640px) {
+  .tutorial-tooltip {
+    max-width: calc(100vw - 1.6rem);
+  }
+  .tutorial-tooltip--bottom-left,
+  .tutorial-tooltip--bottom-right {
+    left: 0.8rem;
+    right: 0.8rem;
+    bottom: auto;
+    top: 0.8rem;          /* float at the top on phones — bottom is the replay HUD */
+    transform: none;
+  }
+}
 
 .tut-title {
   font-family: 'BrimstoneIcons', 'Cinzel', 'Palatino Linotype', serif;

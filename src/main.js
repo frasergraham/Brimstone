@@ -53,8 +53,7 @@ import { MAP_SIZES } from './map.js';
 import { nodeController } from './game.js';
 import { MissionConductor, areHintsSuppressed, markHintsSeen, resetAllHintsForCampaign } from './mission-conductor.js';
 import {
-  buildLearnMap, LEARN_STEPS, LEARN_CONDUCTOR_CONFIG,
-  LEARN_SURVIVOR_A, LEARN_SURVIVOR_B, LEARN_ZOMBIES,
+  buildLearnMap, placeLearnUnits, LEARN_STEPS, LEARN_CONDUCTOR_CONFIG,
 } from './learn/learn-config.js';
 import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel, getEquippedWeaponIdOf, normalizeItems, flattenItemCounts } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
@@ -9624,20 +9623,9 @@ function _startLearnToPlay() {
   state = new GameState(false /* witchIsAI */, false /* heroIsAI */, 'tutorial', null, mapData);
   state.fogOfWar = 'partial';   // so the Witch's forces "appear" as they close in
 
-  // Two townsfolk: a melee soldier who shares the hero's tile, plus an archer.
-  const a = createSurvivor(LEARN_SURVIVOR_A.col, LEARN_SURVIVOR_A.row, null, state);
-  a.owner = 'hero';
-  const b = createSurvivor(LEARN_SURVIVOR_B.col, LEARN_SURVIVOR_B.row, null, state);
-  b.owner = 'hero';
-  b.equipWeapon(LEARN_SURVIVOR_B.weapon);
-  state.entities.push(a, b);
-
-  // The Witch's two zombies — 1 HP so the scripted strikes are always lethal.
-  for (const z of LEARN_ZOMBIES) {
-    const e = createZombie(z.start.col, z.start.row, 'witch', state);
-    e.hp = 1; e.maxHp = 1;
-    state.entities.push(e);
-  }
+  // A melee townsperson who shares the hero's tile + Isaac the archer, plus the
+  // Witch's two (fragile) zombies. Shared with the validation test.
+  placeLearnUnits(state);
 
   // Starting wood so the fortify lesson is affordable.
   state.inventory.hero = normalizeItems({ wood: 2, food: 1 });

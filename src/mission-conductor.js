@@ -125,6 +125,7 @@ export class MissionConductor {
     this._spotlitEl = null;
     this._hexArrowRAF = null; // rAF handle re-anchoring an arrow to a map hex
     this._hexPulseRAF = null; // rAF handle re-anchoring the pulse ring to a hex
+    this._elemAnchorRAF = null; // rAF handle re-anchoring arrow + pulse to a DOM element
     this._voiceAudio  = null; // currently playing narration clip
 
     // Bind handlers once so destroy() can remove them. The tooltip buttons are
@@ -237,6 +238,15 @@ export class MissionConductor {
         const actor = this.state?.entities?.find(e => e.id === action.entityId);
         if (!actor || actor.type !== t.entityType) return;
       }
+      // Optional destination filter — gate a MOVE on REACHING a specific hex, so
+      // a multi-hop advance only completes the step on the final leg (teaching
+      // two move actions to cross the bridge).
+      if (t.toCol != null && (action.toCol !== t.toCol || action.toRow !== t.toRow)) return;
+      // A MOVE that completes a step switches to a new (often different) unit:
+      // suppress the UI's chaining re-select for this one move so the next click
+      // selects fresh. A mid-chain MOVE (toCol mismatch above) returns before
+      // here, leaving the selection intact so the player keeps moving this unit.
+      if (action.type === PlanActionType.MOVE && this.ui) this.ui._tutorialSuppressReselect = true;
       this._completeStep();
     }
   }
@@ -406,10 +416,11 @@ export class MissionConductor {
     const acts = step.allowActions !== undefined ? step.allowActions : this._config.actionWhitelist;
     this.ui.tutorialAllowedActions = Array.isArray(acts) ? new Set(acts) : null;
 
-    // Clear any lingering selection at the start of an action-gated step so the
-    // FIRST click selects the intended unit. The UI also deselects after a move
-    // during gating (it skips its usual chaining re-select), so this is a
-    // belt-and-suspenders for roundStepMap jumps that land mid-selection.
+    // Clear any lingering selection when JUMPING into a gated step out of band
+    // (roundStepMap jumps at planning start). For a step reached by completing a
+    // move, the suppress-reselect flag (set in onActionQueued, consumed by the
+    // same click handler's post-move re-select) handles deselection — so we must
+    // NOT touch that flag here or we'd clobber it before it's consumed.
     const gated = step.trigger && typeof step.trigger === 'object';
     if (gated && typeof this.ui._clearSelection === 'function') this.ui._clearSelection();
   }
@@ -476,8 +487,12 @@ export class MissionConductor {
 
   _applySpotlight(target, pulse = false) {
     if (target.type === 'hex') {
-      this.renderer.tutorialSpotlightHex = { col: target.col, row: target.row };
-      if (this._redraw) this._redraw();
+      // With the pulsing circle + arrow (Learn-to-Play) we deliberately DON'T
+      // draw the gold hex disc — three overlapping highlights is too much.
+      if (!pulse) {
+        this.renderer.tutorialSpotlightHex = { col: target.col, row: target.row };
+        if (this._redraw) this._redraw();
+      }
       if (target.arrow && this._arrowEl) {
         this._startHexArrow(target.col, target.row, target.arrow);
       }
@@ -488,10 +503,43 @@ export class MissionConductor {
         el.classList.add('tutorial-spotlit');
         this._spotlitEl = el;
       }
-      if (target.arrow && this._arrowEl) {
-        this._showArrow(target.selector, target.arrow);
+      // Re-anchor the arrow + pulse to the element EVERY frame so they track
+      // layout/scroll and never stick at 0,0 when the element isn't laid out yet
+      // (the mobile submit button reported at the top-left corner).
+      if ((target.arrow || pulse) && (this._arrowEl || this._pulseEl)) {
+        this._startElementAnchor(target.selector, target.arrow, pulse);
       }
-      if (pulse && this._pulseEl && el) this._positionPulse(el.getBoundingClientRect());
+    }
+  }
+
+  /** Track a DOM element across frames, positioning the arrow + pulse on it. */
+  _startElementAnchor(selector, direction, pulse) {
+    const place = (r) => {
+      const visible = r && (r.width > 0 || r.height > 0) && r.bottom > 0 && r.right > 0;
+      if (visible) {
+        if (direction && this._arrowEl) this._positionArrow(r, direction);
+        if (pulse && this._pulseEl) this._positionPulse(r);
+      } else {
+        if (direction && this._arrowEl) this._arrowEl.style.display = 'none';
+        if (pulse && this._pulseEl) this._pulseEl.style.display = 'none';
+      }
+    };
+    if (typeof requestAnimationFrame !== 'function') {
+      place(document.querySelector(selector)?.getBoundingClientRect());
+      return;
+    }
+    this._stopElementAnchor();
+    const tick = () => {
+      place(document.querySelector(selector)?.getBoundingClientRect());
+      this._elemAnchorRAF = requestAnimationFrame(tick);
+    };
+    tick();
+  }
+
+  _stopElementAnchor() {
+    if (this._elemAnchorRAF != null) {
+      cancelAnimationFrame(this._elemAnchorRAF);
+      this._elemAnchorRAF = null;
     }
   }
 
@@ -611,6 +659,7 @@ export class MissionConductor {
     if (this._backdrop) this._backdrop.classList.remove('active');
     this._stopHexArrow();
     this._stopHexPulse();
+    this._stopElementAnchor();
     if (this._arrowEl) this._arrowEl.style.display = 'none';
   }
 

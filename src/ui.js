@@ -149,6 +149,9 @@ export class UIController {
     // (the default, and free play after handoff) means no restriction.
     this.tutorialAllowedHexes   = null;
     this.tutorialAllowedActions = null;
+    // One-shot: set by the conductor when a MOVE completes a gated step, so the
+    // post-move re-select deselects instead of chaining (keeps unit-switching clean).
+    this._tutorialSuppressReselect = false;
 
     // ── App mode (set by main.js via onModeChange) ───────────────────────────
     this.appMode        = 'MENU';  // mirrors AppMode enum from app-mode.js
@@ -2219,12 +2222,19 @@ export class UIController {
 
       // Add to plan queue (only reachable in planning mode)
       this._addToPlan({ type: PlanActionType.MOVE, entityId: actor.id, toCol: hex.col, toRow: hex.row });
-      // Normally we re-select the actor so further moves can be chained. During
-      // strict tutorial gating we deselect instead, so the NEXT click reliably
+      // Normally re-select the actor so further moves chain (multi-hop advance).
+      // The tutorial sets a one-shot suppress flag for the move that COMPLETES a
+      // gated step, so that move deselects instead — the next click then reliably
       // selects the next scripted unit rather than moving this one again (the
       // allowlist blocks clicking empty ground to deselect by hand).
-      if (actor.alive && !this.tutorialAllowedHexes) this._selectEntity(actor);
-      else this._clearSelection();
+      if (actor.alive && this._tutorialSuppressReselect) {
+        this._tutorialSuppressReselect = false;
+        this._clearSelection();
+      } else if (actor.alive) {
+        this._selectEntity(actor);
+      } else {
+        this._clearSelection();
+      }
       this._updateSidebar();
       this.onRedraw();
 
