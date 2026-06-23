@@ -9428,6 +9428,13 @@ const _genThumbParam = new URLSearchParams(location.search).get('genMissionThumb
 if (_genThumbParam) {
   (async () => {
     try {
+      // The standalone Learn-to-Play tutorial isn't a campaign mission — boot its
+      // board directly (fog cleared so the whole map shows in the card image).
+      if (_genThumbParam === 'learn') {
+        _startLearnToPlay();
+        if (state) { state.fogOfWar = 'none'; redraw(); }
+        return;
+      }
       const camp = CAMPAIGNS.find(c => !c.disabled && (c.missions || []).some(m => m.id === _genThumbParam));
       if (!camp) { console.error('genMissionThumb: no campaign has mission', _genThumbParam); return; }
       _activeCampaign = new Campaign(camp, 1);

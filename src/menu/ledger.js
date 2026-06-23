@@ -16,7 +16,7 @@ import { isModeAvailable, isFactionAvailable, COMING_SOON_LABEL } from '../demo-
 
 /** The six rail destinations, top to bottom (mirrors the mock). */
 const DESTINATIONS = [
-  { id: 'continue', icon: ICON.play,  label: 'Continue',         title: 'Continue',         tag: 'Games in Progress',            accent: 'gold' },
+  { id: 'continue', icon: ICON.play,  label: 'Battle Log',       title: 'Battle Log',       tag: 'Games in Progress',            accent: 'gold' },
   { id: 'campaign', icon: '\uE021',  label: 'Campaign',         title: 'The Campaign',     tag: 'Assemble a party of survivors and follow the story of Ishmael and the Witch',    accent: 'gold' },
   { id: 'skirmish', icon: '\uE061', label: 'Skirmish',         title: 'Skirmish',         tag: 'Single player battle vs. AI - hold the majority of power nodes to win', accent: 'gold' },
   { id: 'others',   icon: '\uE023', label: 'Play Online',       title: 'Play Online',      tag: 'Multiplayer single battles, or join the persistent two-week long async battle for Caleb\'s Hollow',      accent: 'purple' },
@@ -182,7 +182,7 @@ const PANELS = {
 
 /** Continue — your last save as the hero object, then everything else waiting. */
 function _panelContinue(body) {
-  if (!_data?.activeGames) return _placeholderPanel(body, { label: 'Continue' });
+  if (!_data?.activeGames) return _placeholderPanel(body, { label: 'Battle Log' });
   const token = ++_renderToken;
   body.innerHTML = `<p class="ledger-placeholder">Reading the ledger…</p>`;
   _data.activeGames().then((rows) => {
@@ -217,7 +217,7 @@ function _learnToPlayCard(headline) {
   card.setAttribute('role', 'button');
   card.tabIndex = 0;
   card.innerHTML =
-    `<div class="lg-learn-icon" aria-hidden="true">${ICON.hero}</div>` +
+    `<div class="lg-learn-thumb" aria-hidden="true" style="background-image:url(assets/mission-maps/learn.jpg)"></div>` +
     `<div class="lg-learn-body">` +
       `<div class="lg-learn-kicker">${headline ? 'New here?' : 'Refresher'}</div>` +
       `<div class="lg-learn-title gthc">Learn to Play</div>` +
