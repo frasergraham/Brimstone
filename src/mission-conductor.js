@@ -121,8 +121,10 @@ export class MissionConductor {
     this._skipLink = this._tooltip?.querySelector('.tut-skip-link');
     this._voiceBtn = this._tooltip?.querySelector('.tut-voice-btn');
     this._arrowEl  = document.getElementById('tutorial-arrow');
+    this._pulseEl  = document.getElementById('tutorial-pulse-circle');
     this._spotlitEl = null;
     this._hexArrowRAF = null; // rAF handle re-anchoring an arrow to a map hex
+    this._hexPulseRAF = null; // rAF handle re-anchoring the pulse ring to a hex
     this._voiceAudio  = null; // currently playing narration clip
 
     // Bind handlers once so destroy() can remove them. The tooltip buttons are
@@ -305,6 +307,8 @@ export class MissionConductor {
     if (this.ui) {
       this.ui.tutorialClickBlocked = false;
       this.ui.tutorialSubmitBlocked = false;
+      this.ui.tutorialAllowedHexes = null;
+      this.ui.tutorialAllowedActions = null;
     }
     // Detach the shared-button listeners added in the constructor. Without this
     // a destroyed conductor lingers (held alive by the DOM listener) and re-runs
@@ -345,7 +349,7 @@ export class MissionConductor {
 
     // Position tooltip. Blocking dialogs are ALWAYS centered — off-to-the-side
     // dialogs don't get read (see tests/tutorial.test.js step lint).
-    const isDialogStep = (step.trigger === 'click' || step.trigger === 'complete');
+    const isDialogStep = (step.trigger === 'click' || step.trigger === 'complete' || step.trigger === 'handoff');
     if (this._tooltip) {
       const pos = isDialogStep ? 'center' : (step.tooltipPos ?? 'center');
       this._tooltip.className = `tutorial-tooltip tutorial-tooltip--${pos}`;
@@ -354,7 +358,7 @@ export class MissionConductor {
 
     // Button label
     if (this._nextBtn) {
-      if (step.trigger === 'complete') {
+      if (step.trigger === 'complete' || step.trigger === 'handoff') {
         this._nextBtn.textContent   = step.buttonLabel ?? 'Continue →';
         this._nextBtn.style.display = 'block';
       } else if (step.trigger === 'click') {
@@ -380,12 +384,34 @@ export class MissionConductor {
       this.ui.tutorialSubmitBlocked = !optional && step.trigger?.type !== 'plan_submitted';
     }
 
-    // Spotlight
+    // Strict-gating allowlists (Learn-to-Play). A non-null allowedHexes set
+    // restricts which map hexes are clickable; allowedActions restricts the arc
+    // menu. Dialog steps block the map outright, so their lists don't matter.
+    this._publishGating(step);
+
+    // Spotlight (+ optional pulsing red circle on the same target)
     this._clearSpotlight();
-    if (step.spotlight) this._applySpotlight(step.spotlight);
+    if (step.spotlight) this._applySpotlight(step.spotlight, step.pulse === true);
 
     // Narration
     this._playVoice(step);
+  }
+
+  /** Publish per-step click/action allowlists onto the UIController. */
+  _publishGating(step) {
+    if (!this.ui) return;
+    this.ui.tutorialAllowedHexes = Array.isArray(step.allowHexes)
+      ? new Set(step.allowHexes.map(h => `${h.col},${h.row}`))
+      : null;
+    const acts = step.allowActions !== undefined ? step.allowActions : this._config.actionWhitelist;
+    this.ui.tutorialAllowedActions = Array.isArray(acts) ? new Set(acts) : null;
+
+    // Clear any lingering selection at the start of an action-gated step so the
+    // FIRST click selects the intended unit. The UI also deselects after a move
+    // during gating (it skips its usual chaining re-select), so this is a
+    // belt-and-suspenders for roundStepMap jumps that land mid-selection.
+    const gated = step.trigger && typeof step.trigger === 'object';
+    if (gated && typeof this.ui._clearSelection === 'function') this.ui._clearSelection();
   }
 
   /** A step's goal was met. Scripted: advance the sequence. Hints: dismiss. */
@@ -415,6 +441,8 @@ export class MissionConductor {
     if (this.ui) {
       this.ui.tutorialClickBlocked  = false;
       this.ui.tutorialSubmitBlocked = false;
+      this.ui.tutorialAllowedHexes = null;
+      this.ui.tutorialAllowedActions = null;
     }
   }
 
@@ -425,6 +453,13 @@ export class MissionConductor {
     if (step.trigger === 'complete') {
       this.destroy();
       this._config.onComplete?.();
+      return;
+    }
+
+    // Release control to free play (witch AI takes over) without ending the game.
+    if (step.trigger === 'handoff') {
+      this.destroy();
+      this._config.onHandoff?.();
       return;
     }
 
@@ -439,13 +474,14 @@ export class MissionConductor {
     this.destroy();
   }
 
-  _applySpotlight(target) {
+  _applySpotlight(target, pulse = false) {
     if (target.type === 'hex') {
       this.renderer.tutorialSpotlightHex = { col: target.col, row: target.row };
       if (this._redraw) this._redraw();
       if (target.arrow && this._arrowEl) {
         this._startHexArrow(target.col, target.row, target.arrow);
       }
+      if (pulse && this._pulseEl) this._startHexPulse(target.col, target.row);
     } else if (target.type === 'element') {
       const el = document.querySelector(target.selector);
       if (el) {
@@ -455,7 +491,42 @@ export class MissionConductor {
       if (target.arrow && this._arrowEl) {
         this._showArrow(target.selector, target.arrow);
       }
+      if (pulse && this._pulseEl && el) this._positionPulse(el.getBoundingClientRect());
     }
+  }
+
+  /** Center the pulsing red ring on a screen-space rect. */
+  _positionPulse(rect) {
+    const el = this._pulseEl;
+    if (!el) return;
+    el.style.left = (rect.left + rect.width / 2) + 'px';
+    el.style.top  = (rect.top + rect.height / 2) + 'px';
+    el.style.display = 'block';
+  }
+
+  /** Anchor the pulse ring to a map hex, re-projecting every frame (camera pan/zoom). */
+  _startHexPulse(col, row) {
+    if (typeof this.renderer?.getHexScreenPosition !== 'function') return;
+    if (typeof requestAnimationFrame !== 'function') return;
+    this._stopHexPulse();
+    const tick = () => {
+      const pos = this.renderer.getHexScreenPosition(col, row);
+      if (pos) {
+        this._positionPulse({ left: pos.x, top: pos.y, width: 0, height: 0 });
+      } else if (this._pulseEl) {
+        this._pulseEl.style.display = 'none';
+      }
+      this._hexPulseRAF = requestAnimationFrame(tick);
+    };
+    tick();
+  }
+
+  _stopHexPulse() {
+    if (this._hexPulseRAF !== null) {
+      cancelAnimationFrame(this._hexPulseRAF);
+      this._hexPulseRAF = null;
+    }
+    if (this._pulseEl) this._pulseEl.style.display = 'none';
   }
 
   _showArrow(selector, direction) {
@@ -539,6 +610,7 @@ export class MissionConductor {
     if (this.renderer) this.renderer.tutorialSpotlightHex = null;
     if (this._backdrop) this._backdrop.classList.remove('active');
     this._stopHexArrow();
+    this._stopHexPulse();
     if (this._arrowEl) this._arrowEl.style.display = 'none';
   }
 

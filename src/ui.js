@@ -144,6 +144,11 @@ export class UIController {
     this.tutorialClickBlocked = false;
     // When true, block the plan submit button (set by MissionConductor until plan_submitted step)
     this.tutorialSubmitBlocked = false;
+    // Strict Learn-to-Play gating (set by MissionConductor per step). A non-null
+    // Set restricts which map hexes / arc-menu actions the player may use; null
+    // (the default, and free play after handoff) means no restriction.
+    this.tutorialAllowedHexes   = null;
+    this.tutorialAllowedActions = null;
 
     // ── App mode (set by main.js via onModeChange) ───────────────────────────
     this.appMode        = 'MENU';  // mirrors AppMode enum from app-mode.js
@@ -1670,6 +1675,10 @@ export class UIController {
     const { x, y } = this._canvasPos(e);
     const hex = this._canvasToHex(x, y);
     if (hex.col < 0 || hex.col >= MAP_COLS || hex.row < 0 || hex.row >= MAP_ROWS) return;
+    // Strict tutorial gating: when an allowlist is published, only the spotlit
+    // hexes are clickable — every other click is swallowed so the player can't
+    // deviate from the scripted path. Null (the default / free play) = no gate.
+    if (this.tutorialAllowedHexes && !this.tutorialAllowedHexes.has(`${hex.col},${hex.row}`)) return;
 
     // Round-summary wrap-up is on screen: clicking one of YOUR units resolves it
     // as Continue (identical teardown to the Continue button) and pre-selects
@@ -2210,7 +2219,11 @@ export class UIController {
 
       // Add to plan queue (only reachable in planning mode)
       this._addToPlan({ type: PlanActionType.MOVE, entityId: actor.id, toCol: hex.col, toRow: hex.row });
-      if (actor.alive) this._selectEntity(actor);
+      // Normally we re-select the actor so further moves can be chained. During
+      // strict tutorial gating we deselect instead, so the NEXT click reliably
+      // selects the next scripted unit rather than moving this one again (the
+      // allowlist blocks clicking empty ground to deselect by hand).
+      if (actor.alive && !this.tutorialAllowedHexes) this._selectEntity(actor);
       else this._clearSelection();
       this._updateSidebar();
       this.onRedraw();
@@ -2334,6 +2347,9 @@ export class UIController {
     const arcItems = [];
 
     for (const action of actions) {
+      // Strict tutorial gating: only whitelisted actions appear in the arc menu
+      // (move/attack stay available as hex clicks). Null = no restriction.
+      if (this.tutorialAllowedActions && !this.tutorialAllowedActions.has(action.type)) continue;
       const dis = !hasAct;
       switch (action.type) {
         case ActionType.MOVE:

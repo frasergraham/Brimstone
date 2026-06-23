@@ -189,8 +189,12 @@ function _panelContinue(body) {
     if (token !== _renderToken) return;              // a newer render superseded us
     const sorted = mmSortRows(rows || []);
     body.replaceChildren();
+    // New players (nothing in progress) see Learn to Play as the headline; once
+    // there are games to resume, it slips below them as a quiet refresher option.
+    const firstTime = !sorted.length;
+    if (firstTime) body.appendChild(_learnToPlayCard(true));
     if (!sorted.length) {
-      body.appendChild(_empty('Nothing in progress. Begin a Campaign or a Skirmish from the rail.'));
+      body.appendChild(_empty('Or begin a Campaign or a Skirmish from the rail.'));
       return;
     }
     const [hero, ...rest] = sorted;
@@ -202,7 +206,28 @@ function _panelContinue(body) {
       for (const r of rest.slice(0, 5)) list.appendChild(_feedRow(r));
       body.appendChild(list);
     }
+    body.appendChild(_learnToPlayCard(false));
   }).catch(() => { if (token === _renderToken) body.replaceChildren(_empty('Could not read the ledger.')); });
+}
+
+/** "Learn to Play" — launches the standalone guided tutorial. */
+function _learnToPlayCard(headline) {
+  const card = document.createElement('div');
+  card.className = 'lg-learn-card' + (headline ? ' is-headline' : '');
+  card.setAttribute('role', 'button');
+  card.tabIndex = 0;
+  card.innerHTML =
+    `<div class="lg-learn-icon" aria-hidden="true">${ICON.hero}</div>` +
+    `<div class="lg-learn-body">` +
+      `<div class="lg-learn-kicker">${headline ? 'New here?' : 'Refresher'}</div>` +
+      `<div class="lg-learn-title gthc">Learn to Play</div>` +
+      `<div class="lg-learn-sub">A short guided battle — plan, fight, and hold a Power Node.</div>` +
+    `</div>` +
+    `<span class="lg-learn-cta">${ICON.play} Start</span>`;
+  const go = () => _data?.startLearnToPlay?.();
+  card.addEventListener('click', go);
+  card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
+  return card;
 }
 
 /** Campaign — pick a playthrough slot, then play any available mission. */

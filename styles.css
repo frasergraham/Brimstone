@@ -6749,6 +6749,28 @@ body.spectator-mode #game-screen   { display: flex !important; }
   50%       { opacity: 1.0; filter: drop-shadow(0 0 10px rgba(231,76,60,0.9)); }
 }
 
+/* Pulsing red ring spotlight — the conductor anchors it (screen space) to the
+   target hex or UI element so the player's eye is pulled to the one legal click. */
+#tutorial-pulse-circle {
+  position: fixed;
+  z-index: 915;                 /* under the arrow (920) + tooltip, over the canvas */
+  width: 62px;
+  height: 62px;
+  margin-left: -31px;           /* center on the anchor point (left/top) */
+  margin-top: -31px;
+  border: 3px solid rgba(231, 76, 60, 0.95);
+  border-radius: 50%;
+  box-shadow: 0 0 12px rgba(231, 76, 60, 0.6);
+  pointer-events: none;
+  animation: tut-pulse-ring 1.2s ease-out infinite;
+}
+
+@keyframes tut-pulse-ring {
+  0%   { transform: scale(0.72); opacity: 0.95; }
+  70%  { transform: scale(1.18); opacity: 0.18; }
+  100% { transform: scale(1.18); opacity: 0; }
+}
+
 /* ── Campaign / Story Mode ────────────────────────��─────────────────────── */
 
 .campaign-select-list {
