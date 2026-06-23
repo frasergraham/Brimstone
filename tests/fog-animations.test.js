@@ -208,3 +208,46 @@ describe('move/lunge anim fog culling', () => {
     assert.ok(shouldDrawMoveAnim(anim, vis, 'witch'));
   });
 });
+
+// ── Standee veil culling during a move animation ────────────────────────────
+// Replicates the per-standee decision in _applyFogVeil. This is a SECOND fog
+// layer beyond the move-anim gate above: even when a move is allowed to animate
+// (origin OR destination in sight), the veil separately hides each standee
+// whose metadata hex is fogged. While a unit is mid move/lunge its metadata hex
+// is its DESTINATION, so a unit walking INTO fog (destination fogged) was hidden
+// the instant its slide began — the move never showed, the unit just vanished.
+// Fix: a unit mid-animation is never fog-hidden; at rest it follows the veil.
+
+function shouldRenderEntityAt(target, hexK) {
+  return !target ? true : target.has(hexK); // mirrors renderer-3d.js
+}
+function standeeVisibleUnderVeil({ target, metaHexKey, animating }) {
+  return animating || shouldRenderEntityAt(target, metaHexKey);
+}
+
+describe('standee veil culling vs move animation', () => {
+  const vis = new Set([hexKey(2, 2)]); // only (2,2) in the viewer's sight
+  const foggedDest = hexKey(9, 5);     // a hex NOT in the visible set
+
+  test('mid-move INTO fog stays visible — the regression', () => {
+    // During the slide the standee's metadata hex is the fogged destination;
+    // the animating bypass keeps it on screen so the move is actually seen.
+    assert.equal(standeeVisibleUnderVeil({ target: vis, metaHexKey: foggedDest, animating: true }), true);
+  });
+
+  test('at rest in fog → hidden (veil unchanged when not animating)', () => {
+    assert.equal(standeeVisibleUnderVeil({ target: vis, metaHexKey: foggedDest, animating: false }), false);
+  });
+
+  test('mid-move toward a visible hex → visible', () => {
+    assert.equal(standeeVisibleUnderVeil({ target: vis, metaHexKey: hexKey(2, 2), animating: true }), true);
+  });
+
+  test('at rest on a visible hex → visible', () => {
+    assert.equal(standeeVisibleUnderVeil({ target: vis, metaHexKey: hexKey(2, 2), animating: false }), true);
+  });
+
+  test('no fog (target null) → visible regardless of hex or animation', () => {
+    assert.equal(standeeVisibleUnderVeil({ target: null, metaHexKey: foggedDest, animating: false }), true);
+  });
+});

@@ -16032,7 +16032,17 @@ export class Renderer3D {
     if (target) {
       for (const [id, standee] of this._entityStandees) {
         const k = hexKey(standee.plane.metadata.col, standee.plane.metadata.row);
-        const visible = shouldRenderEntityAt(target, k);
+        // A unit mid-move/lunge stays visible for the WHOLE animation. The
+        // replay gate (isEventVisible) only queues an animation when the move's
+        // origin OR destination is in sight, so the slide is already "worth
+        // showing". Without this, a unit walking INTO fog vanished the instant
+        // its animation began: during the slide the standee's metadata hex is
+        // its DESTINATION (kept in sync for the 2+-hex case), so a fogged
+        // destination tested here flipped it to setEnabled(false) before it
+        // ever left the visible origin. Once the animation ends the id clears
+        // from these sets and the next veil pass hides it at rest if fogged.
+        const animating = this._activeMoveIds.has(id) || this._activeLungeIds.has(id);
+        const visible = animating || shouldRenderEntityAt(target, k);
         // Use setEnabled (not isVisible) so the standee's child portrait
         // sticker meshes inherit visibility. isVisible only hides the mesh
         // itself, not its parented children — switching to setEnabled
