@@ -96,19 +96,23 @@ describe('_buildBuildingInstance — instance is a shadow receiver', () => {
   function stubTemplate(r, relPath) {
     const mesh = {
       name: `tpl_${relPath}`,
-      createInstance(n) {
+      material: null,
+      clone(n) {
         return {
           name: n,
           isPickable: true,
+          isEnabled: true,
           metadata: null,
-          // Real InstancedMesh inherits this from the source; the stub starts
-          // at the unhelpful default so the explicit instance write is observable.
+          material: null,
+          // Real cloned mesh inherits this from the source; the stub starts at
+          // the unhelpful default so the explicit write is observable.
           receiveShadows: false,
           position: { x: 0, y: 0, z: 0 },
           scaling: null,
           rotation: null,
           parent: null,
           renderingGroupId: 7,
+          setEnabled(b) { this.isEnabled = b; },
         };
       },
     };

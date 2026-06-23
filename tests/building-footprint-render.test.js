@@ -63,16 +63,18 @@ function makeFakeBabylon() {
   return { Vector3, Mesh: { MergeMeshes: () => null }, SceneLoader: { ImportMeshAsync: async () => ({ meshes: [] }) } };
 }
 
-/** Minimal building template (mesh that records createInstance) so instance
- *  building can run synchronously without the async loader. */
+/** Minimal building template (mesh that records clone) so building creation can
+ *  run synchronously without the async loader. Buildings are CLONES now (each
+ *  with its own material) so fog can darken one independently. */
 function stubTemplate(r, relPath, { scale } = {}) {
   const mesh = {
     name: `tpl_${relPath}`,
-    createInstance(n) {
+    material: null,
+    clone(n) {
       return {
-        name: n, source: this, isPickable: true, metadata: null,
-        position: { x: 0, y: 0, z: 0 }, scaling: null, rotation: null,
-        parent: null, renderingGroupId: 7,
+        name: n, source: this, isPickable: true, isEnabled: true, metadata: null,
+        material: null, position: { x: 0, y: 0, z: 0 }, scaling: null, rotation: null,
+        parent: null, renderingGroupId: 7, setEnabled(b) { this.isEnabled = b; },
       };
     },
   };
