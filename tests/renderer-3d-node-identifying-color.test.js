@@ -18,7 +18,7 @@ describe('nodeIdentifyingColor — palette resolution', () => {
   test('reads obj.color when present (preferred — matches HUD score dot)', () => {
     // The score dot in `src/ui-render.js` reads obj.color directly, so the
     // 3D side must do the same to stay in sync at map-gen time.
-    assert.equal(nodeIdentifyingColor({ color: '#22c55e' }), '#22c55e');
+    assert.equal(nodeIdentifyingColor({ color: '#d946ef' }), '#d946ef');
     assert.equal(nodeIdentifyingColor({ color: '#f59e0b' }), '#f59e0b');
     assert.equal(nodeIdentifyingColor({ color: '#06b6d4' }), '#06b6d4');
   });
@@ -54,6 +54,59 @@ describe('nodeIdentifyingColor — palette resolution', () => {
     assert.notEqual(a, b);
     assert.notEqual(b, c);
     assert.notEqual(a, c);
+  });
+});
+
+describe('NODE_COLORS palette — distinct + clear of the move-here highlight', () => {
+  // The reachable-hex "you can move here" highlight is green
+  // (HIGHLIGHT_DEFAULT_RGBA = rgba(60,220,80,…) in renderer-3d.js → ~hue 128°).
+  // A node-identifier colour sitting near that hue (the old emerald #22c55e at
+  // ~hue 142°) is confusable with the highlight, so no node colour may land in
+  // the green band around it. Max simultaneous nodes is 7, so we need ≥7 hues.
+  const MOVE_HIGHLIGHT_HUE = 128; // rgb(60,220,80)
+  const MIN_HUE_GAP_FROM_HIGHLIGHT = 30; // degrees — keep node hues out of the green band
+
+  function hueOf(hex) {
+    const h = hex.replace('#', '');
+    const r = parseInt(h.slice(0, 2), 16) / 255;
+    const g = parseInt(h.slice(2, 4), 16) / 255;
+    const b = parseInt(h.slice(4, 6), 16) / 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    if (max === min) return 0; // achromatic — no hue to clash
+    const d = max - min;
+    let hue;
+    if (max === r)      hue = ((g - b) / d + (g < b ? 6 : 0));
+    else if (max === g) hue = ((b - r) / d + 2);
+    else                hue = ((r - g) / d + 4);
+    return Math.round((hue / 6) * 360);
+  }
+  function hueDist(a, b) {
+    const d = Math.abs(a - b) % 360;
+    return Math.min(d, 360 - d);
+  }
+
+  test('palette supplies at least 7 colours (max node count)', () => {
+    assert.ok(NODE_COLORS.length >= 7,
+      `expected ≥7 node colours (max nodes is 7), got ${NODE_COLORS.length}`);
+  });
+
+  test('all node colours are mutually distinct', () => {
+    assert.equal(new Set(NODE_COLORS).size, NODE_COLORS.length,
+      `duplicate node colour in ${JSON.stringify(NODE_COLORS)}`);
+  });
+
+  test('no node colour is confusable in hue with the green move-here highlight', () => {
+    for (const hex of NODE_COLORS) {
+      const gap = hueDist(hueOf(hex), MOVE_HIGHLIGHT_HUE);
+      assert.ok(gap >= MIN_HUE_GAP_FROM_HIGHLIGHT,
+        `node colour ${hex} (hue ${hueOf(hex)}°) is only ${gap}° from the move ` +
+        `highlight (hue ${MOVE_HIGHLIGHT_HUE}°); needs ≥${MIN_HUE_GAP_FROM_HIGHLIGHT}°`);
+    }
+  });
+
+  test('node 0 is no longer the old emerald green that clashed with the highlight', () => {
+    assert.notEqual(NODE_COLORS[0], '#22c55e');
   });
 });
 
