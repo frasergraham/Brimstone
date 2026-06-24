@@ -11108,9 +11108,15 @@ export class Renderer3D {
         if (o.kind === 'tree') { if (typeof o.slot === 'number') treeSlots.push(o.slot); }
         else staticOcc.push(o);
       }
-      // Single IDLE standee on an otherwise-empty hex → it already sits at the
-      // hex centre from _positionStandee's default path; nothing to re-slot.
+      // Single IDLE standee on an otherwise-empty hex that lives in the CENTRE
+      // slot → it already sits at the hex centre from _positionStandee's default
+      // path; nothing to re-slot. A lone standee with an authoritative NON-centre
+      // slot must NOT take this shortcut — it would snap to the bare centre and
+      // pop away from the slot it ended the previous round in (the visible
+      // round-boundary slot jump). Such a standee falls through to the general
+      // positioning path below, which honors entity.slot.
       if (standeeOccs.length === 1 && !standeeOccs[0].animating
+          && (standeeOccs[0].slot ?? 0) === CENTRE_SLOT_INDEX
           && staticOcc.length === 0 && treeSlots.length === 0) {
         this._syncOverflowBadge(k, 0);
         continue;

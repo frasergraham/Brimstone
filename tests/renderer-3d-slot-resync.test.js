@@ -8,7 +8,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { Renderer3D } from '../src/renderer-3d.js';
+import { Renderer3D, TILE_SLOTS, hexToWorld, HEX_RADIUS_WORLD } from '../src/renderer-3d.js';
 
 function makeInst(entities) {
   const inst = Object.create(Renderer3D.prototype);
@@ -64,5 +64,33 @@ describe('_resyncTileSlotsForStandees — animating hex-mates', () => {
     const inst = makeInst([{ id: 'a', alive: true, col: 3, row: 3, slot: 0 }]);
     inst._resyncTileSlotsForStandees();
     assert.equal(inst._positioned.length, 0, 'no explicit repositioning needed');
+  });
+});
+
+// Slot continuity across the round boundary: a unit that ended a round in a
+// NON-centre slot (because it had a hex-mate when it arrived, or moved into an
+// outer slot) must keep that slot when it later becomes the SOLE occupant of
+// its hex on the next plan-mode draw. Regression: the lone-occupant early-exit
+// snapped it back to the hex centre (via _positionStandee's default path),
+// while the authoritative entity.slot stayed put — a visible jump from its slot
+// to the centre the instant planning began.
+describe('_resyncTileSlotsForStandees — lone occupant honors authoritative slot', () => {
+  test('lone idle standee in an outer slot is positioned at that slot, not the bare centre', () => {
+    const inst = makeInst([{ id: 'a', alive: true, col: 3, row: 3, slot: 3 }]);
+    inst._resyncTileSlotsForStandees();
+    const a = inst._positioned.find(p => p.id === 'a');
+    assert.ok(a, 'lone non-centre standee is explicitly repositioned (not left on the bare centre)');
+    const { x: cx, z: cz } = hexToWorld(3, 3, HEX_RADIUS_WORLD);
+    const expected = TILE_SLOTS[3];
+    assert.ok(a.opts && Math.abs(a.opts.x - (cx + expected.x)) < 1e-9,
+      `x at slot-3 offset (got ${a.opts?.x}, want ${cx + expected.x})`);
+    assert.ok(a.opts && Math.abs(a.opts.z - (cz + expected.z)) < 1e-9,
+      `z at slot-3 offset (got ${a.opts?.z}, want ${cz + expected.z})`);
+  });
+
+  test('lone idle standee in slot 0 still takes the cheap centre path (no needless reposition)', () => {
+    const inst = makeInst([{ id: 'a', alive: true, col: 3, row: 3, slot: 0 }]);
+    inst._resyncTileSlotsForStandees();
+    assert.equal(inst._positioned.length, 0, 'centre-slot lone standee needs no explicit reposition');
   });
 });
