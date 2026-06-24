@@ -365,14 +365,15 @@ export class UIController {
     this._el('zoom-me')?.addEventListener('click', () => {
       this._replayManualCamera(() => {
         if (this._selectedEntity && this._selectedEntity.alive) {
-          // Zoom to selected unit
+          // Zoom to selected unit — an explicit distance change (fit), so it
+          // recomputes the radius and establishes the user zoom.
           const pos = this._planMode ? (this._getProjectedPos(this._selectedEntity.id) ?? this._selectedEntity) : this._selectedEntity;
-          this.renderer.frameHexes([pos], { maxZoom: 3.5, paddingHexes: 1.5, duration: 400 });
+          this.renderer.frameHexes([pos], { maxZoom: 3.5, paddingHexes: 1.5, duration: 400, fit: true });
         } else {
-          // No selection — frame all player's units
+          // No selection — frame all player's units (explicit fit).
           const faction = this._planFaction ?? (!this.state.heroIsAI ? 'hero' : 'witch');
           const units   = this.state.entities.filter(e => e.alive && e.owner === faction);
-          if (units.length > 0) this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 400 });
+          if (units.length > 0) this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 400, fit: true });
         }
       });
       this.onRedraw();

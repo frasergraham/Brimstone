@@ -1257,7 +1257,9 @@ function _focusInitialView(humanFaction) {
     if (!main || !main.alive) return;
     // Tutorial teaches unit selection itself, so don't pre-select there.
     if (ui && !ui.tutorialMode) ui._selectEntity?.(main);
-    renderer.frameHexes([main], { maxZoom: 3.5, paddingHexes: 1.5, duration: 550, orientNorth: true });
+    // Initial level framing — a deliberate distance set (fit), so it computes
+    // the zoom-in radius even before the player has touched zoom.
+    renderer.frameHexes([main], { maxZoom: 3.5, paddingHexes: 1.5, duration: 550, orientNorth: true, fit: true });
     redraw();
   };
   // Apply now (renderer usually ready), then again once the lazily-initialised
