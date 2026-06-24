@@ -1547,7 +1547,12 @@ export function hexToWorld(col, row, radius = HEX_RADIUS_WORLD) {
  * ally's hex centre and the defender's hex centre.
  *
  * Rules:
- *   - defender re-centres on its hex.
+ *   - the defender STAYS in its current sub-hex slot (it does NOT re-centre).
+ *     `opts.defenderWorld` is the defender standee's live world position; when
+ *     omitted we fall back to the hex centre (legacy callers / tests). The
+ *     returned `defender` is that resolved position, so the caller's slide is a
+ *     no-op and the defender holds its slot for the readout. Ally edge spots
+ *     still anchor on the defender's hex CENTRE (gang-up framing unchanged).
  *   - each of the defender hex's 6 edges holds AT MOST ONE participant. The
  *     attacker (when given) reserves the edge nearest its hex first — its
  *     lunge freezes there — then the first `advantageCap` allies per side
@@ -1565,16 +1570,27 @@ export function hexToWorld(col, row, radius = HEX_RADIUS_WORLD) {
  *
  * @param {object} opts
  * @param {{id:any, col:number, row:number}} opts.defender
+ * @param {{x:number, z:number}} [opts.defenderWorld] live slot position of the
+ *        defender standee; the returned `defender` is this (or the hex centre
+ *        when absent) so the defender holds its slot — it never re-centres.
  * @param {{id:any, col:number, row:number}} [opts.attacker]
  * @param {Array<{id:any, col:number, row:number}>} [opts.attackAllies]
  * @param {Array<{id:any, col:number, row:number}>} [opts.defenseAllies]
  * @param {number} [opts.advantageCap=ADVANTAGE_CAP]
  */
 export function planCombatPositions({
-  defender, attacker = null, attackAllies = [], defenseAllies = [],
+  defender, defenderWorld = null, attacker = null,
+  attackAllies = [], defenseAllies = [],
   advantageCap = ADVANTAGE_CAP,
 } = {}) {
   const defCentre = hexToWorld(defender.col, defender.row);
+  // Where the defender actually stands (its slot), used as the returned target
+  // so the defender HOLDS its slot rather than snapping to the hex centre. The
+  // edge midpoints below still anchor on the hex CENTRE so gang-up allies frame
+  // the hex consistently regardless of which sub-slot the defender occupies.
+  const defPos = (defenderWorld && Number.isFinite(defenderWorld.x) && Number.isFinite(defenderWorld.z))
+    ? { x: defenderWorld.x, z: defenderWorld.z }
+    : defCentre;
   // The 6 edge midpoints of the defender's hex — midpoint between the defender
   // centre and each neighbour centre. fortNeighborOffset (not getNeighbors) so
   // map-border hexes keep all 6 edges.
@@ -1615,7 +1631,7 @@ export function planCombatPositions({
     return { id: ally.id, toX: edge.x, toZ: edge.z, moves: true };
   };
   return {
-    defender: defCentre,
+    defender: defPos,
     attackerAllies: attackAllies.map(project),
     defenderAllies: defenseAllies.map(project),
   };
@@ -11767,6 +11783,12 @@ export class Renderer3D {
     return null;
   }
 
+  /** Public accessor for an entity's current world anchor `{ x, z }` (the live
+   *  standee slot position, falling back to the hex centre). Used by the combat
+   *  arm to aim the attacker's lunge at the defender's actual sub-hex slot.
+   *  Render-only — never mutates state. */
+  entityWorldPos(id) { return this._entityWorldPos(id); }
+
   /** Average world anchor of a set of entity ids (skips ids with no resolvable
    *  position). Returns null when none resolve. Used to point a speaker at the
    *  centroid of the rest of a conversation group. */
@@ -12380,13 +12402,21 @@ export class Renderer3D {
    *  strike). The slide is ALSO the standalone fallback for cone-token units
    *  (no `paladinClone`) and for the window before punch.glb has lazily
    *  loaded — in both cases the pure slide plays with no clip and no crash. */
-  addLungeAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title, _fromSlot = 0, stopAtBoundary = false) {
+  addLungeAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title, _fromSlot = 0, stopAtBoundary = false, targetWorld = null) {
     if (!this._scene || !this._babylon) return;
     const standee = this._entityStandees.get(entityId);
     if (!standee) return;
     const BABYLON = this._babylon;
     const { x: fromX, z: fromZ } = hexToWorld(fromCol, fromRow);
-    const { x: toX,   z: toZ   } = hexToWorld(toCol,   toRow);
+    // The lunge aims at the defender's ACTUAL slot position when the caller
+    // resolves it (`targetWorld`) — the defender holds its sub-hex slot for the
+    // strike instead of snapping to the hex centre. Falls back to the hex centre
+    // for callers (bumps, legacy) that don't pass a slot-resolved point.
+    const hexCentre = hexToWorld(toCol, toRow);
+    const hasTargetWorld = !!targetWorld
+      && Number.isFinite(targetWorld.x) && Number.isFinite(targetWorld.z);
+    const toX = hasTargetWorld ? targetWorld.x : hexCentre.x;
+    const toZ = hasTargetWorld ? targetWorld.z : hexCentre.z;
 
     // Frame the combat: only when this is the first lunge of the step (the
     // active-lunge set is still empty), so simultaneous lunges don't re-issue
@@ -12540,7 +12570,9 @@ export class Renderer3D {
   /** G2 combat positioning — place every visible participant of a battle into
    *  a clean cluster around the defender's hex before the readout/strike
    *  resolves. Spec (operator):
-   *    • Defender slides to its hex centre (no-op if already centred).
+   *    • Defender HOLDS its current sub-hex slot — it does NOT re-centre. The
+   *      attacker's lunge (fired by the caller) targets that slot, so the two
+   *      meet where the defender actually stands.
    *    • The first ADVANTAGE_CAP=3 allies per side slide to the midpoint of
    *      the edge shared with the defender's hex (= midpoint between their
    *      hex centre and the defender's hex centre on a hex grid).
@@ -12562,7 +12594,11 @@ export class Renderer3D {
   applyCombatPositioning({ defender, attacker = null, attackAllies = [], defenseAllies = [] } = {}, opts = {}) {
     if (!this._scene || !this._babylon || !defender) return;
     const durMs = Number.isFinite(opts.durMs) ? opts.durMs : LUNGE_ANIM_MS;
-    const plan = planCombatPositions({ defender, attacker, attackAllies, defenseAllies });
+    // The defender holds its current slot: pass its live standee position as the
+    // plan target so the `_animateStandeeTo` below is a no-op (target ≈ current)
+    // — never a re-centre. Render-only; the slot lives in game state untouched.
+    const defenderWorld = this._entityWorldPos(defender.id);
+    const plan = planCombatPositions({ defender, defenderWorld, attacker, attackAllies, defenseAllies });
     this._animateStandeeTo(defender.id, plan.defender.x, plan.defender.z, durMs);
     for (const a of plan.attackerAllies) {
       if (a.moves) this._animateStandeeTo(a.id, a.toX, a.toZ, durMs);
@@ -12575,9 +12611,9 @@ export class Renderer3D {
     if (typeof this.faceEntityTowardEntity !== 'function') return;
     if (attacker?.id != null) {
       // Defender faces the attacker so the strike reads as eye-contact, not
-      // a stab in the back. `_animateStandeeTo` skips the slide+instant-yaw
-      // when the defender is already at its hex centre, so this tween is the
-      // ONLY source of facing for the common "defender already centred" path.
+      // a stab in the back. The defender no longer slides (it holds its slot,
+      // so `_animateStandeeTo` is a no-op), making this tween the ONLY source
+      // of the defender's facing.
       this.faceEntityTowardEntity(defender.id, attacker.id);
     }
     for (const a of plan.attackerAllies) {

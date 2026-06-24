@@ -1,6 +1,8 @@
-// G2 combat positioning — defender re-centres + allies slide to defender-hex
-// edges. Covers:
+// G2 combat positioning — defender HOLDS its sub-hex slot + allies slide to
+// defender-hex edges. Covers:
 //   - pure planCombatPositions geometry (edge midpoint, ADVANTAGE_CAP)
+//   - defender stays at its slot (defenderWorld) — never re-centres
+//   - attacker lunge aims at the defender's slot (targetWorld), not hex centre
 //   - Renderer3D.applyCombatPositioning lifecycle (anim tracked, lungeHome set)
 //   - cap+1 ally does NOT move
 //   - addAllyHalfLunge back-compat shim still slides toward target
@@ -11,6 +13,7 @@ import assert from 'node:assert/strict';
 import {
   Renderer3D,
   planCombatPositions,
+  computeLungeTarget,
   hexToWorld,
   LUNGE_ANIM_MS,
 } from '../src/renderer-3d.js';
@@ -19,7 +22,7 @@ import { ADVANTAGE_CAP } from '../src/entities.js';
 // ─── Pure geometry ──────────────────────────────────────────────────────────
 
 describe('G2 — planCombatPositions geometry', () => {
-  test('defender target is the defender hex centre', () => {
+  test('defender target falls back to the hex centre when no defenderWorld given', () => {
     const plan = planCombatPositions({
       defender: { id: 'd', col: 4, row: 2 },
     });
@@ -28,6 +31,49 @@ describe('G2 — planCombatPositions geometry', () => {
     assert.ok(Math.abs(plan.defender.z - c.z) < 1e-9);
     assert.deepEqual(plan.attackerAllies, []);
     assert.deepEqual(plan.defenderAllies, []);
+  });
+
+  test('defender target is its actual SLOT position (defenderWorld), NOT the hex centre', () => {
+    const centre = hexToWorld(4, 2);
+    // Off-centre slot: shifted +0.6 on x (TILE_SLOTS[6] — east edge).
+    const slotPos = { x: centre.x + 0.6, z: centre.z };
+    const plan = planCombatPositions({
+      defender: { id: 'd', col: 4, row: 2 },
+      defenderWorld: slotPos,
+    });
+    // The returned defender target is the slot, not the centre.
+    assert.ok(Math.abs(plan.defender.x - slotPos.x) < 1e-9, 'defender.x = slot.x');
+    assert.ok(Math.abs(plan.defender.z - slotPos.z) < 1e-9, 'defender.z = slot.z');
+    assert.ok(Math.abs(plan.defender.x - centre.x) > 1e-3,
+      'defender did NOT snap to the hex centre');
+  });
+
+  test('ally edges still anchor on the hex CENTRE even when the defender is off-centre', () => {
+    // Gang-up framing must be unaffected by which slot the defender occupies:
+    // ally edge midpoints are between ally hex centre and DEFENDER HEX CENTRE.
+    const centre = hexToWorld(5, 5);
+    const slotPos = { x: centre.x - 0.6, z: centre.z }; // defender on the west slot
+    const plan = planCombatPositions({
+      defender:     { id: 'd', col: 5, row: 5 },
+      defenderWorld: slotPos,
+      attackAllies: [{ id: 'a1', col: 4, row: 5 }],
+    });
+    const ally = hexToWorld(4, 5);
+    const out = plan.attackerAllies[0];
+    assert.equal(out.moves, true);
+    // Edge midpoint uses the hex CENTRE, not the defender's slot.
+    assert.ok(Math.abs(out.toX - (centre.x + ally.x) * 0.5) < 1e-9);
+    assert.ok(Math.abs(out.toZ - (centre.z + ally.z) * 0.5) < 1e-9);
+  });
+
+  test('a malformed defenderWorld (non-finite) falls back to the hex centre', () => {
+    const c = hexToWorld(3, 3);
+    const plan = planCombatPositions({
+      defender: { id: 'd', col: 3, row: 3 },
+      defenderWorld: { x: NaN, z: 1 },
+    });
+    assert.ok(Math.abs(plan.defender.x - c.x) < 1e-9);
+    assert.ok(Math.abs(plan.defender.z - c.z) < 1e-9);
   });
 
   test('ally target is the midpoint between ally hex centre and defender hex centre (= shared edge midpoint)', () => {
@@ -211,7 +257,7 @@ function makeInst({ ids = ['d', 'a1', 'a2', 'a3', 'a4'] } = {}) {
 }
 
 describe('G2 — Renderer3D.applyCombatPositioning lifecycle', () => {
-  test('defender re-centres + each in-cap ally tracked; cap+1 ally NOT tracked', () => {
+  test('defender HOLDS its slot (NOT re-centred) + each in-cap ally tracked; cap+1 ally NOT tracked', () => {
     if (!('document' in globalThis)) globalThis.document = {};
     const inst = makeInst();
     // Place each standee at its starting hex centre so anim deltas are real.
@@ -220,9 +266,12 @@ describe('G2 — Renderer3D.applyCombatPositioning lifecycle', () => {
       const p = inst._entityStandees.get(id).plane.position;
       p.x = x; p.z = z;
     };
-    // Defender will be re-centred from a slightly off-centre spot.
+    // Defender sits OFF-centre (a sub-hex slot). It must NOT be slid to centre —
+    // applyCombatPositioning resolves its live position and targets it (no-op).
     place('d', 5, 5);
-    inst._entityStandees.get('d').plane.position.x += 0.5; // off-centre nudge
+    inst._entityStandees.get('d').plane.position.x += 0.5; // off-centre slot
+    const defStartX = inst._entityStandees.get('d').plane.position.x;
+    const defStartZ = inst._entityStandees.get('d').plane.position.z;
     place('a1', 4, 5); place('a2', 6, 5); place('a3', 5, 4); place('a4', 5, 6);
 
     inst.applyCombatPositioning({
@@ -235,17 +284,21 @@ describe('G2 — Renderer3D.applyCombatPositioning lifecycle', () => {
       ],
     });
 
-    assert.ok(inst._activeLungeIds.has('d'),  'defender registered (off-centre nudge → moves)');
+    assert.ok(!inst._activeLungeIds.has('d'),
+      'defender NOT registered — it holds its slot, never slides to centre');
+    // Defender's position is untouched.
+    assert.equal(inst._entityStandees.get('d').plane.position.x, defStartX);
+    assert.equal(inst._entityStandees.get('d').plane.position.z, defStartZ);
     assert.ok(inst._activeLungeIds.has('a1'), 'a1 registered');
     assert.ok(inst._activeLungeIds.has('a2'), 'a2 registered');
     assert.ok(inst._activeLungeIds.has('a3'), 'a3 registered');
     assert.ok(!inst._activeLungeIds.has('a4'),
       'cap+1 ally NOT registered — stays in its starting hex');
-    // 4 anims tracked (defender + 3 allies; cap+1 skipped).
-    assert.equal(inst._tracked.length, 4);
+    // 3 anims tracked (3 allies only; defender holds its slot, cap+1 skipped).
+    assert.equal(inst._tracked.length, 3);
   });
 
-  test('defender already centred → no anim queued for defender', () => {
+  test('defender at its hex centre also holds — no anim queued for defender', () => {
     if (!('document' in globalThis)) globalThis.document = {};
     const inst = makeInst({ ids: ['d', 'a1'] });
     const place = (id, col, row) => {
@@ -260,7 +313,7 @@ describe('G2 — Renderer3D.applyCombatPositioning lifecycle', () => {
       attackAllies: [{ id: 'a1', col: 4, row: 5 }],
     });
     assert.ok(!inst._activeLungeIds.has('d'),
-      'defender at its hex centre is a no-op');
+      'defender holds its position — no slide');
     assert.ok(inst._activeLungeIds.has('a1'));
     assert.equal(inst._tracked.length, 1);
   });
@@ -490,5 +543,100 @@ describe('G2 — addAllyHalfLunge back-compat shim', () => {
     const inst = makeInst({ ids: [] });
     assert.doesNotThrow(() => inst.addAllyHalfLunge('absent', 0, 0, 5, 0));
     assert.equal(inst._tracked.length, 0);
+  });
+});
+
+// ─── Attacker lunge aims at the defender's SLOT (targetWorld) ────────────────
+// The attacker must lunge toward where the defender actually stands (its
+// sub-hex slot), not the hex centre. addLungeAnim accepts an explicit
+// targetWorld for this; without it, it falls back to the hex centre.
+
+describe('addLungeAnim — lunge target is the defender slot', () => {
+  const lungeEndKey = (inst, id) => {
+    const plane = inst._entityStandees.get(id).plane;
+    const cap = inst._capturedAnims.find(c => c.target === plane);
+    assert.ok(cap, 'an anim was queued onto the attacker standee');
+    const xAnim = cap.anims.find(a => a.prop === 'position.x');
+    const zAnim = cap.anims.find(a => a.prop === 'position.z');
+    return { x: xAnim.keys[1].value, z: zAnim.keys[1].value };
+  };
+
+  test('with targetWorld → lunge end matches computeLungeTarget toward the SLOT, not the hex centre', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst({ ids: ['atk'] });
+    // Attacker at hex (4,5); defender hex (5,5) — but the defender stands on its
+    // SOUTH slot, off the hex centre.
+    const atk = hexToWorld(4, 5);
+    inst._entityStandees.get('atk').plane.position.x = atk.x;
+    inst._entityStandees.get('atk').plane.position.z = atk.z;
+    const defCentre = hexToWorld(5, 5);
+    const slot = { x: defCentre.x, z: defCentre.z + 0.5196152422706631 }; // SW/SE slot z
+
+    inst.addLungeAnim('atk', 4, 5, 5, 5, 'paladin', 'hero', null, 0, false, slot);
+
+    const end = lungeEndKey(inst, 'atk');
+    const expected = computeLungeTarget(atk, slot);
+    assert.ok(Math.abs(end.x - expected.x) < 1e-6, 'lunge X aims at slot');
+    assert.ok(Math.abs(end.z - expected.z) < 1e-6, 'lunge Z aims at slot');
+    // And it is NOT the same as aiming at the hex centre.
+    const towardCentre = computeLungeTarget(atk, defCentre);
+    assert.ok(Math.abs(end.z - towardCentre.z) > 1e-3,
+      'lunge endpoint differs from the hex-centre aim');
+  });
+
+  test('without targetWorld → lunge end falls back to the hex centre (legacy)', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst({ ids: ['atk'] });
+    const atk = hexToWorld(4, 5);
+    inst._entityStandees.get('atk').plane.position.x = atk.x;
+    inst._entityStandees.get('atk').plane.position.z = atk.z;
+    const defCentre = hexToWorld(5, 5);
+
+    inst.addLungeAnim('atk', 4, 5, 5, 5, 'paladin', 'hero', null, 0, false);
+
+    const end = lungeEndKey(inst, 'atk');
+    const expected = computeLungeTarget(atk, defCentre);
+    assert.ok(Math.abs(end.x - expected.x) < 1e-6);
+    assert.ok(Math.abs(end.z - expected.z) < 1e-6);
+  });
+
+  test('a malformed targetWorld (non-finite) falls back to the hex centre', () => {
+    if (!('document' in globalThis)) globalThis.document = {};
+    const inst = makeInst({ ids: ['atk'] });
+    const atk = hexToWorld(4, 5);
+    inst._entityStandees.get('atk').plane.position.x = atk.x;
+    inst._entityStandees.get('atk').plane.position.z = atk.z;
+    const defCentre = hexToWorld(5, 5);
+
+    inst.addLungeAnim('atk', 4, 5, 5, 5, 'paladin', 'hero', null, 0, false, { x: NaN, z: 2 });
+
+    const end = lungeEndKey(inst, 'atk');
+    const expected = computeLungeTarget(atk, defCentre);
+    assert.ok(Math.abs(end.x - expected.x) < 1e-6);
+    assert.ok(Math.abs(end.z - expected.z) < 1e-6);
+  });
+});
+
+// ─── entityWorldPos accessor (slot source of truth) ─────────────────────────
+
+describe('Renderer3D.entityWorldPos', () => {
+  test('returns the live standee position (its slot)', () => {
+    const inst = makeInst({ ids: ['d'] });
+    const p = inst._entityStandees.get('d').plane.position;
+    p.x = 3.25; p.z = -1.5;
+    const out = inst.entityWorldPos('d');
+    assert.ok(out);
+    assert.equal(out.x, 3.25);
+    assert.equal(out.z, -1.5);
+  });
+
+  test('falls back to the hex centre from state when no standee exists', () => {
+    const inst = makeInst({ ids: [] });
+    inst.state = { entities: [{ id: 'x', col: 6, row: 4 }] };
+    const out = inst.entityWorldPos('x');
+    const c = hexToWorld(6, 4);
+    assert.ok(out);
+    assert.ok(Math.abs(out.x - c.x) < 1e-9);
+    assert.ok(Math.abs(out.z - c.z) < 1e-9);
   });
 });
