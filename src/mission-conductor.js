@@ -524,11 +524,12 @@ export class MissionConductor {
         el.classList.add('tutorial-spotlit');
         this._spotlitEl = el;
       }
-      // Re-anchor the arrow + pulse to the element EVERY frame so they track
-      // layout/scroll and never stick at 0,0 when the element isn't laid out yet
-      // (the mobile submit button reported at the top-left corner).
-      if ((target.arrow || pulse) && (this._arrowEl || this._pulseEl)) {
-        this._startElementAnchor(target.selector, target.arrow, pulse);
+      // Re-anchor only the ARROW to the element every frame (tracks layout/scroll
+      // and never sticks at 0,0). The pulsing circle is deliberately NOT drawn on
+      // UI elements — a circle centred on a small button (the mobile Submit button)
+      // covers it; the arrow + the gold `.tutorial-spotlit` glow highlight it cleanly.
+      if (target.arrow && this._arrowEl) {
+        this._startElementAnchor(target.selector, target.arrow, false);
       }
     }
   }
