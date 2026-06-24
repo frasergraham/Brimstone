@@ -47,6 +47,7 @@ import { installKeybindings } from './keybindings.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import * as audio from './audio.js';
 import { playback, resetPlayback, replayFullGame, playbackDelay, swapState, patchAlive, withPinnedPhase } from './playback.js';
+import { finalizeAndPersistRound } from './round-finalize.js';
 import { ReplayCache } from './replay-cache.js';
 import { makeShowLoadingAndReveal } from './loading-reveal.js';
 import { nodeController } from './game.js';
@@ -1355,19 +1356,76 @@ async function _runLocalResolution(skipSummary = false) {
     owner: nodeController(obj, preResEntities),
   }));
 
-  // Animate the turn. The Redo control sets playback.restart to replay the
-  // turn's animations from the start — reset to pre-resolution and re-run.
-  do {
-    playback.restart = false;
-    await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
-    if (playback.restart) {
+  // ── Finalize + PERSIST the round NOW, before the player watches ──────────
+  // The Sim is sealed the instant resolvePlans() returns (docs/09 invariant 1),
+  // so the round can be finalized and durably saved immediately — BEFORE the
+  // blocking replay watch below. This is the fix for "close/crash mid-replay
+  // loses the just-computed round": both offline saves used to be gated behind
+  // the watch, so the persisted save lagged a round behind whatever the player
+  // had already seen resolve. Online already saves server-side at resolve-time
+  // (server/lobby.js `_resolveRoom`), independent of any client replay.
+  //
+  // finalizeAndPersistRound runs the deterministic Sim + persist unit in order:
+  // battle-summary log → finalizeRound() (advances the day cycle + scoring +
+  // victory) → _roundHistory push → _saveSpGame → _saveCampaignMission. It
+  // returns the pre-advance score + the round's FOUGHT phase so the replay can
+  // be pinned to it (finalizeRound has since advanced state.phase).
+  const { prevScore, roundPhase } = finalizeAndPersistRound({
+    state,
+    compileSummary: () => compileTurnBattleSummary(steps, state.entities, ResEventType, PlanActionType),
+    renderLog:      () => ui?._renderLog(),
+    appendRoundHistory: () => {
+      // MUST run before _saveSpGame(), which serializes _roundHistory to
+      // localStorage. Appending first keeps the persisted history in lockstep
+      // with the live game, so a resumed save shows the replay exactly as a
+      // fresh round-end (and the "Last Turn" button appears). state.gameOver is
+      // already set (checkVictory ran in finalizeRound).
+      if (_autoplay) return;
+      _roundHistory.push({
+        roundNum:     _preResolveRoundNum,
+        preState:     _preResolveStateJson,
+        steps:        JSON.stringify(steps),
+        // Save post-resolution entities for the last round so the replay
+        // correctly snaps to the outcome (not back to pre-action positions).
+        finalEntities: state.gameOver ? finalEntities : undefined,
+      });
+    },
+    saveSp: _saveSpGame,  // early-returns on game over (cleanup path persists instead)
+    saveCampaign: () => {
+      // Skip conductor-driven missions like the tutorial; hint-mode conductors
+      // ride along normal missions, which save.
+      if (_activeCampaign && _activeMissionDef && !state.gameOver &&
+          (!_missionConductor || _missionConductor.isHints)) {
+        _saveCampaignMission();
+      }
+    },
+  });
+
+  // ── Now WATCH the replay (pure Show) ─────────────────────────────────────
+  // finalizeRound() advanced the day cycle, so the watch must be pinned to the
+  // round's FOUGHT phase (lighting + sight ranges) and play against the
+  // pre-resolution entity snapshot — EXACTLY as the re-watch path (_reReplay)
+  // below does, so the first watch matches the re-watch. Nothing here mutates
+  // authoritative state: replay is reproduction, never authorship (docs/09
+  // invariant 1). The Redo control sets playback.restart to replay the turn's
+  // animations from the start — reset to pre-resolution and re-run.
+  await withPinnedPhase(state, roundPhase, async () => {
+    do {
+      playback.restart = false;
       state.entities = preReplayEntities;
       for (const [k, t] of state.tiles) {
         if (t.explored && !preExploredSet.has(k)) t.explored = false;
       }
       redraw();
+      await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+    } while (playback.restart);
+    // Restore final explored state after animation completes.
+    for (const [k, v] of postExplored) {
+      const t = state.tiles.get(k);
+      if (t) t.explored = v;
     }
-  } while (playback.restart);
+  });
+  redraw();  // final frame back under the live (post-round) phase
 
   // Update AI debug panel with resolution outcomes so the user can see
   // which planned actions actually executed vs were skipped/failed
@@ -1375,39 +1433,15 @@ async function _runLocalResolution(skipSummary = false) {
     _updateAIDebugResolutionOutcome(steps);
   }
 
-  // Restore final explored state after animation completes.
-  for (const [k, v] of postExplored) {
-    const t = state.tiles.get(k);
-    if (t) t.explored = v;
-  }
-
   // Notify mission conductor that resolution animation has finished.
   if (_missionConductor) _missionConductor.onResolutionComplete();
 
-  // Add aggregate battle summary to the log before endRound inserts phase entries
-  const summaryLines = compileTurnBattleSummary(steps, state.entities, ResEventType, PlanActionType);
-  for (const line of summaryLines) state.log.push(line);
-  if (summaryLines.length && ui) ui._renderLog();
-
-  // Snapshot score BEFORE endRound so we can detect scoring changes
-  const prevScore = { hero: state.nodeScore.hero, witch: state.nodeScore.witch };
-  // The phase this round was FOUGHT in — finalizeRound() advances the day
-  // cycle, and any re-watch from the review must replay under the round's own
-  // phase (lighting + sight ranges) or it won't match the original watch.
-  const roundPhase = state.phase;
-
-  // Shared post-resolution finalization (node discovery → control-change log →
-  // explored-hex update → endRound). endRound() internally invokes
-  // state._waveProcessor (set during mission load) before checkVictory, so
-  // triggered wave spawns can pre-empt an otherwise-firing eliminate_all win.
-  state.finalizeRound();
-
   // Mission Log (docs/09): finalizeRound() ran pumpMissionLogic('postResolution'),
   // which may have advanced kill-count objectives (e.g. "kill 3 zombies"). Toast
-  // those + refresh the panel now, right at the end of this round's resolution,
-  // so the marker ticks 1/3 → 2/3 → 3/3 in step with the kills. The Sim state
-  // already mutated; this drains only the SHOW objectiveLog half (story beats +
-  // conversations stay queued for the next planning gate, unchanged).
+  // those + refresh the panel now, right after the watch, so the marker ticks
+  // 1/3 → 2/3 → 3/3. The Sim state already mutated inside finalizeRound; this
+  // drains only the SHOW objectiveLog half (story beats + conversations stay
+  // queued for the next planning gate, unchanged).
   _presentRoundObjectiveLogs();
 
   // Show encounter dialogs for survivors spawned at power nodes during endRound
@@ -1419,34 +1453,6 @@ async function _runLocalResolution(skipSummary = false) {
 
   if (ui) await ui._triggerPostRoundEffects();
   redraw();
-
-  // Accumulate round for full-game replay — MUST run before _saveSpGame(), which
-  // serializes _roundHistory to localStorage. If the just-resolved round were
-  // appended after the save, the persisted history would lag one round behind;
-  // on resume that stale history hides the "Last Turn" replay button (or replays
-  // the wrong turn). Pushing first keeps the persisted history in lockstep with
-  // the live game, so a resumed save shows the replay exactly as a fresh round-end.
-  if (!_autoplay) {
-    _roundHistory.push({
-      roundNum:     _preResolveRoundNum,
-      preState:     _preResolveStateJson,
-      steps:        JSON.stringify(steps),
-      // Save post-resolution entities for the last round so the replay
-      // correctly snaps to the outcome (not back to pre-action positions).
-      // Captured before endRound() so it reflects combat results only.
-      finalEntities: state.gameOver ? finalEntities : undefined,
-    });
-  }
-
-  // Persist single-player progress to localStorage
-  _saveSpGame();
-
-  // Persist campaign mid-mission progress (skip conductor-driven missions like
-  // the tutorial; hint-mode conductors ride along normal missions, which save)
-  if (_activeCampaign && _activeMissionDef && !state.gameOver &&
-      (!_missionConductor || _missionConductor.isHints)) {
-    _saveCampaignMission();
-  }
 
   // Snapshot the board for the menu save lists (end of every round). Fire-and-
   // forget — an offscreen render that never disturbs the live view.
