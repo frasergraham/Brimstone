@@ -25,6 +25,7 @@ import {
   campaignMissionSaveKey,
 } from '../src/campaign/campaign-ui.js';
 import { getCampaignById } from '../src/campaign/campaign-registry.js';
+import { SAVE_VERSION } from '../src/version.js';
 import { mmUrgencyScore } from '../src/main-menu-games.js';
 
 const hollowDef = getCampaignById('calebs_hollow_prologue');
@@ -39,11 +40,13 @@ function startCampaign(slot, completed = []) {
   return c;
 }
 
-// Helper: drop a fake mid-mission save for a mission in a slot.
+// Helper: drop a fake mid-mission save for a mission in a slot. Stamps the current
+// SAVE_VERSION so loadCampaignMissionSave's version gate treats it as compatible
+// (an unstamped/incompatible save is discarded → resume falls back to fresh).
 function writeMissionSave(missionId, slot) {
   localStorage.setItem(
     campaignMissionSaveKey(hollowDef.id, missionId, slot),
-    JSON.stringify({ updatedAt: Date.now() }));
+    JSON.stringify({ saveVersion: SAVE_VERSION, updatedAt: Date.now() }));
 }
 
 describe('campaignMissionNumber', () => {

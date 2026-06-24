@@ -3,11 +3,13 @@
 
 import { Renderer } from '../renderer.js';
 import { ICON, coloredResourceIcon } from '../icons.js';
-import { ENTITY_COLOR, EntityType, getEquippedWeaponIdOf } from '../entities.js';
+import { ENTITY_COLOR, EntityType, getEquippedWeaponIdOf, defaultDisplayName, isLeaderType } from '../entities.js';
 import { xpForLevel } from '../balance.js';
 import { ITEMS } from '../items.js';
 import { WEAPON_LABEL } from '../tiles.js';
 import { ABILITIES } from '../abilities.js';
+import { getFaction } from '../factions.js';
+import { VERSION, SAVE_VERSION } from '../version.js';
 
 // ── Campaign mid-mission save/resume ────────────────────────────────────────
 // Mid-mission saves are slot-aware so a mission-in-progress in one save slot
@@ -23,12 +25,50 @@ function legacyCampaignMissionSaveKey(campaignId, missionId) {
   return `brimstone_campaign_mission_${campaignId}_${missionId}`;
 }
 
+// Version compatibility for a mid-mission save. The payload is a serializeState()
+// GameState snapshot, so the same rule as in-progress online game saves applies
+// (mirrors server/saves.js isVersionCompatible — kept inline because that module
+// pulls in the server DB layer and can't be imported into the client):
+//   - Both SAVE_VERSION integers present → require exact equality (the state-sync
+//     schema is the source of truth for snapshot shape; a different int means the
+//     deserializer can't be trusted to hydrate the blob).
+//   - Otherwise (a legacy save written before saveVersion was stamped) → fall back
+//     to the semver major.minor of the snapshot's stamped `version`. An older save
+//     from the SAME build line stays loadable; a genuinely-different build is
+//     discarded. Conservative: only genuinely-incompatible saves are dropped.
+function _missionSaveCompatible(save) {
+  const savedSaveVersion = save?.saveVersion;
+  if (savedSaveVersion != null) {
+    return savedSaveVersion === SAVE_VERSION;
+  }
+  // Legacy save (no stamped saveVersion): compare the snapshot's semver line.
+  const savedVersion = save?.state?.version;
+  if (!savedVersion || !VERSION) return false;
+  const [sMaj, sMin] = String(savedVersion).split('.');
+  const [cMaj, cMin] = String(VERSION).split('.');
+  return sMaj === cMaj && sMin === cMin;
+}
+
+// Load a mid-mission save, version-gated. A genuinely-incompatible save (one the
+// current build's deserializer can't safely hydrate) is discarded — deleted from
+// localStorage and returned as null — so the mission falls back to a fresh start
+// instead of resuming into a desynced GameState. Unlike Campaign.load() there is
+// no migration path for these snapshots, so an incompatible one is dropped rather
+// than upgraded.
 export function loadCampaignMissionSave(campaignId, missionId, slotIndex = 1) {
   let raw = localStorage.getItem(campaignMissionSaveKey(campaignId, missionId, slotIndex));
   if (raw == null && slotIndex === 1) {
     raw = localStorage.getItem(legacyCampaignMissionSaveKey(campaignId, missionId));
   }
-  return raw ? JSON.parse(raw) : null;
+  if (!raw) return null;
+  let save;
+  try { save = JSON.parse(raw); } catch { save = null; }
+  if (!save) return null;
+  if (!_missionSaveCompatible(save)) {
+    deleteCampaignMissionSave(campaignId, missionId, slotIndex);
+    return null;
+  }
+  return save;
 }
 
 export function deleteCampaignMissionSave(campaignId, missionId, slotIndex = 1) {
@@ -631,6 +671,50 @@ export function buildDeployPartyPreview(heroStats, roster, deployIndices) {
     });
   }
   return out;
+}
+
+// The player faction id in campaign (single-player, hero-only). Resolved through
+// the Faction registry rather than a bare string literal so it tracks the
+// faction abstraction (docs/design/refactor.md), and so the player-unit filter
+// below reads "units owned by the player faction" not "=== a magic string".
+const _PLAYER_FACTION_ID = getFaction('hero').id;
+
+/**
+ * "Who is actually on the board" preview list built from a RESUMED mission's
+ * saved snapshot, rather than from the fresh deploy set. On a resume the live
+ * party comes from the serialized GameState (the player may have edited their
+ * squad or a survivor leveled since the save), so the briefing strip must reflect
+ * the saved units — not what resolveDeployIndices would freshly pick.
+ *
+ * Maps each surviving player-faction (non-NPC, hp > 0) entity in the snapshot
+ * into the same display shape as {@link buildDeployPartyPreview}. The leader
+ * (isLeaderType) is emitted first as the hero, followers after, in snapshot order.
+ * assetId follows the renderer convention: a survivor maps title → sprite id, any
+ * other type value IS its asset id directly. Pure: reads only its argument.
+ *
+ * @param {object} savedState  serializeState() snapshot (save.state) — { entities }.
+ * @returns {{name,title,assetId,hp,maxHp,level,isHero}[]}
+ */
+export function buildSavedPartyPreview(savedState) {
+  const entities = Array.isArray(savedState?.entities) ? savedState.entities : [];
+  const party = entities.filter(e =>
+    e && e.owner === _PLAYER_FACTION_ID && !e.isNpc && (e.hp ?? 0) > 0);
+  // Leader (the hero) first, then roster followers — both in snapshot order otherwise.
+  party.sort((a, b) => (isLeaderType(b.type) ? 1 : 0) - (isLeaderType(a.type) ? 1 : 0));
+  return party.map(e => {
+    const isHero = isLeaderType(e.type);
+    const assetId = e.type === EntityType.SURVIVOR
+      ? (Renderer.survivorAssetId(e.title) || 'survivor_innkeeper')
+      : e.type;   // non-survivor type values match asset ids directly
+    return {
+      name: e.name || defaultDisplayName(e.type),
+      title: e.title ?? null,
+      assetId,
+      hp: e.hp, maxHp: e.maxHp,
+      level: e.level ?? 1,
+      isHero,
+    };
+  });
 }
 
 // ── Debrief party + rewards (party-management card UX) ──────────────────────

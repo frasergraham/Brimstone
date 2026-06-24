@@ -13,6 +13,12 @@ import {
   campaignMissionSaveKey, loadCampaignMissionSave, deleteCampaignMissionSave,
 } from '../src/campaign/campaign-ui.js';
 import { getCampaignById } from '../src/campaign/campaign-registry.js';
+import { SAVE_VERSION } from '../src/version.js';
+
+// A version-compatible mid-mission save stub. loadCampaignMissionSave version-gates
+// the save, so these slot-routing tests stamp the current SAVE_VERSION (the gate
+// itself is exercised in tests/campaign-resume-correctness.test.js).
+const _midSave = (over) => JSON.stringify({ saveVersion: SAVE_VERSION, ...over });
 
 // ── localStorage mock for Node ───────────────────────────────────────────────
 const _store = {};
@@ -211,36 +217,36 @@ describe('mid-mission save slots', () => {
   });
 
   test('mid-mission saves are independent across slots', () => {
-    localStorage.setItem(campaignMissionSaveKey('camp', 'm1', 1), JSON.stringify({ slotIndex: 1, round: 5 }));
-    localStorage.setItem(campaignMissionSaveKey('camp', 'm1', 2), JSON.stringify({ slotIndex: 2, round: 9 }));
+    localStorage.setItem(campaignMissionSaveKey('camp', 'm1', 1), _midSave({ slotIndex: 1, round: 5 }));
+    localStorage.setItem(campaignMissionSaveKey('camp', 'm1', 2), _midSave({ slotIndex: 2, round: 9 }));
     assert.equal(loadCampaignMissionSave('camp', 'm1', 1).round, 5);
     assert.equal(loadCampaignMissionSave('camp', 'm1', 2).round, 9);
   });
 
   test('slot 1 reads through to a legacy unsuffixed mid-mission save', () => {
-    localStorage.setItem('brimstone_campaign_mission_camp_m1', JSON.stringify({ round: 3 }));
+    localStorage.setItem('brimstone_campaign_mission_camp_m1', _midSave({ round: 3 }));
     assert.equal(loadCampaignMissionSave('camp', 'm1', 1).round, 3);
     // Other slots do not see the legacy mid-mission save.
     assert.equal(loadCampaignMissionSave('camp', 'm1', 2), null);
   });
 
   test('slot-1 save takes precedence over the legacy key', () => {
-    localStorage.setItem('brimstone_campaign_mission_camp_m1', JSON.stringify({ round: 3 }));
-    localStorage.setItem(campaignMissionSaveKey('camp', 'm1', 1), JSON.stringify({ round: 8 }));
+    localStorage.setItem('brimstone_campaign_mission_camp_m1', _midSave({ round: 3 }));
+    localStorage.setItem(campaignMissionSaveKey('camp', 'm1', 1), _midSave({ round: 8 }));
     assert.equal(loadCampaignMissionSave('camp', 'm1', 1).round, 8);
   });
 
   test('delete on slot 1 clears both the slot key and the legacy key', () => {
-    localStorage.setItem('brimstone_campaign_mission_camp_m1', JSON.stringify({ round: 3 }));
-    localStorage.setItem(campaignMissionSaveKey('camp', 'm1', 1), JSON.stringify({ round: 8 }));
+    localStorage.setItem('brimstone_campaign_mission_camp_m1', _midSave({ round: 3 }));
+    localStorage.setItem(campaignMissionSaveKey('camp', 'm1', 1), _midSave({ round: 8 }));
     deleteCampaignMissionSave('camp', 'm1', 1);
     assert.equal(loadCampaignMissionSave('camp', 'm1', 1), null);
     assert.equal(localStorage.getItem('brimstone_campaign_mission_camp_m1'), null);
   });
 
   test('delete on slot 2 leaves the legacy key alone', () => {
-    localStorage.setItem('brimstone_campaign_mission_camp_m1', JSON.stringify({ round: 3 }));
-    localStorage.setItem(campaignMissionSaveKey('camp', 'm1', 2), JSON.stringify({ round: 9 }));
+    localStorage.setItem('brimstone_campaign_mission_camp_m1', _midSave({ round: 3 }));
+    localStorage.setItem(campaignMissionSaveKey('camp', 'm1', 2), _midSave({ round: 9 }));
     deleteCampaignMissionSave('camp', 'm1', 2);
     assert.equal(loadCampaignMissionSave('camp', 'm1', 2), null);
     assert.equal(localStorage.getItem('brimstone_campaign_mission_camp_m1') !== null, true);
