@@ -11,6 +11,36 @@
 
 import { hexDistance } from './hex.js';
 
+/**
+ * Resolve the world anchor a melee lunge should aim at — the defender's live
+ * standee slot, so the attacker meets the defender where it stands rather than
+ * snapping to the hex centre. Render-only; never mutates state.
+ *
+ * Returns null (→ the lunge falls back to the hex centre `toCol/toRow`) when
+ * there is no defender to aim at:
+ *   • `targetSnap` is null/undefined — a WHIFF has no defender. The resolver
+ *     emits an ACTION_SKIP with `battleSnaps: { actorSnap, ranged }` and a
+ *     `whiffTarget` hex but NO `targetSnap` for the `targetFled` (live target
+ *     moved out of reach) and empty-hex BATTLE_HEX cases (see
+ *     server/resolver.js). A dead attacker never reaches here at all — the
+ *     resolver skips a dead actor's queued action before any animation.
+ *   • the renderer exposes no `entityWorldPos` (e.g. the 2D editor renderer), or
+ *     the standee/entity for that id is gone.
+ *
+ * Reading `targetSnap.id` without this null guard threw
+ * `Cannot read properties of null (reading 'id')` on every whiff replay once
+ * the combat-defender-slot change started dereferencing it.
+ *
+ * @param {object|null} renderer - the active renderer (may lack entityWorldPos).
+ * @param {object|null} targetSnap - the defender snapshot, or null for a whiff.
+ * @returns {{x:number,z:number}|null}
+ */
+export function resolveLungeTargetWorld(renderer, targetSnap) {
+  if (!targetSnap || targetSnap.id == null) return null;
+  if (typeof renderer?.entityWorldPos !== 'function') return null;
+  return renderer.entityWorldPos(targetSnap.id) ?? null;
+}
+
 // Battles whose participant hexes are within this many hexes of one another are
 // considered part of the same on-screen skirmish and share a single camera
 // frame. ~4 hexes keeps a tight melee + its gang-up allies in one shot while

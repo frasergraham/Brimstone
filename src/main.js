@@ -33,7 +33,7 @@ import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType, groupPlanByEntity } from './planner.js';
 import { buildStepDigest, buildStoryBeatDigest, isEventVisible, compactUneventfulTurns } from './replay-timeline.js';
 import { hexDistance, getNeighbors, hexKey } from './hex.js';
-import { planCombatFrames } from './combat-presentation.js';
+import { planCombatFrames, resolveLungeTargetWorld } from './combat-presentation.js';
 import { MAX_FORTIFY_LEVEL, MAX_FORTIFY_HP, FORTIFY_HP_PER_LEVEL, FORT_IMPASSABLE_THRESHOLD, deriveBlockedSlots } from './tiles.js';
 import { sightRange, computeLineOfSight, hasLineOfSight, assignSlotOnTile } from './actions.js';
 import { ITEMS } from './items.js';
@@ -1682,10 +1682,13 @@ function _playAttackIntroAnim(actorSnap, targetSnap, fromCol, fromRow, toCol, to
     // position) rather than the hex centre, so the attacker meets the defender
     // where it stands instead of snapping it to the middle of the hex. The
     // defender holds its slot — render-only, no state mutation. Falls back to
-    // the hex centre when the renderer can't resolve the slot (e.g. 2D editor).
-    const targetWorld = typeof renderer.entityWorldPos === 'function'
-      ? renderer.entityWorldPos(targetSnap.id)
-      : null;
+    // the hex centre (targetWorld=null) when there's no defender to aim at:
+    //   • a WHIFF (ACTION_SKIP `targetFled` / empty-hex BATTLE_HEX) passes
+    //     targetSnap=null — the attacker swings at the planned hex, not a unit;
+    //   • the renderer can't resolve the slot (e.g. the 2D editor renderer).
+    // Without the targetSnap guard, reading `targetSnap.id` here threw
+    // `Cannot read properties of null (reading 'id')` on every whiff replay.
+    const targetWorld = resolveLungeTargetWorld(renderer, targetSnap);
     renderer.addLungeAnim(
       actorSnap.id,
       fromCol, fromRow,

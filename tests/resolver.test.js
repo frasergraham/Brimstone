@@ -271,6 +271,43 @@ describe('resolvePlans — BATTLE_UNIT skip on dead target', () => {
   });
 });
 
+describe('resolvePlans — whiff carries actorSnap but NO targetSnap', () => {
+  // Root-cause condition behind the replay crash (TypeError: reading 'id' in
+  // _playAttackIntroAnim / resolveLungeTargetWorld): when a unit's attack finds
+  // no enemy this turn, the resolver emits an ACTION_SKIP whiff whose
+  // battleSnaps has actorSnap but deliberately NO targetSnap, plus a whiffTarget
+  // hex. The animation layer drives a lunge at that hex with targetSnap=null;
+  // the combat-defender-slot change then read `targetSnap.id` and threw. This
+  // proves the null-targetSnap event shape is real, so the presentation guard
+  // (resolveLungeTargetWorld) is load-bearing, not hypothetical. A DEAD attacker
+  // never reaches here — runAction skips a dead actor before any battleSnaps.
+  test('BATTLE_HEX against an empty adjacent hex → ACTION_SKIP with actorSnap, no targetSnap', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const emptyHex = emptyPassableNeighbor(state, hero);
+    if (!emptyHex) return; // map gave the hero no empty neighbour — skip, no failure
+    // Make sure nothing enemy sits on the target hex.
+    state.entities = state.entities.filter(
+      e => !(e.col === emptyHex.col && e.row === emptyHex.row && e.owner !== hero.owner),
+    );
+
+    const steps = resolvePlans(state, [{
+      type: PlanActionType.BATTLE_HEX,
+      entityId: hero.id,
+      targetCol: emptyHex.col,
+      targetRow: emptyHex.row,
+    }], []);
+
+    const ev = steps.flatMap(s => s.heroEvents).find(e => e.type === ResEventType.ACTION_SKIP);
+    assert.ok(ev, 'empty-hex attack should produce an ACTION_SKIP whiff');
+    assert.ok(ev.whiffTarget, 'whiff must carry a target hex for the lunge');
+    assert.ok(ev.battleSnaps, 'whiff must carry battleSnaps (actor swings at the hex)');
+    assert.ok(ev.battleSnaps.actorSnap, 'whiff battleSnaps must include actorSnap');
+    assert.equal(ev.battleSnaps.targetSnap, undefined,
+      'whiff battleSnaps must NOT include a targetSnap — the null the renderer must tolerate');
+  });
+});
+
 describe('resolvePlans — ACTION_FAIL on wrong faction', () => {
   test('entity acting for wrong faction causes ACTION_FAIL', () => {
     const state = freshState();
