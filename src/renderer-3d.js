@@ -77,7 +77,7 @@ export {
   GROUND_LABEL_EDGE_INSET,
 };
 import { Renderer } from './renderer.js';
-import { ICON } from './icons.js';
+import { ICON, splitColoredFloaterSegments } from './icons.js';
 import { BLOCK_WORD_VARIANTS, pickBlockWord } from './combat-words.js';
 import {
   FACE_TURN_MS, FACING_EPSILON,
@@ -20885,8 +20885,30 @@ export function paintFloaterText(ctx, opts) {
   ctx.strokeStyle = '#000';
   ctx.strokeText(text, cx, cy);
 
-  ctx.fillStyle = fillColor;
-  ctx.fillText(text, cx, cy);
+  // Per-resource glyph tint: a loot floater like "+ Wood" carries a resource
+  // glyph that should read in its type color (wood brown, herbs green, …),
+  // matching the HTML UI where only the glyph is tinted and the label stays on
+  // the ambient color. Split into colored runs and paint each; the common case
+  // (no resource glyph → one ambient segment) collapses to a single fillText.
+  const segments = splitColoredFloaterSegments(text);
+  const tinted   = segments.some((s) => s.color);
+  if (!tinted) {
+    ctx.fillStyle = fillColor;
+    ctx.fillText(text, cx, cy);
+    return;
+  }
+  // Center the whole run, then draw segments left→right advancing by measured
+  // width. Left-align temporarily so per-segment x is the segment's left edge.
+  const total = ctx.measureText(text).width;
+  const prevAlign = ctx.textAlign;
+  ctx.textAlign = 'left';
+  let x = cx - total / 2;
+  for (const seg of segments) {
+    ctx.fillStyle = seg.color ?? fillColor;
+    ctx.fillText(seg.text, x, cy);
+    x += ctx.measureText(seg.text).width;
+  }
+  ctx.textAlign = prevAlign;
 }
 
 // ─── Speech-bubble paint (conversation dialog billboards) ────────────────────

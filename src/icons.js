@@ -321,3 +321,47 @@ export function tintResourceGlyphs(html) {
     return id ? `<span class="res-icon res-icon--${id}">${ch}</span>` : ch;
   });
 }
+
+/**
+ * Resource tint hex for a single character, or `null` if `ch` isn't a tintable
+ * resource glyph. The canvas analogue of `coloredResourceIcon` — instead of a
+ * `<span>` (no HTML on a 2D canvas) the caller reads the hex and sets
+ * `ctx.fillStyle` directly. Returns `null` for ambient text so callers can
+ * fall back to their default fill color.
+ */
+export function resourceColorForGlyph(ch) {
+  const id = RES_GLYPH_TO_ID[ch];
+  return id ? RESOURCE_ICON_COLOR[id] : null;
+}
+
+/**
+ * Split a floater string (e.g. `"+ Wood"`) into ordered segments, each
+ * `{ text, color }`. A run of resource glyphs gets that resource's hex tint;
+ * everything else gets `color: null` (ambient — caller paints it in its own
+ * default fill). Mirrors the HTML UI, where only the glyph is tinted and the
+ * label stays on the surrounding color. The concatenation of segment `text`
+ * always equals the input, so a caller that ignores `color` reproduces the
+ * original string verbatim. Adjacent glyphs of the SAME color are coalesced
+ * into one segment so the canvas paint loop draws fewer pieces.
+ *
+ * @param {string} text
+ * @returns {{text:string,color:(string|null)}[]}
+ */
+export function splitColoredFloaterSegments(text) {
+  if (typeof text !== 'string' || !text) return [];
+  const segments = [];
+  let buf = '';
+  let bufColor = null;
+  for (const ch of text) {
+    const color = resourceColorForGlyph(ch);
+    if (color !== bufColor) {
+      if (buf) segments.push({ text: buf, color: bufColor });
+      buf = ch;
+      bufColor = color;
+    } else {
+      buf += ch;
+    }
+  }
+  if (buf) segments.push({ text: buf, color: bufColor });
+  return segments;
+}

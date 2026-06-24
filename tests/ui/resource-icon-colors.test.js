@@ -12,6 +12,8 @@ import {
   coloredResourceIcon,
   coloredResourceLabel,
   tintResourceGlyphs,
+  resourceColorForGlyph,
+  splitColoredFloaterSegments,
 } from '../../src/icons.js';
 
 describe('RESOURCE_ICON_COLOR', () => {
@@ -100,5 +102,68 @@ describe('tintResourceGlyphs', () => {
 
   test('leaves a string with no resource glyphs untouched', () => {
     assert.equal(tintResourceGlyphs('Move'), 'Move');
+  });
+});
+
+// Canvas-side helpers: the in-game loot floaters are painted on a 2D canvas
+// (no HTML spans), so they read the tint hex directly per glyph.
+describe('resourceColorForGlyph', () => {
+  test('returns the resource hex for each resource glyph', () => {
+    assert.equal(resourceColorForGlyph(ICON.wood), RESOURCE_ICON_COLOR.wood);
+    assert.equal(resourceColorForGlyph(ICON.herb), RESOURCE_ICON_COLOR.herbs);
+    assert.equal(resourceColorForGlyph(ICON.silver), RESOURCE_ICON_COLOR.silver);
+  });
+
+  test('returns null for a non-resource glyph or plain char', () => {
+    assert.equal(resourceColorForGlyph(ICON.sword), null);
+    assert.equal(resourceColorForGlyph('+'), null);
+    assert.equal(resourceColorForGlyph(' '), null);
+    assert.equal(resourceColorForGlyph(''), null);
+  });
+});
+
+describe('splitColoredFloaterSegments', () => {
+  test('tints just the glyph in a "+ Label" floater, label stays ambient', () => {
+    const text = `+${ICON.wood} Wood`;
+    const segs = splitColoredFloaterSegments(text);
+    assert.deepEqual(segs, [
+      { text: '+', color: null },
+      { text: ICON.wood, color: RESOURCE_ICON_COLOR.wood },
+      { text: ' Wood', color: null },
+    ]);
+  });
+
+  test('a count + glyph floater tints only the glyph', () => {
+    const text = `+2 ${ICON.herb}`;
+    const segs = splitColoredFloaterSegments(text);
+    assert.deepEqual(segs, [
+      { text: '+2 ', color: null },
+      { text: ICON.herb, color: RESOURCE_ICON_COLOR.herbs },
+    ]);
+  });
+
+  test('concatenating segment text reproduces the input verbatim', () => {
+    const text = `+${ICON.metal} Metal`;
+    const joined = splitColoredFloaterSegments(text).map((s) => s.text).join('');
+    assert.equal(joined, text);
+  });
+
+  test('a non-resource floater is one ambient segment (no tint)', () => {
+    const text = `+${ICON.sword} Musket`;
+    const segs = splitColoredFloaterSegments(text);
+    assert.equal(segs.length, 1);
+    assert.equal(segs[0].color, null);
+    assert.equal(segs[0].text, text);
+  });
+
+  test('coalesces a run of same-color glyphs into one segment', () => {
+    const text = `${ICON.wood}${ICON.wood}`;
+    const segs = splitColoredFloaterSegments(text);
+    assert.deepEqual(segs, [{ text: `${ICON.wood}${ICON.wood}`, color: RESOURCE_ICON_COLOR.wood }]);
+  });
+
+  test('is safe on empty / non-string input', () => {
+    assert.deepEqual(splitColoredFloaterSegments(''), []);
+    assert.deepEqual(splitColoredFloaterSegments(undefined), []);
   });
 });
