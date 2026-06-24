@@ -10,6 +10,13 @@
 // stale history — empty after the first resolved round — so the "Last Turn"
 // button stayed hidden (or replayed the wrong turn).
 //
+// The finalize + persist sequence now lives in the `finalizeAndPersistRound`
+// helper (src/round-finalize.js), wired from _runLocalResolution: the round is
+// appended to _roundHistory and then saved BEFORE the replay watch, so a
+// mid-replay close/crash no longer loses the round. The push-before-save
+// ordering is preserved inside the helper's callbacks (asserted below + in
+// tests/save-round-before-replay.test.js).
+//
 // main.js is DOM-heavy and not unit-instantiable here, so these are
 // source-level guards (same approach as save-resume-replay-wrapup.test.js):
 // they read src/main.js and assert the ordering + resume wiring stay intact.
@@ -48,21 +55,38 @@ function functionBody(src, name) {
 // ── The ordering fix: push the round before persisting it ─────────────────────
 
 test('_runLocalResolution appends the resolved round to _roundHistory BEFORE _saveSpGame', () => {
-  // Match the actual call sites, not prose: the call statements are
-  // `_roundHistory.push({` and `_saveSpGame();`. Bare `_saveSpGame(` also
-  // appears in an explanatory comment, so anchor on the call's syntax.
+  // The finalize + persist sequence is driven through finalizeAndPersistRound:
+  // the round-history push lives in its `appendRoundHistory` callback and the
+  // single-player save is wired as `saveSp: _saveSpGame`. The helper guarantees
+  // appendRoundHistory runs before saveSp (covered in round-finalize's own
+  // test); here we assert the two call sites are wired in the right textual
+  // order so the round is pushed before _saveSpGame serializes it.
   const body = functionBody(MAIN, '_runLocalResolution');
 
   const pushIdx = body.indexOf('_roundHistory.push({');
-  const saveIdx = body.search(/_saveSpGame\(\s*\)\s*;/);
+  // The persist wiring: `saveSp: _saveSpGame` (a reference handed to the helper).
+  const saveIdx = body.search(/saveSp:\s*_saveSpGame/);
 
   assert.notEqual(pushIdx, -1, '_runLocalResolution must push the resolved round onto _roundHistory');
   assert.notEqual(saveIdx, -1, '_runLocalResolution must persist single-player progress via _saveSpGame()');
 
   assert.ok(pushIdx < saveIdx,
-    'the just-resolved round must be appended to _roundHistory BEFORE _saveSpGame() ' +
+    'the just-resolved round must be appended to _roundHistory BEFORE _saveSpGame ' +
     'serializes it — otherwise the persisted history lags a round and the resumed ' +
     'save shows no "Last Turn" replay button');
+});
+
+test('_runLocalResolution finalizes + persists the round BEFORE the replay watch', () => {
+  // The whole point of the change: the round is durably saved the instant it is
+  // computed, not after the player watches the (blocking) replay animation.
+  const body = functionBody(MAIN, '_runLocalResolution');
+  const finalizeIdx = body.indexOf('finalizeAndPersistRound');
+  const watchIdx    = body.indexOf('_animateResolutionSteps');
+  assert.notEqual(finalizeIdx, -1, '_runLocalResolution must call finalizeAndPersistRound');
+  assert.notEqual(watchIdx, -1, '_runLocalResolution must animate the resolution');
+  assert.ok(finalizeIdx < watchIdx,
+    'finalize + persist must precede the replay watch so a mid-replay close/crash ' +
+    'cannot lose the just-computed round');
 });
 
 // ── _saveSpGame persists _roundHistory under the per-save key ──────────────────
