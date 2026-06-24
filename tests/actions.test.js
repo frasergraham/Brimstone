@@ -828,17 +828,27 @@ describe('executeBattle', () => {
 
   test('a miss STILL chips the fort, scaled by closeness to hitting', () => {
     // New rule: every attack erodes the fort. A miss drains a closeness-scaled
-    // chip. Force a near-miss by giving the minion a modest defense edge.
+    // chip. Force a deterministic CLOSE miss with scripted dice — a modest
+    // defense edge alone leaves a ~2.8% chance the live roll actually HITS,
+    // which spuriously failed `!r.hit` in CI. resolveCombat consumes the
+    // attacker's pool die first, then the defender's (both 1-die pools here:
+    // net advantage 0 on each side). With atkFlat=4 / defFlat=8 (minion
+    // defenseBonus 8), dice (6, 3) give attackRoll 10 vs defenseRoll 11 — a
+    // miss by exactly 1 (gap 1, the second-closest miss; no counter since
+    // 11 < 2×10), exercising the closeness-scaled chip deterministically.
     const state = freshState();
     const minion = createMinion(state.hero.col, state.hero.row);
     state.entities.push(minion);
     const minionTile = state.tiles.get(hexKey(minion.col, minion.row));
     minionTile.fortifyLevel = 2; // 40 HP
     minion.defenseBonus = 8;     // small edge → a CLOSE miss, not a wild one
+    state.setForcedDice(6, 3);   // attacker die 6, defender die 3 → close miss
     const hpBefore = minionTile.fortifyHP;
     const r = executeBattle(state, state.hero, minion);
 
     assert.ok(!r.hit, 'should be a miss');
+    assert.equal(r.attackRoll, 10, 'forced attacker roll (die 6 + flat 4)');
+    assert.equal(r.defenseRoll, 11, 'forced defender roll (die 3 + flat 8)');
     const want = expectedMissChip(r.attackRoll, r.defenseRoll);
     assert.ok(want > 0, 'a close miss chips a positive amount');
     assert.equal(r.fortHpDamage, want, 'miss chip matches the closeness formula');

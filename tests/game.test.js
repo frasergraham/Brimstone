@@ -890,11 +890,23 @@ describe('startPlanning — power node bonus', () => {
 
   test('no bonus when no nodes held', () => {
     const state = new GameState(true, true);
-    // Move both leaders away from all nodes
-    state.hero.col = 0;
-    state.hero.row = 0;
-    state.witch.col = 1;
-    state.witch.row = 0;
+    // Move both leaders off ALL nodes. The map is procedural (unseeded), so a
+    // hardcoded hex like (1,0) occasionally lands inside a node's footprint
+    // (~1.5% of maps) and the leader picks up an unexpected +1 node bonus —
+    // a spurious CI failure. Instead, derive guaranteed off-node hexes from the
+    // actual generated map so the "no nodes held" intent holds on every seed.
+    const nodeHexes = new Set(
+      state.witchObjectives.flatMap(o => o.hexes.map(h => hexKey(h.col, h.row)))
+    );
+    const offNode = [...state.tiles.keys()]
+      .filter(k => !nodeHexes.has(k))
+      .map(k => k.split(',').map(Number));
+    const [heroCol, heroRow] = offNode[0];
+    const [witchCol, witchRow] = offNode[1];
+    state.hero.col = heroCol;
+    state.hero.row = heroRow;
+    state.witch.col = witchCol;
+    state.witch.row = witchRow;
 
     state.startPlanning();
 
