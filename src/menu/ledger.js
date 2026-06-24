@@ -469,7 +469,7 @@ function _deployChipHtml(u) {
   const portrait = getCampaignPortrait(u.assetId, 44);
   const icon = portrait
     ? `<img class="lg-deploy-portrait" src="${portrait}" alt="">`
-    : `<span class="lg-deploy-glyph">${u.isHero ? '' : ''}</span>`;
+    : `<span class="lg-deploy-glyph">${u.isHero ? ICON.hero : ICON.survivor}</span>`;
   return `<div class="lg-deploy-chip${u.isHero ? ' is-hero' : ''}">` +
     icon +
     `<span class="lg-deploy-name">${esc(u.name)}${levelPillHtml(u.level)}</span>` +

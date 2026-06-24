@@ -27,7 +27,7 @@ import {
   MultiplayerClient, MirrorState, loadSession, clearSession,
   checkEmailTokenInUrl, requestLinkEmail, requestEmailLogin,
 } from './multiplayer.js';
-import { VERSION, BUILD_VERSION } from './version.js';
+import { VERSION, BUILD_VERSION, SAVE_VERSION } from './version.js';
 import { buildPlayerStatusHtml } from './ui-render.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType, groupPlanByEntity } from './planner.js';
@@ -86,6 +86,7 @@ import {
   missionRows as _missionRows,
   departureMessage as _departureMessage, arrivalMessage as _arrivalMessage,
   buildDeployPartyPreview as _buildDeployPartyPreview,
+  buildSavedPartyPreview as _buildSavedPartyPreview,
 } from './campaign/campaign-ui.js';
 import { requestNotificationPermission, notifyRoundReady, notifyWaitingOnYou, notifyDeadlineApproaching, notifyGameOver } from './notifications.js';
 import { mmSortRows, mmFormatRow, mmDedupeCampaignRows } from './main-menu-games.js';
@@ -3914,6 +3915,10 @@ function _saveCampaignMission() {
     missionId:      _activeMissionDef.id,
     state:          serializeState(state),
     roundHistory:   _roundHistory,
+    // Version stamp — the state-sync schema version of the embedded snapshot.
+    // loadCampaignMissionSave() gates on this so a stale save from an incompatible
+    // build can't resume into a desynced GameState (matches server/saves.js).
+    saveVersion:    SAVE_VERSION,
     updatedAt:      Date.now(),
   };
   try { localStorage.setItem(key, JSON.stringify(data)); } catch {}
@@ -9738,11 +9743,15 @@ function _ledgerCampaignParty(slot) {
 }
 
 // Read-only "who deploys this mission" preview for the Begin Mission screen.
-// Loads the campaign on the chosen slot, seeds the working squad exactly as the
-// launch path does, then resolves the deploy set through the SAME
-// resolveDeployIndices() call _initCampaignMission uses — so the displayed party
-// CANNOT drift from what actually deploys ("what you see is what deploys"). The
-// mapping into a display shape is the pure buildDeployPartyPreview helper.
+// Loads the campaign on the chosen slot, then:
+//   - RESUME (a compatible mid-mission save exists): preview the SAVED snapshot's
+//     party — the units actually on the board (the player may have edited their
+//     squad or a survivor leveled since the save), so the fresh deploy set could
+//     mislead. buildSavedPartyPreview maps the snapshot's hero-faction entities.
+//   - NEW start (no save): seed the working squad exactly as the launch path does,
+//     then resolve the deploy set through the SAME resolveDeployIndices() call
+//     _initCampaignMission uses — so the displayed party CANNOT drift from what
+//     actually deploys ("what you see is what deploys").
 // Returns null when there's no campaign/mission (the strip is then skipped).
 function _ledgerBeginMissionParty(slot, missionId) {
   const camp = CAMPAIGNS.find(c => !c.disabled) || CAMPAIGNS[0];
@@ -9751,8 +9760,18 @@ function _ledgerBeginMissionParty(slot, missionId) {
   _activeCampaign.load();
   const missionDef = missionId && _activeCampaign.getMissionDef?.(missionId);
   if (!missionDef) return null;
-  // Seed the live working selection from the persisted squad (the Ledger path
-  // skips the Party screen), mirroring _ledgerStartCampaignMission.
+  // RESUME: a compatible mid-mission save means the briefing is "RESUMING SAVE"
+  // (loadCampaignMissionSave discards an incompatible one → falls back to fresh).
+  // Preview the actual saved party, not the freshly-resolved deploy set.
+  const save = loadCampaignMissionSave(camp.id, missionId, slot ?? _activeCampaign.slotIndex);
+  if (save?.state) {
+    const preview = _buildSavedPartyPreview(save.state);
+    if (preview.length > 0) return preview;
+    // A structurally odd snapshot (no hero-faction units) shouldn't blank the
+    // strip — fall through to the fresh deploy preview below.
+  }
+  // NEW start: seed the live working selection from the persisted squad (the
+  // Ledger path skips the Party screen), mirroring _ledgerStartCampaignMission.
   _seedActiveRosterForProgress();
   const maxFromRoster = _effectivePartyCap(
     missionDef.maxSurvivorsFromRoster, missionDef.id, 'maxSurvivorsFromRoster');
