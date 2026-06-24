@@ -81,27 +81,72 @@ export async function launchBrowser({ width = 1280, height = 800 } = {}) {
 }
 
 /**
- * Navigate menu → campaign → mission and begin it. Resolves once the mission
- * has had a moment to start (loading overlay may still be up — await
- * `waitForGameReady` before judging visuals).
+ * Drive the Ledger menu → Campaign → mission row → Begin Mission, launching a
+ * campaign mission. Resolves once the launch has fired (loading overlay may
+ * still be up — await `waitForGameReady` before judging visuals).
+ *
+ * The front-of-app is now the LEDGER (`src/menu/ledger.js`), a rail + in-place
+ * pane — the old `#btn-ng-campaign` / `.campaign-mission` setup-screen DOM is
+ * gone. This drives the live Ledger DOM: the rail item `[data-dest="campaign"]`,
+ * a mission row `.lg-mission[data-mission-id]` (data hooks added in ledger.js),
+ * then the briefing's `[data-testid="begin-mission"]` button.
+ *
+ * Identify the target mission by `missionId` (preferred — stable) OR by
+ * `missionTitle` (matches the row's `data-mission-title` / visible name). The
+ * default is the first real story mission ("Trouble at The Wanderer's Inn",
+ * id `prologue`); pass `missionId: 'tutorial'` for the guided tutorial.
+ *
+ * Set `useHook: true` to skip the menu clicks and launch straight through the
+ * `window.__startCampaignMission(missionId, slot, resume)` dev hook — more robust
+ * for non-visual setup, but it does NOT exercise the real menu. DOM-driving is
+ * the default precisely so the menu path stays covered.
+ *
+ * @param {import('playwright').Page} page
+ * @param {string} baseUrl
+ * @param {object} [opts]
+ * @param {string} [opts.missionId]    mission id to launch (e.g. 'prologue', 'tutorial')
+ * @param {string} [opts.missionTitle] mission title to match when no id is given
+ * @param {number} [opts.slot=1]       campaign playthrough slot
+ * @param {boolean}[opts.resume=false] resume a mid-mission save instead of a fresh start
+ * @param {boolean}[opts.useHook=false] bypass the menu via window.__startCampaignMission
  */
 export async function startCampaignMission(page, baseUrl, {
-  campaignId = 'calebs_hollow_prologue',
-  missionTitle = 'Awakening',
+  missionId = 'prologue',
+  missionTitle = '',
+  slot = 1,
+  resume = false,
+  useHook = false,
 } = {}) {
   await page.goto(baseUrl);
-  await page.waitForTimeout(1200);
-  // Mode buttons live directly on the main menu (the New Game submenu was flattened).
-  await page.click('#btn-ng-campaign');
-  await page.waitForTimeout(800);
-  const select = await page.$('#setup-step-campaign-select');
-  if (select && await select.isVisible()) {
-    await page.click(`.campaign-select-item[data-campaign="${campaignId}"]`);
-    await page.waitForTimeout(800);
+  // Wait for the Ledger to mount + expose its dev hook (it's set right after
+  // initLedger resolves the lazy import).
+  await page.waitForFunction(() => typeof window.__startCampaignMission === 'function', { timeout: 15000 });
+
+  if (useHook) {
+    await page.evaluate(({ id, s, r }) => window.__startCampaignMission(id, s, r),
+      { id: missionId, s: slot, r: resume });
+    return;
   }
-  await page.locator('.campaign-mission.available', { hasText: missionTitle }).first().click();
-  await page.waitForTimeout(500);
-  await page.click('#btn-start-mission');
+
+  // Open the Campaign destination in the rail.
+  await page.click('#ledger-rail-items .ledger-rail-item[data-dest="campaign"]');
+  // The campaign panel renders its mission chronicle asynchronously (slots +
+  // missions). Wait for at least one mission row to appear.
+  await page.waitForSelector('.lg-mission', { timeout: 10000 });
+
+  // Pick the target mission row — by id (preferred) or by title text. The row is
+  // only clickable when playable (current/available); fall back to any matching
+  // row if the playable one isn't found (e.g. already-completed in a save).
+  const row = missionId
+    ? page.locator(`.lg-mission[data-mission-id="${missionId}"]`).first()
+    : page.locator(`.lg-mission[data-mission-title="${missionTitle}"], .lg-mission:has-text("${missionTitle}")`).first();
+  await row.waitFor({ state: 'visible', timeout: 10000 });
+  await row.click();
+
+  // The mission row opens the briefing screen. Click its Begin/Resume button.
+  const begin = page.locator('[data-testid="begin-mission"]');
+  await begin.waitFor({ state: 'visible', timeout: 10000 });
+  await begin.click();
 }
 
 /** Start a quick local vs-AI skirmish from the menu (hero side, defaults). */
