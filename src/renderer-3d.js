@@ -1150,6 +1150,30 @@ export const SELECTION_FOCUS_RADIUS = 14;
  *  prior framing on the next selection/draw — no manual restore needed. */
 export const COMBAT_FOCUS_RADIUS = 12;
 
+/** Pure helper: decide the radius an AUTO-focus (selection, turn/active-unit,
+ *  combat lean-in) should ease to.
+ *
+ *  Operator rule: once the player has DELIBERATELY set a zoom distance (wheel,
+ *  pinch, the ⛶ fit button, or the zoom-to-me button), auto-refocus must
+ *  PAN/retarget ONLY — never change the distance. So when `userZoomEstablished`
+ *  is true we return the current radius unchanged.
+ *
+ *  Before the player has touched zoom (`userZoomEstablished` false — a fresh
+ *  game still sitting at the initial map-fit), we keep the legacy "zoom in to a
+ *  sensible default" behaviour: ease IN to `fallbackRadius` but never OUT past
+ *  the current radius, and never closer than the camera's `lowerLimit`. This
+ *  preserves the first-focus framing without re-zooming an established view.
+ *
+ *  @param {number} currentRadius        camera.radius right now
+ *  @param {boolean} userZoomEstablished has the user set distance themselves?
+ *  @param {number} fallbackRadius       default zoom-in target (e.g. SELECTION_FOCUS_RADIUS)
+ *  @param {number} lowerLimit           camera.lowerRadiusLimit (closest allowed)
+ *  @returns {number} the radius the focus ease should target */
+export function resolveFocusRadius(currentRadius, userZoomEstablished, fallbackRadius, lowerLimit = 4) {
+  if (userZoomEstablished) return currentRadius;
+  return Math.min(currentRadius, Math.max(lowerLimit, fallbackRadius));
+}
+
 /** Breathing room (world units) added around an entity-framing bounding box so
  *  standees aren't flush against the viewport edge when `frameEntities` fits a
  *  cluster. ~1 hex of slack on every side. The actual zoom-in is still floored
@@ -2221,6 +2245,12 @@ export class Renderer3D {
     this.unitInfoCards      = new Map();
     this.viewLocked         = false;
     this.zoomLevel          = 1.0;
+    /** True once the player has DELIBERATELY set a camera distance — mouse
+     *  wheel, pinch, the ⛶ fit button, or the zoom-to-me button. While false
+     *  (fresh game still at the initial map-fit) auto-focus may zoom in to a
+     *  sensible default; once true, auto-refocus PANS ONLY and preserves
+     *  whatever distance the player chose. See `resolveFocusRadius`. */
+    this._userZoomEstablished = false;
     this.hexSize            = 30;
     this.useTileImages      = true;
     this._zoomAnim          = null;
@@ -5791,6 +5821,16 @@ export class Renderer3D {
    *  `frameHexes([singleHex])` is supported: `computeMapBounds` falls back to
    *  the single hex's footprint, and `radiusForFit` floors at the camera's
    *  `lowerRadiusLimit` so we never end up with a zero or sub-tile radius.
+   *
+   *  DISTANCE (operator rule): most callers use this to AUTO-focus on a unit /
+   *  cluster (turn focus, plan jump-to-unit, discovery, end-of-round). Once the
+   *  player has set their own zoom, those must PAN ONLY — so by default we
+   *  retarget WITHOUT recomputing the fit radius (the camera keeps its current
+   *  distance). A deliberate FIT (`opts.fit: true` — the whole-map reset, the
+   *  mission intro, the zoom-to-me button) recomputes the radius to frame the
+   *  given hexes AND establishes the user zoom so the next auto-focus preserves
+   *  it. Before the player has touched zoom, an auto-focus also recomputes the
+   *  fit radius so the first framing of a fresh game lands sensibly.
    */
   frameHexes(positions, opts = {}) {
     if (!this._camera || !positions || positions.length === 0) return;
@@ -5803,7 +5843,14 @@ export class Renderer3D {
 
     const BABYLON = this._babylon;
     const newTarget = new BABYLON.Vector3(bounds.centerX, 0, bounds.centerZ);
-    const newRadius = this._radiusForFit(fitWidth, fitDepth);
+    // A deliberate fit (or the very first framing before any user zoom)
+    // recomputes the radius; an auto-focus on an established view keeps the
+    // player's current distance and just retargets.
+    const recompute = opts.fit === true || !this._userZoomEstablished;
+    const newRadius = recompute ? this._radiusForFit(fitWidth, fitDepth) : this._camera.radius;
+    // A deliberate fit is an explicit distance change — establish the user zoom
+    // so subsequent auto-refocus preserves it (pan-only).
+    if (opts.fit === true) this._userZoomEstablished = true;
     // orientNorth: also rotate to map-north-up (alpha = _lockedAlpha) as part of
     // the same move — used for the initial level/mission view so it lands
     // isometric and north-up regardless of any prior camera azimuth.
@@ -5911,6 +5958,8 @@ export class Renderer3D {
     const upper = camera.upperRadiusLimit ?? 80;
     const radius = zoomToRadius(newZoom, lower, upper);
     this.zoomLevel = radiusToZoom(radius);
+    // Explicit zoom — from here on, auto-refocus preserves the player's distance.
+    this._userZoomEstablished = true;
     this._focusCamera(camera.target.clone(), radius, { forceAnimate: true });
   }
 
@@ -5966,7 +6015,14 @@ export class Renderer3D {
     if (!camera || this.viewLocked || !(factor > 0)) return;
     const lower = camera.lowerRadiusLimit ?? CAMERA_MIN_ZOOM_RADIUS;
     const upper = camera.upperRadiusLimit ?? CAMERA_MAX_ZOOM_RADIUS;
-    camera.radius = Math.max(lower, Math.min(upper, camera.radius / factor));
+    const before = camera.radius;
+    camera.radius = Math.max(lower, Math.min(upper, before / factor));
+    // Deliberate zoom (Shift+↑/↓ keyboard zoom) — like wheel/pinch, mark the
+    // user's distance as established so the next auto-refocus pans only and
+    // preserves it. Guard on a real radius change so a clamped no-op at a limit
+    // (mirrors the pinch handler's `if (radiusDelta !== 0)` precedent) doesn't
+    // flip the flag.
+    if (camera.radius !== before) this._userZoomEstablished = true;
   }
 
   /** Set the 3D drag-mode toggle: 'pan' or 'rotate'. UI calls this when the
@@ -6038,7 +6094,8 @@ export class Renderer3D {
     if (!this.state?.tiles) return;
     const all = [];
     for (const tile of this.state.tiles.values()) all.push({ col: tile.col, row: tile.row });
-    this.frameHexes(all, { paddingHexes: 1 });
+    // Whole-map refit — a deliberate distance set, not an auto unit-focus.
+    this.frameHexes(all, { paddingHexes: 1, fit: true });
   }
 
   /** Zoom-to-fit (⛶) single-tap action in 3D. Eases the camera all the way out
@@ -6056,6 +6113,9 @@ export class Renderer3D {
     const camera  = this._camera;
     if (!BABYLON || !camera) return Promise.resolve(false);
     const { target, radius } = this._fitToOwnedUnitsTarget();
+    // The ⛶ fit button is an EXPLICIT distance change — establish the user
+    // zoom so subsequent auto-refocus preserves this fit radius (pan-only).
+    this._userZoomEstablished = true;
     // Keep current alpha (no `alpha` opt) — don't change yaw.
     return this._focusCamera(target, radius, { forceAnimate: true }).then(() => true);
   }
@@ -6510,6 +6570,13 @@ export class Renderer3D {
     // cap that fits THEIR footprint, not the standard 13×13.
     this._buildMap();
     this._recomputeMaxZoomCap();
+    // NOTE: `_frameFullMap` always frames with `fit: true`, so this init framing
+    // sets `_userZoomEstablished = true`. In live play the flag is therefore
+    // already true before the first auto-focus — `frameHexes`'s "fresh game,
+    // flag false → zoom-in fallback" branch is effectively pre-empted here. The
+    // intended initial zoom-in is handled explicitly by `_focusInitialView(…,
+    // fit: true)` in `src/main.js`, not by that fallback (which mainly matters
+    // for headless/test paths that never run this init).
     this._frameFullMap({ instant: true });
     // Initial standee population so the first frame already has units.
     this._syncEntityStandees();
@@ -6771,6 +6838,8 @@ export class Renderer3D {
         // we accumulate -radiusDelta into the inertial offset.
         const radiusDelta = pinchDeltaToRadiusDelta(dDist, PINCH_RADIUS_PER_PX);
         camera.inertialRadiusOffset -= radiusDelta;
+        // Explicit zoom — auto-refocus now preserves the player's distance.
+        if (radiusDelta !== 0) this._userZoomEstablished = true;
       } else if (gestureMode === 'rotate' && (lastPinchAngle !== 0 || lastPinchDist > 0)) {
         const dAngle = twistDelta(lastPinchAngle, newAngle);
         // Twist sign convention: twisting fingers one way should rotate the
@@ -6946,6 +7015,8 @@ export class Renderer3D {
       );
       cam.radius = newRadius;
       this.zoomLevel = radiusToZoom(newRadius);
+      // Explicit zoom — auto-refocus now preserves the player's distance.
+      this._userZoomEstablished = true;
     };
 
     const optsCap = { capture: true, passive: false };
@@ -10747,7 +10818,8 @@ export class Renderer3D {
     if (!this.state?.tiles || this.state.tiles.size === 0) return;
     const all = [];
     for (const tile of this.state.tiles.values()) all.push({ col: tile.col, row: tile.row });
-    this.frameHexes(all, { paddingHexes: 1, instant: opts.instant === true });
+    // Whole-map fit — a deliberate distance set, not an auto unit-focus.
+    this.frameHexes(all, { paddingHexes: 1, instant: opts.instant === true, fit: true });
   }
 
   /** Recompute the camera's zoom limits from the current aspect/FOV.
@@ -11659,11 +11731,17 @@ export class Renderer3D {
         // skip the no-op-shift early-out that `_focusCamera` applies for
         // generic shifts, otherwise tiny target deltas (or the camera already
         // sitting on the unit because of an earlier pan) leave the player
-        // wondering whether the click registered. Also zoom in toward the
-        // unit when the camera is currently parked far away.
-        const targetRadius = Math.min(
+        // wondering whether the click registered.
+        //
+        // Distance: PAN-only once the player has set their own zoom — selecting
+        // another unit must not yank the distance back. Before that (fresh game
+        // at the map-fit) we still zoom IN toward the unit so the first
+        // selection frames it sensibly. See `resolveFocusRadius`.
+        const targetRadius = resolveFocusRadius(
           this._camera.radius,
-          Math.max(this._camera.lowerRadiusLimit ?? 4, SELECTION_FOCUS_RADIUS),
+          this._userZoomEstablished,
+          SELECTION_FOCUS_RADIUS,
+          this._camera.lowerRadiusLimit ?? 4,
         );
         this._focusCamera(newTarget, targetRadius, { forceAnimate: true });
       }
@@ -12318,9 +12396,11 @@ export class Renderer3D {
 
     if (shouldFrame && this._camera) {
       const midTarget = new BABYLON.Vector3((startX + edgeX) * 0.5, 0, (startZ + edgeZ) * 0.5);
-      const combatRadius = Math.min(
+      const combatRadius = resolveFocusRadius(
         this._camera.radius,
-        Math.max(this._camera.lowerRadiusLimit ?? 4, COMBAT_FOCUS_RADIUS),
+        this._userZoomEstablished,
+        COMBAT_FOCUS_RADIUS,
+        this._camera.lowerRadiusLimit ?? 4,
       );
       this._focusCamera(midTarget, combatRadius);
     }
@@ -12446,9 +12526,11 @@ export class Renderer3D {
 
     if (shouldFrameCombat && this._camera) {
       const midTarget = new BABYLON.Vector3((fromX + toX) * 0.5, 0, (fromZ + toZ) * 0.5);
-      const combatRadius = Math.min(
+      const combatRadius = resolveFocusRadius(
         this._camera.radius,
-        Math.max(this._camera.lowerRadiusLimit ?? 4, COMBAT_FOCUS_RADIUS),
+        this._userZoomEstablished,
+        COMBAT_FOCUS_RADIUS,
+        this._camera.lowerRadiusLimit ?? 4,
       );
       this._focusCamera(midTarget, combatRadius);
     }
