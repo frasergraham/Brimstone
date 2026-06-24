@@ -102,6 +102,7 @@ import {
   worldToHex, neighborDeltas, DEFAULT_TERRAIN_TINTS,
 } from './terrain-splat.js';
 import { makeTerrainSplatPlugin, SPLAT_UNIFORM_DEFAULTS } from './terrain-splat-plugin.js';
+import { makeWaterRipplePlugin } from './water-ripple-plugin.js';
 import { attachRoadEdgeToMaterial } from './road-edge-plugin.js';
 
 // Babylon core + glTF loaders are served from the packaged `assets/vendor/`
@@ -3404,6 +3405,22 @@ export class Renderer3D {
     }
   }
 
+  /** River rocks are cloned GLB models with per-tile materials (see
+   *  `_buildRiverRocks`), so they fog-darken through the exact same per-mesh
+   *  material tint buildings use — keyed on each rock's `fogHexKey` river tile. */
+  _applyRiverRockFogDarken() {
+    const rocks = this._riverRockMeshes;
+    if (!rocks || rocks.length === 0) return;
+    for (let i = rocks.length - 1; i >= 0; i--) {
+      const mesh = rocks[i];
+      if (!mesh || (typeof mesh.isDisposed === 'function' && mesh.isDisposed())) {
+        rocks.splice(i, 1);
+        continue;
+      }
+      this._applyBuildingFogDarkenTo(mesh);
+    }
+  }
+
   /** Tint a single building mesh's material(s) to the fogged "occluded" floor
    *  when its render hex is in `_fogActiveSet`, or back to full brightness when
    *  it isn't. Idempotent — base colours are stashed on each material the first
@@ -5960,6 +5977,9 @@ export class Renderer3D {
     if (this._splatPlugin) {
       this._splatPlugin.uFogDarken = v;
     }
+    if (this._waterRipplePlugin) {
+      this._waterRipplePlugin.uFogDarken = v;
+    }
     // Terrain fog materials: diffuseColor = (v, v, v) regardless of original.
     for (const [, mat] of this._terrainFogMaterialCache) {
       if (mat?.diffuseColor) {
@@ -6463,6 +6483,9 @@ export class Renderer3D {
     // `_upgradeForestToRealTrees` retrofits every forest cluster with real
     // GLB-tree instances. Errors are caught inside `_loadTreePackManifest`.
     this._loadTreePackManifest(this._assetsBasePath || 'assets');
+    // Small rocks scattered along the river banks — loads async, scatters once
+    // the templates resolve (the river + its rim polylines are built below).
+    this._loadRiverRocks(this._assetsBasePath || 'assets');
 
     // Build the map from current state and frame it (instant — no animation
     // on the very first frame, otherwise the camera "slides in" from the
@@ -7711,7 +7734,9 @@ export class Renderer3D {
         const key = hexKey(cur.col, cur.row);
         if (this._borderRiverKeys.has(key)) continue; // dedup overlapping exits
         this._borderRiverKeys.add(key);
-        this._borderRiverList.push({ col: cur.col, row: cur.row, rot });
+        // srcKey/step let the channel-arc continue from the playable endpoint
+        // this chain sprang from, so ripples stay continuous across the seam.
+        this._borderRiverList.push({ col: cur.col, row: cur.row, rot, srcKey: hexKey(tile.col, tile.row), step });
       }
     }
   }
@@ -7736,6 +7761,9 @@ export class Renderer3D {
     // water UVs stream the same world way (templates are rotated to fit, which
     // otherwise leaves some tiles flowing backwards).
     const flowRef = canonicalRiverFlowDir(null, riverExitPoints(tiles));
+    // Canonical flow direction (world XZ) drives the ripple scroll so the water
+    // appears to drift downstream.
+    this._riverFlowDir = flowRef ? [flowRef.x, flowRef.z] : [1, 0];
     // Neighbour direction → water-edge index (0..5). Matches the geometry
     // module's numbering: edge e faces outward at 60·(e+1)°, the same angles as
     // a pointy-top world hex's six neighbours.
@@ -7766,10 +7794,12 @@ export class Renderer3D {
     };
     this._riverChannelMeshes = [];
     this._riverChannelFog = [];
+    this._riverRimByKey = new Map(); // tile key → world-space bank-edge polylines (for rocks)
     const ctx = { grassMat, bedMat, flowRef, templateFor, channelAt };
 
     // Playable river/bridge tiles — classify the two water-edges into a shape +
-    // rotation, then emit the cut-channel mesh.
+    // rotation.
+    const classified = [];
     for (const tile of tiles.values()) {
       if (!isWater(tile)) continue;
       const edges = getNeighbors(tile.col, tile.row)
@@ -7782,19 +7812,76 @@ export class Renderer3D {
       } else if (edges.length === 1) {
         shape = 'straight'; rot = edges[0]; // endpoint: run straight to the opposite edge
       } // 0 neighbours (lone pool) → canonical straight stub
-      this._emitRiverChannelTile(parent, tile.col, tile.row, shape, rot, ctx, false);
+      classified.push({ tile, shape, rot });
+    }
+    // Cumulative arc DOWN the river (from the upstream endpoint) so the water UV
+    // is continuous tile-to-tile — the ripples flow ALONG the channel AND have
+    // no per-tile seam. Then emit each tile with its arc offset.
+    const arcByKey = this._computeRiverArcOffsets(classified, templateFor, flowRef);
+    for (const { tile, shape, rot } of classified) {
+      const off = arcByKey.get(hexKey(tile.col, tile.row)) || 0;
+      this._emitRiverChannelTile(parent, tile.col, tile.row, shape, rot, ctx, false, off);
     }
 
-    // Border-forest river continuation — the off-grid hexes the river runs
-    // through in the border band (computed in `_computeBorderRiverPositions`,
-    // which the border splat already skipped). Same cut-channel mesh, permanently
-    // fogged: the river flows unbroken across the map↔border seam (real geometry).
-    for (const { col, row, rot } of (this._borderRiverList || [])) {
-      this._emitRiverChannelTile(parent, col, row, 'straight', rot, ctx, true);
+    // Border-forest river continuation (permanently fogged) — continue the arc
+    // from the playable endpoint each chain sprang from so the ripples stay
+    // continuous across the map↔border seam too.
+    // Border tiles fade out toward the wilderness with the SAME ring alpha as
+    // the border ground, and use its alpha-blend material so grass/bank/floor
+    // can actually dissolve (the playable splat is opaque). The water plugin
+    // fades via aEdgeAlpha. So the river dissolves into the border forest.
+    const ext = tilesExtent(this.state.tiles);
+    const bandDepth = this._splatBorderBandDepth ? this._splatBorderBandDepth() : 0;
+    const borderMat = this._splatBorderGround?.material || null;
+    const straightLen = templateFor('straight').flowLen || 0;
+    for (const { col, row, rot, srcKey, step } of (this._borderRiverList || [])) {
+      const base = (srcKey != null ? arcByKey.get(srcKey) : 0) || 0;
+      const ea = borderForestAlphaForTile(col, row, ext, bandDepth);
+      this._emitRiverChannelTile(parent, col, row, 'straight', rot, ctx, true,
+        base + (step + 1) * straightLen, ea, borderMat);
     }
 
     // Paint the initial fog state onto the freshly-built channel grass.
     if (this._fogActiveSet) this._writeRiverChannelFog(this._fogActiveSet);
+  }
+
+  /** Cumulative channel-arc per river tile, walked DOWNSTREAM from the upstream
+   *  endpoint (smallest projection onto the canonical flow). Each tile's offset =
+   *  the summed channel lengths of the tiles upstream of it, so adding it to the
+   *  tile's flow-oriented local arc gives a U that is CONTINUOUS across tile
+   *  boundaries (no ripple seam) while still running along the current. Linear
+   *  rivers are exact; branches accumulate from their junction. */
+  _computeRiverArcOffsets(classified, templateFor, flowRef) {
+    const tiles = this.state.tiles;
+    const isWater = (t) => t && (isRiver(t) || isBridge(t));
+    const wn = (t) => getNeighbors(t.col, t.row).filter((n) => isWater(tiles.get(hexKey(n.col, n.row))));
+    const shapeByKey = new Map();
+    for (const c of classified) shapeByKey.set(hexKey(c.tile.col, c.tile.row), c.shape);
+    const all = classified.map((c) => c.tile);
+    const endpoints = all.filter((t) => wn(t).length === 1);
+    let start = all[0];
+    if (flowRef && endpoints.length) {
+      const proj = (t) => { const w = hexToWorld(t.col, t.row); return w.x * flowRef.x + w.z * flowRef.z; };
+      start = endpoints.reduce((a, b) => (proj(a) <= proj(b) ? a : b));
+    } else if (endpoints.length) {
+      start = endpoints[0];
+    }
+    const arc = new Map();
+    const visited = new Set();
+    const stack = start ? [[start, 0]] : [];
+    while (stack.length) {
+      const [t, off] = stack.pop();
+      const key = hexKey(t.col, t.row);
+      if (visited.has(key)) continue;
+      visited.add(key);
+      arc.set(key, off);
+      const len = templateFor(shapeByKey.get(key) || 'straight').flowLen || 0;
+      for (const n of wn(t)) {
+        const nk = hexKey(n.col, n.row);
+        if (!visited.has(nk)) stack.push([tiles.get(nk), off + len]);
+      }
+    }
+    return arc;
   }
 
   /** Emit ONE river-tile cut-channel mesh (grass/bank/river) + its alpha fringe,
@@ -7802,12 +7889,25 @@ export class Renderer3D {
    *  border-band tile that is always fogged (no real `state.tiles` entry — it
    *  uses a synthetic grass tile for the splat weights). Shared by the playable
    *  and border passes in `_buildRiverChannelMeshes`. */
-  _emitRiverChannelTile(parent, col, row, shape, rot, ctx, permanent) {
+  _emitRiverChannelTile(parent, col, row, shape, rot, ctx, permanent, arcOffset = 0, edgeAlpha = 1, grassMatOverride = null) {
     const BABYLON = this._babylon, scene = this._scene;
     const { grassMat, bedMat, flowRef, templateFor, channelAt } = ctx;
     const g = templateFor(shape);
     const phi = rot * Math.PI / 3, cs = Math.cos(phi), sn = Math.sin(phi);
     const { x: cx, z: cz } = hexToWorld(col, row);
+    // Record the bank-edge polylines in WORLD space so the rock-scatter pass can
+    // line small rocks along the waterline (see `_buildRiverRocks`).
+    if (g.rim && this._riverRimByKey) {
+      // [x, z, nx, nz] → world point + world outward normal (normal rotates only).
+      const toWorld = (e) => [
+        e[0] * cs - e[1] * sn + cx, e[0] * sn + e[1] * cs + cz,
+        e[2] * cs - e[3] * sn,      e[2] * sn + e[3] * cs,
+      ];
+      this._riverRimByKey.set(hexKey(col, row), {
+        left: g.rim.left.map(toWorld), right: g.rim.right.map(toWorld), permanent: !!permanent,
+        bedY: (typeof g.bedY === 'number' ? g.bedY : -0.18),
+      });
+    }
     const V = g.positions.length / 3;
     const pos = new Float32Array(g.positions.length);
     // Splat/tint from the real tile if present; off-grid border tiles use a
@@ -7817,7 +7917,7 @@ export class Renderer3D {
     const tintW  = hexTintWeights(col, row);
     const aSplat = new Float32Array(V * 3);
     const aTint  = new Float32Array(V * 3);
-    const aEdge  = new Float32Array(V).fill(1);
+    const aEdge  = new Float32Array(V).fill(edgeAlpha); // < 1 fades the tile out at the border edge
     const aFog   = new Float32Array(V); // rewritten by _writeRiverChannelFog (permanent ⇒ 1)
     const bary   = new Array(V);
     const BED = g.bedY || -0.18;
@@ -7835,27 +7935,37 @@ export class Renderer3D {
       // down the wall exactly like grass meets dirt anywhere else on the map, so
       // it lights, fogs, and shadows identically. `df` = how far down the wall.
       const df = Math.max(0, Math.min(1, BED ? (y / BED) : 0));
+      // Submerged dirt (below the waterline) is much darker/muddier, so the
+      // translucent water reads as deep water rather than washing out over a
+      // bright lit bed.
+      const uw = df > 0.45 ? Math.max(0.28, 1 - (df - 0.45) * 1.5) : 1;
       for (let c = 0; c < 3; c++) {
         const grassVal = b.wO * splatW[c] + b.wA * splatW[ka + c] + b.wB * splatW[kb + c];
         const dirtVal  = (c === SPLAT_DIRT) ? 1 : 0;
         aSplat[vi * 3 + c] = grassVal * (1 - df) + dirtVal * df;
-        aTint[vi * 3 + c]  = b.wO * tintW[c] + b.wA * tintW[ka + c] + b.wB * tintW[kb + c];
+        aTint[vi * 3 + c]  = (b.wO * tintW[c] + b.wA * tintW[ka + c] + b.wB * tintW[kb + c]) * uw;
       }
     }
-    const indices = [...g.grass, ...g.bank, ...g.river];
+    const surface = g.surface || [];
+    const indices = [...g.grass, ...g.bank, ...g.river, ...surface];
     const normals = [];
     BABYLON.VertexData.ComputeNormals(pos, indices, normals);
     const vd = new BABYLON.VertexData();
     vd.positions = pos; vd.indices = indices; vd.normals = normals;
-    // Flip U so this tile's water flows the same world direction as the river.
-    let uvs = g.uvs;
+    // Flip U so this tile's water flows the same world direction as the river,
+    // then add the cumulative arc offset so U is CONTINUOUS across tile borders
+    // (V — the cross-channel opacity coordinate — is untouched). The ripple
+    // plugin reads U as down-stream arc, so the chop both flows and is seamless.
+    let flip = false;
     if (flowRef && g.flowDir) {
       const wfx = g.flowDir[0] * cs - g.flowDir[1] * sn;
       const wfz = g.flowDir[0] * sn + g.flowDir[1] * cs;
-      if (wfx * flowRef.x + wfz * flowRef.z < 0) {
-        uvs = new Float32Array(g.uvs.length);
-        for (let i = 0; i < g.uvs.length; i += 2) { uvs[i] = g.flowLen - g.uvs[i]; uvs[i + 1] = g.uvs[i + 1]; }
-      }
+      flip = (wfx * flowRef.x + wfz * flowRef.z) < 0;
+    }
+    const uvs = new Float32Array(g.uvs.length);
+    for (let i = 0; i < g.uvs.length; i += 2) {
+      uvs[i] = arcOffset + (flip ? (g.flowLen - g.uvs[i]) : g.uvs[i]);
+      uvs[i + 1] = g.uvs[i + 1];
     }
     vd.uvs = uvs;
     const mesh = new BABYLON.Mesh(`river_tile_${col}_${row}`, scene);
@@ -7864,18 +7974,24 @@ export class Renderer3D {
     mesh.setVerticesData('aTint',  aTint,  false, 3);
     mesh.setVerticesData('aEdgeAlpha', aEdge, false, 1);
     mesh.setVerticesData('aFog',   aFog,   true, 1);
-    // Two submeshes: [grass + bank] share the SPLAT material (the bank is just
-    // dirt-weighted splat); the bed gets the flowing-water material.
-    const splatCount = g.grass.length + g.bank.length;
+    // Channel-arc UV for the ripple plugin (its own attribute, not the core
+    // `uv` which the opacity texture owns) — U = continuous down-stream arc.
+    mesh.setVerticesData('aRipUV', uvs, false, 2);
+    // Two submeshes: the SPLAT material covers grass + bank + the DIRT BED FLOOR
+    // (the bank/floor are just dirt-weighted splat); the translucent water
+    // surface raised above the floor gets the flowing-water material.
+    const splatCount = g.grass.length + g.bank.length + g.river.length;
     mesh.subMeshes = [];
     new BABYLON.SubMesh(0, 0, V, 0,          splatCount,     mesh);
-    new BABYLON.SubMesh(1, 0, V, splatCount, g.river.length, mesh);
-    // Per-tile water material clone (shares the base texture) so the bed darkens
-    // independently under fog; grass+bank fog via aFog in the splat shader.
-    const bedClone = bedMat.clone(`river_bed_${col}_${row}`);
-    if (bedMat.diffuseTexture) bedClone.diffuseTexture = bedMat.diffuseTexture;
+    new BABYLON.SubMesh(1, 0, V, splatCount, surface.length, mesh);
+    // SHARED water material — the ripple plugin samples by world position +
+    // folds in fog via the mesh's per-vertex aFog, so every tile can use the one
+    // material (no per-tile clone, no seam, fog in lockstep with the banks).
     const multi = new BABYLON.MultiMaterial(`river_tile_mat_${col}_${row}`, scene);
-    multi.subMaterials = [grassMat, bedClone];
+    // Border tiles use the ALPHA-BLEND border splat material so their grass/bank
+    // can fade out (aEdgeAlpha) like the surrounding border ground; playable
+    // tiles use the opaque shared splat material.
+    multi.subMaterials = [grassMatOverride || grassMat, bedMat];
     mesh.material = multi;
     mesh.parent = parent;
     mesh.isPickable = false;
@@ -7883,12 +7999,9 @@ export class Renderer3D {
     this._setShadowReceiver?.(mesh);
     this._riverChannelMeshes.push(mesh);
 
-    this._riverChannelFog.push({
-      mesh, col, row, bary, fogBuf: aFog, permanent: !!permanent,
-      bedMat: bedClone,
-      bedDiff: bedClone.diffuseColor ? bedClone.diffuseColor.clone() : null,
-      bedEmis: bedClone.emissiveColor ? bedClone.emissiveColor.clone() : null,
-    });
+    // Fog: just the per-vertex aFog rewrite (grass+bank via splat, water via the
+    // ripple plugin) — no material darkening needed now.
+    this._riverChannelFog.push({ mesh, col, row, bary, fogBuf: aFog, permanent: !!permanent });
   }
 
   /** Neighbour hex at a given WORLD angle (degrees), allowing negative coords
@@ -7955,39 +8068,295 @@ export class Renderer3D {
         const { k, wO, wA, wB } = ch.bary[vi];
         buf[vi] = wO * w[0] + wA * w[k + 1] + wB * w[((k + 1) % 6) + 1];
       }
+      // Grass + bank + dirt floor fog via aFog (splat shader); the water surface
+      // verts also carry aFog and the ripple plugin darkens them by it. One
+      // rewrite covers everything — no per-material tinting.
       if (typeof ch.mesh.updateVerticesData === 'function') ch.mesh.updateVerticesData('aFog', buf);
-      // Grass + bank fog via aFog (splat shader). The bed is a plain
-      // StandardMaterial (no aFog) — tint its per-tile clone toward the fog
-      // floor. The bright full-colour swirl texture reads much lighter than the
-      // dark terrain albedo, so at the terrain's `_fogTileDarken` a fogged river
-      // still stands out as bright water; darken it HARDER (squared) so it sinks
-      // into the fog like its banks. (f = 1 clear → `_fogTileDarken`² fogged.)
-      const floor = (this._fogTileDarken ?? 1) ** 2;
-      const f = 1 - w[0] * (1 - floor);
-      const bm = ch.bedMat;
-      if (bm && ch.bedDiff && bm.diffuseColor) {
-        bm.diffuseColor.r = ch.bedDiff.r * f; bm.diffuseColor.g = ch.bedDiff.g * f; bm.diffuseColor.b = ch.bedDiff.b * f;
-      }
-      if (bm && ch.bedEmis && bm.emissiveColor) {
-        bm.emissiveColor.r = ch.bedEmis.r * f; bm.emissiveColor.g = ch.bedEmis.g * f; bm.emissiveColor.b = ch.bedEmis.b * f;
-      }
     }
   }
 
-  /** Opaque water-bed material — the flowing river texture without the old
-   *  transparent ribbon's alpha feather (the channel is solid geometry now, so
-   *  the bed is a normal depth-writing opaque surface). Scrolls with the flow. */
+  /** Water-bed material. A flat translucent tint over the dirt bed; the surface
+   *  life comes from the WaterRipplePlugin — two world-sampled ripple-normal
+   *  layers (different scale + scroll speed) that override `normalW`, so the
+   *  StandardMaterial's specular/fresnel ripple. World sampling makes the ripple
+   *  field continuous across tiles (no per-tile UV seam); the plugin also folds
+   *  in the fog veil, so no per-tile material clones are needed. */
   _buildRiverBedMaterial() {
     if (this._riverBedMat) return this._riverBedMat;
+    const BABYLON = this._babylon;
     const mat = this._buildRibbonMaterial('river', TILE_COLOR[TileType.RIVER]);
     mat.useAlphaFromDiffuseTexture = false;
-    if (mat.diffuseTexture) {
-      mat.diffuseTexture.hasAlpha = false;
-      this._riverFlowTextures.push(mat.diffuseTexture); // advance with the in-flow scroll
+    // Drop the painted swirl — a busy opaque colour texture both tiles tight AND
+    // hides the bed. Clear water = a flat translucent tint; the ripple detail is
+    // the plugin's world-sampled normals, and the muddy bed shows through.
+    mat.diffuseTexture = null;
+    mat.diffuseColor = new BABYLON.Color3(0.04, 0.12, 0.17); // dark deep water
+    // Two-layer world-sampled ripple normals (continuous across tiles, no seam).
+    const PluginClass = makeWaterRipplePlugin(BABYLON);
+    if (PluginClass && BABYLON?.Texture) {
+      const nrm = new BABYLON.Texture('assets/water-normal.png', this._scene);
+      const wrap = BABYLON.Texture.WRAP_ADDRESSMODE ?? 1;
+      nrm.wrapU = wrap; nrm.wrapV = wrap;
+      const plugin = new PluginClass(mat);
+      plugin.rippleNrm = nrm;
+      // Initialise the fog darken to the CURRENT phase value — otherwise it
+      // stays at the 1.0 default (no darken) until the next phase change, so the
+      // water never darkens in fog.
+      plugin.uFogDarken = this._fogTileDarken ?? 1.0;
+      plugin.isEnabled = true;
+      this._waterRipplePlugin = plugin;
     }
-    if (this._babylon?.Material) mat.transparencyMode = this._babylon.Material.MATERIAL_OPAQUE;
+    // Sun glints off the rippled normals — bright but fairly tight so they read
+    // as moving ripples on the dark water rather than a broad wash.
+    mat.specularColor = new BABYLON.Color3(0.62, 0.66, 0.72);
+    mat.specularPower = 72;
+    // Fake sky reflection: a SUBTLE cool tint only at steep grazing angles
+    // (high power), nothing head-on — otherwise it washes the water pale.
+    if (BABYLON?.FresnelParameters) {
+      const fp = new BABYLON.FresnelParameters();
+      fp.isEnabled = true;
+      fp.power = 4.0;
+      fp.leftColor  = new BABYLON.Color3(0.26, 0.38, 0.50); // grazing → faint sky tint
+      fp.rightColor = new BABYLON.Color3(0.0, 0.0, 0.0);     // head-on → none
+      mat.emissiveColor = new BABYLON.Color3(1, 1, 1);
+      mat.emissiveFresnelParameters = fp;
+    }
+    // Soft waterline — an opacity gradient (V-band) ramps the alpha to 0 at the
+    // banks, so the water dissolves into the shore instead of a hard edge.
+    if (BABYLON?.Texture) {
+      const edge = new BABYLON.Texture('assets/water-edge.png', this._scene);
+      edge.getAlphaFromRGB = true;
+      const clamp = BABYLON.Texture.CLAMP_ADDRESSMODE ?? 0;
+      edge.wrapU = clamp; edge.wrapV = clamp;
+      mat.opacityTexture = edge;
+    }
+    // Tier 2 — translucent so the muddy dirt bed shows through the surface
+    // (depth). The surface is raised above an opaque dirt floor, so it blends
+    // over solid geometry (no see-through-to-void).
+    mat.alpha = 0.46;
+    if (BABYLON?.Material) mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
     this._riverBedMat = mat;
     return mat;
+  }
+
+  /** Lazy-load a handful of SMALL rock GLBs (the `rock` group of the tree pack)
+   *  as hidden templates, then scatter them along the river banks. Fire-and-
+   *  forget from init; `_buildRiverRocks` runs once the templates resolve (the
+   *  river meshes + rim polylines already exist from `_buildMap`). */
+  async _loadRiverRocks(basePath = 'assets') {
+    if (this._rockLoadPromise) return this._rockLoadPromise;
+    const BABYLON = this._babylon;
+    if (!BABYLON || !this._scene) return null;
+    this._rockLoadPromise = (async () => {
+      await this._ensureBabylonLoaders();
+      if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') return null;
+      this._rockTemplates = [];    // small low-poly pebbles
+      this._bigRockTemplates = []; // chunkier higher-poly boulders (feature rocks)
+      const dir = `${basePath}/${TREE_PACK_DIR}rock/`;
+      const loadInto = async (pool, files) => {
+        for (const f of files) {
+          try {
+            const res = await BABYLON.SceneLoader.ImportMeshAsync(null, dir, f, this._scene);
+            const meshes = (res?.meshes || []).filter((m) => m && typeof m.getTotalVertices === 'function' && m.getTotalVertices() > 0);
+            if (meshes.length === 0) continue;
+            let src = meshes[0];
+            if (meshes.length > 1 && typeof BABYLON.Mesh?.MergeMeshes === 'function') {
+              const merged = BABYLON.Mesh.MergeMeshes(meshes, true, true, undefined, false, true);
+              if (merged) src = merged;
+            }
+            _bakeOriginToBottom(src, BABYLON);
+            if (typeof src.refreshBoundingInfo === 'function') src.refreshBoundingInfo();
+            let size = 1, height = 1; // XZ FOOTPRINT (drives width) + Y extent (drives height) — kept
+            try {                     // separate so width and height scale independently per-tier
+              const bb = src.getBoundingInfo().boundingBox;
+              size   = Math.max(1e-3, bb.maximum.x - bb.minimum.x, bb.maximum.z - bb.minimum.z);
+              height = Math.max(1e-3, bb.maximum.y - bb.minimum.y);
+            } catch { /* keep 1 */ }
+            src.setEnabled(false);
+            src.isPickable = false;
+            if (src.renderingGroupId !== undefined) src.renderingGroupId = WORLD_GROUP;
+            this._setShadowReceiver?.(src);
+            pool.push({ mesh: src, size, height });
+          } catch (err) { /* skip one bad GLB */ }
+        }
+      };
+      await loadInto(this._rockTemplates, ['rock-002.glb', 'rock-003.glb', 'rock-006.glb',
+        'rock-008.glb', 'rock-013.glb', 'rock-014.glb', 'rock-022.glb', 'rock-037.glb']);
+      // NOTE: the "high-poly" rocks (039/042/044/045) are degenerate — stray
+      // geometry / 48×0.71 flat slabs — so normalising by their bbox shrank the
+      // actual rock to a pebble. The small pool has TIGHT bboxes (renders at true
+      // size), so big boulders are just those scaled up (correct 1m+ size).
+      this._bigRockTemplates = this._rockTemplates;
+      // The GLB rock materials carry no diffuse colour (they render white), so
+      // give every template one shared grey-brown stone material.
+      if (typeof BABYLON.StandardMaterial === 'function') {
+        const sm = new BABYLON.StandardMaterial('river_rock_mat', this._scene);
+        sm.diffuseColor = new BABYLON.Color3(0.22, 0.21, 0.19); // muted wet-stone grey-brown
+        sm.specularColor = new BABYLON.Color3(0.05, 0.05, 0.05);
+        this._rockMat = sm;
+        for (const t of this._rockTemplates) t.mesh.material = sm;
+      }
+      this._buildRiverRocks();
+      return this._rockTemplates;
+    })();
+    return this._rockLoadPromise;
+  }
+
+  /** Scatter rocks around the river in three tiers, using the rim polylines +
+   *  outward normals recorded per tile in `_buildRiverChannelMeshes`:
+   *    • BIG feature boulders straddling the rim (half on the grass, half dipping
+   *      into the water) — the dominant shapes that bridge bank↔grass;
+   *    • small rocks OUTWARD on the bank/grass;
+   *    • small rocks INWARD in the river (on the bed, poking through the water).
+   *  Deterministic per (tile, point). Playable tiles only; registered into
+   *  `_tilePropsByKey` so fog-of-war hides them with the tile. */
+  _buildRiverRocks() {
+    const BABYLON = this._babylon;
+    const small = this._rockTemplates || [], big = this._bigRockTemplates || [];
+    if (!BABYLON || !this._riverRimByKey || (small.length === 0 && big.length === 0)) return;
+    if (this._riverRockMeshes) { for (const m of this._riverRockMeshes) { try { m.dispose(); } catch { /* */ } } }
+    this._riverRockMeshes = [];
+    const parent = this._mapRoot || null;
+    const hash = (a, b) => {
+      let h = ((a | 0) * 73856093) ^ ((b | 0) * 19349663);
+      h = Math.imul(h ^ (h >>> 13), 1274126177);
+      return ((h ^ (h >>> 16)) >>> 0) / 0x100000000;
+    };
+    let rockOrdinal = 0;
+    const place = (pool, wx, wy, wz, target, hFrac, submerge = false) => {
+      if (!pool.length) return null;
+      // Model + rotation keyed on a running ORDINAL (which jumps between
+      // consecutive rocks), not the rim-point index — otherwise adjacent rocks
+      // pick correlated hashes and repeat the same model/orientation in a row.
+      const rn = rockOrdinal++;
+      const t = pool[Math.floor(hash(rn, 7) * pool.length) % pool.length];
+      // CLONE the template (shares its geometry) so the rock can be positioned;
+      // the caller then bakes all of a hex's clones into ONE mesh via MergeMeshes
+      // — one draw call per river tile, with a per-tile material that fog-darkens
+      // exactly like a GLB building (`_applyBuildingFogDarkenTo`).
+      const mesh = t.mesh.clone(`river_rock_${rn}`);
+      if (!mesh) return null;
+      if (typeof mesh.setEnabled === 'function') mesh.setEnabled(true); // clone inherits the template's disabled state
+      // Width from the XZ footprint, height set DIRECTLY to hFrac·target — the
+      // source rocks vary wildly in aspect (flat slabs to tall spikes), so this
+      // makes every rock a consistent chunky boulder that rises hFrac·target up.
+      const sc = target / t.size;
+      const scy = (target * hFrac) / t.height;
+      mesh.position.set(wx, wy, wz);
+      mesh.scaling.set(sc, scy, sc);
+      mesh.rotation.y = hash(rn, 23) * Math.PI * 2;
+      if (parent) mesh.parent = parent;
+      // Snap the rock's BOTTOM to wy. The merged-GLB pivot is near the model's
+      // CENTRE (the bake-to-bottom is unreliable for them), so without this the
+      // rock sinks half its height underground. Measure the actual world bottom
+      // and lift so the base rests at wy and the whole rock rises above it.
+      mesh.computeWorldMatrix(true);
+      const wb = mesh.getHierarchyBoundingVectors(true);
+      if (Number.isFinite(wb.min.y)) {
+        let yb = wy; // desired world-Y of the rock's base
+        if (submerge) {
+          // Boulder: its base is sunk below the waterline (caller passes a
+          // sub-surface wy), but keep at least 0.3 m (~0.13 world; 1 world ≈
+          // 2.3 m) of rock proud of the ground plane (y=0) — lift a stubby
+          // boulder just enough that it still reads above the bank.
+          const H = wb.max.y - wb.min.y;
+          if (yb + H < 0.13) yb = 0.13 - H;
+        }
+        mesh.position.y += (yb - wb.min.y);
+      }
+      mesh.isPickable = false;
+      return mesh;
+    };
+    for (const [key, rim] of this._riverRimByKey) {
+      if (rim.permanent) continue; // skip the fogged border band (v1)
+      // No rocks on bridge crossings — they'd clutter/clip the deck + railings.
+      const rimTile = this.state?.tiles?.get(key);
+      if (rimTile && isBridge(rimTile)) continue;
+      const [kc, kr] = key.split(',').map(Number);
+      const seed = (kc | 0) * 911 + (kr | 0) * 131;
+      const bedY = typeof rim.bedY === 'number' ? rim.bedY : -0.18;
+      const surfY = bedY * 0.62; // water surface Y (matches SURF_Y in river-channel-mesh.js)
+      const tileRocks = []; // this hex's rock clones — baked into one mesh below
+      for (let s = 0; s < 2; s++) {
+        const side = s === 0 ? rim.left : rim.right;
+        const ss = seed + s * 701;
+        for (let i = 1; i < side.length - 1; i++) { // skip endpoints (avoid seam doubling)
+          // Rocks gather in CLUSTERS at spots (not an even line) — pick cluster
+          // centres along the rim; bare stretches between them.
+          if (hash(ss, i * 811) > 0.10) continue;
+          const e = side[i];
+          const px = e[0], pz = e[1], nx = e[2], nz = e[3]; // point + outward normal
+          const tx = -nz, tz = nx;                          // tangent along the rim
+          // Most clusters get a BIG boulder at their heart — straddling the rim,
+          // dipping into the water. Genuinely large: most ~1.1–1.5m, occasional
+          // ~2m ones (u² → the huge ones rare). Chunky + barely settled.
+          if (big.length && hash(ss, i * 811 + 1) < 0.8) {
+            const tj = (hash(ss, i * 811 + 2) - 0.5) * 0.1;
+            const u = hash(ss, i * 811 + 3);
+            const target = 0.65 + u * u * 0.55; // 0.65–1.20 world (≈1.5–2.8m boulders)
+            // Sink the boulder's base ~0.06 world below the waterline so it reads
+            // as embedded in the riverbed (not perched on the bank); `submerge`
+            // keeps its top ≥0.3 m above the ground plane. Centred on the rim so
+            // it still straddles bank↔water.
+            const inst = place(big, px + tx * tj, surfY - 0.06, pz + tz * tj,
+              target, 0.7, true);
+            if (inst) tileRocks.push(inst);
+          }
+          // A tight GROUP of small rocks around the cluster — spread inward into
+          // the water (poke through) and outward onto the bank, sitting on the
+          // surface (chunky so their tops clear ground level).
+          if (small.length) {
+            const n = 3 + Math.floor(hash(ss, i * 811 + 5) * 4); // 3–6 stones
+            for (let k = 0; k < n; k++) {
+              const b = i * 811 + 20 + k * 5;
+              const uo = (hash(ss, b) - 0.42) * 0.46;      // −0.19..+0.27 (water ← rim → bank)
+              const to = (hash(ss, b + 1) - 0.5) * 0.34;   // tangential spread
+              const target = 0.10 + hash(ss, b + 2) * 0.12; // 0.10–0.22
+              const inWater = uo < -0.02;
+              const wy = inWater ? bedY + 0.05 : -0.02;     // bank rocks on the ground; water rocks lifted off the bed
+              const inst = place(small, px + nx * uo + tx * to, wy, pz + nz * uo + tz * to,
+                target, 0.55);
+              if (inst) tileRocks.push(inst);
+            }
+          }
+        }
+      }
+      if (!tileRocks.length) continue;
+      // Bake this hex's rocks into ONE mesh — one draw call per river tile instead
+      // of ~6. MergeMeshes bakes each clone's world transform (the map root is
+      // identity, so world == map space) and disposes the source clones.
+      let merged = null;
+      if (tileRocks.length === 1) {
+        merged = tileRocks[0];
+      } else if (typeof BABYLON.Mesh?.MergeMeshes === 'function') {
+        merged = BABYLON.Mesh.MergeMeshes(tileRocks, true, true, undefined, false, false);
+      }
+      if (!merged) {
+        // Merge unavailable/failed — keep the first clone, drop the rest.
+        for (let j = 1; j < tileRocks.length; j++) { try { tileRocks[j].dispose(); } catch { /* */ } }
+        merged = tileRocks[0];
+      }
+      merged.name = `river_rocks_${key}`;
+      if (parent) merged.parent = parent;
+      // Own material clone per tile so fog darkens this hex's rocks independently,
+      // the exact mechanism a GLB building uses (`_applyBuildingFogDarkenTo`).
+      if (this._rockMat && typeof this._rockMat.clone === 'function') {
+        merged.material = this._rockMat.clone(`river_rock_mat_${key}`);
+      } else if (this._rockMat) {
+        merged.material = this._rockMat;
+      }
+      merged.isPickable = false;
+      if (merged.renderingGroupId !== undefined) merged.renderingGroupId = WORLD_GROUP;
+      // respectsFog:false → the per-prop veil loop leaves it alone; fog darkening
+      // runs through the building pass, keyed on fogHexKey = this river tile.
+      merged.metadata = { respectsFog: false, kind: 'river-rock', fogHexKey: key };
+      this._addShadowCaster?.(merged);
+      this._riverRockMeshes.push(merged);
+      this._applyBuildingFogDarkenTo(merged); // seed the current fog state
+      const arr = this._tilePropsByKey.get(key) || [];
+      arr.push(merged);
+      this._tilePropsByKey.set(key, arr);
+    }
   }
 
   /** Per-vertex hex fan emit shared between playable + border splat builds.
@@ -8509,6 +8878,7 @@ export class Renderer3D {
       // them should drop shadows onto the deck, not have those shadows fall
       // through to the river surface below.
       this._setShadowReceiver(plank);
+      plank.metadata = { respectsFog: false }; // structure — stay visible in fog, don't vanish
       trackProp(plank);
     }
 
@@ -8543,6 +8913,7 @@ export class Renderer3D {
       deck.position.x = x; deck.position.y = deckBottomY + deckH / 2; deck.position.z = z;
       this._addShadowCaster(deck);
       this._setShadowReceiver(deck);
+      deck.metadata = { respectsFog: false };
       trackProp(deck);
 
       // A railing down each side of the road: a top rail spanning the deck plus
@@ -8569,6 +8940,7 @@ export class Renderer3D {
         rail.isPickable = false;
         rail.position.x = cx; rail.position.y = railTopY; rail.position.z = cz;
         this._addShadowCaster(rail);
+        rail.metadata = { respectsFog: false };
         trackProp(rail);
         for (let i = 0; i < NPOSTS; i++) {
           const t = (i / (NPOSTS - 1) - 0.5) * railLen; // -railLen/2 .. +railLen/2 along road
@@ -8583,6 +8955,7 @@ export class Renderer3D {
           post.position.y = postBaseY + postH / 2;
           post.position.z = cz + az * t;
           this._addShadowCaster(post);
+          post.metadata = { respectsFog: false };
           trackProp(post);
         }
       }
@@ -15741,11 +16114,22 @@ export class Renderer3D {
    *  moves. No-op until the async texture load resolves (no diffuseTexture). */
   _pumpRiverFlow(now) {
     const off = riverFlowOffset(now);
-    // The playable river is built as one merged mesh PER TILE, each carrying
-    // its own `baseMat.clone()` (per-tile fog darkening) — so there is no
-    // single river material to scroll. `_riverFlowTextures` collects every
-    // per-tile clone's diffuse texture at build time; advance them all in
-    // lockstep so the whole river flows as one continuous current.
+    // Drift the two ripple-normal layers downstream at different speeds (and the
+    // second slightly across) so the chop animates with non-repeating variation.
+    // World-sampled, so one shared plugin scrolls the whole river in lockstep.
+    const p = this._waterRipplePlugin;
+    if (p) {
+      // U is arc DOWN the channel, so scroll along U to flow downstream; the two
+      // layers move at different speeds (+ a touch of cross drift on B) for
+      // variation. Each component is its OWN 0..1 sawtooth (riverFlowOffset)
+      // rather than `off * k` — a scaled sawtooth jumps by a non-integer when it
+      // wraps (the visible "UV reset"); a fresh fractional wraps seamlessly
+      // because the ripple texture tiles at 1.0.
+      p.uRippleOffA = [off, 0];
+      p.uRippleOffB = [riverFlowOffset(now, RIVER_FLOW_SPEED * 0.55),
+                       riverFlowOffset(now, RIVER_FLOW_SPEED * 0.18)];
+    }
+    // Legacy ribbon textures (border extension), if any.
     const list = this._riverFlowTextures;
     if (list) {
       for (let i = 0; i < list.length; i++) {
@@ -15753,7 +16137,6 @@ export class Renderer3D {
         if (tex) tex.uOffset = off;
       }
     }
-    // Border river-extension ribbons share one material across all exits.
     const extTex = this._riverExtensionMat?.diffuseTexture;
     if (extTex) extTex.uOffset = off;
   }
@@ -16434,6 +16817,8 @@ export class Renderer3D {
     // Darken GLB buildings standing on fogged hexes (per-building material tint,
     // driver-independent — see `_applyBuildingFogDarken`).
     this._applyBuildingFogDarken();
+    // River rocks darken the same way (cloned GLBs with per-tile materials).
+    this._applyRiverRockFogDarken();
   }
 
   /** Rewrite the merged ground's `aFog` vertex attribute from the fogged-hex

@@ -168,8 +168,16 @@ export function buildRiverChannelGeometry(entryEdge, exitEdge, opts = {}) {
   // bed, ComputeNormals would smooth the wall toward +Y and it would light like
   // a flat (bright, formless) surface. The grass keeps rimL/rimR, the bed keeps
   // watL/watR; only the wall uses the duplicates.
+  // The water SURFACE is a translucent layer raised above the (now dirt) bed,
+  // filling the basin to SURF_Y so you see the muddy floor faintly through it
+  // (depth). SURF_H = the wall's half-width at that height, so the surface meets
+  // the banks with only a thin dry dirt rim above the waterline.
+  const SURF_Y = BED * 0.62; // water sits low in the channel so a dry dirt bank
+                             // (the grass→dirt transition) shows above the waterline
+  const SURF_H = RIM + (WAT - RIM) * (SURF_Y / BED);
   const rimL = [], watL = [], bedI = [], watR = [], rimR = [];
   const rimLw = [], watLw = [], watRw = [], rimRw = [];
+  const surfL = [], surfC = [], surfR = [];
   const rimLpt = [], rimRpt = []; // XZ for the grass loops
   let arc = 0;
   for (let i = 0; i <= N; i++) {
@@ -177,6 +185,7 @@ export function buildRiverChannelGeometry(entryEdge, exitEdge, opts = {}) {
     const p = line[i], q = perp[i];
     const rl = add(p, scale(q, RIM)), wl = add(p, scale(q, WAT));
     const wr = sub(p, scale(q, WAT)), rr = sub(p, scale(q, RIM));
+    const sl = add(p, scale(q, SURF_H)), sr = sub(p, scale(q, SURF_H));
     rimL.push(push(rl[0], 0,   rl[1], arc, 0.0));  rimLpt.push(rl);
     watL.push(push(wl[0], BED, wl[1], arc, 0.3));
     bedI.push(push(p[0],  BED, p[1], arc, 0.5));
@@ -186,10 +195,13 @@ export function buildRiverChannelGeometry(entryEdge, exitEdge, opts = {}) {
     watLw.push(push(wl[0], BED, wl[1], arc, 0.3));
     watRw.push(push(wr[0], BED, wr[1], arc, 0.7));
     rimRw.push(push(rr[0], 0,   rr[1], arc, 1.0));
+    surfL.push(push(sl[0], SURF_Y, sl[1], arc, 0.25));
+    surfC.push(push(p[0],  SURF_Y, p[1],  arc, 0.5));
+    surfR.push(push(sr[0], SURF_Y, sr[1], arc, 0.75));
   }
 
   // Channel strips between consecutive samples.
-  const bank = [], river = [];
+  const bank = [], river = [], surface = [];
   const quad = (out, a, b, c, d) => { out.push(a, b, c, a, c, d); };
   for (let i = 0; i < N; i++) {
     // Left + right bank walls (rim at Y=0 down to the water line at Y=BED) —
@@ -198,9 +210,12 @@ export function buildRiverChannelGeometry(entryEdge, exitEdge, opts = {}) {
     // slope can't catch the sun and reads as a flat, formless band.
     quad(bank, watLw[i], watLw[i + 1], rimLw[i + 1], rimLw[i]);
     quad(bank, rimRw[i], rimRw[i + 1], watRw[i + 1], watRw[i]);
-    // Flat bed (two strips, via the centre line so a bend doesn't pinch).
+    // Flat DIRT bed (two strips, via the centre line so a bend doesn't pinch).
     quad(river, watL[i], bedI[i], bedI[i + 1], watL[i + 1]);
     quad(river, bedI[i], watR[i], watR[i + 1], bedI[i + 1]);
+    // Translucent water surface, raised above the bed (same winding as the bed).
+    quad(surface, surfL[i], surfC[i], surfC[i + 1], surfL[i + 1]);
+    quad(surface, surfC[i], surfR[i], surfR[i + 1], surfC[i + 1]);
   }
 
   // GRASS — the hex minus the channel band, split into two pieces by the band.
@@ -252,7 +267,17 @@ export function buildRiverChannelGeometry(entryEdge, exitEdge, opts = {}) {
   // backwards. Flip by U → flowLen − U when the tile's world flow opposes the
   // river's canonical direction.
   const flowDir = norm(sub(B, A));
-  return { positions, uvs, grass, bank, river, bedY: BED, flowDir, flowLen: arc };
+  return {
+    positions, uvs, grass, bank, river, surface, bedY: BED, surfaceY: SURF_Y, flowDir, flowLen: arc,
+    // The two bank-edge polylines (local XZ) with the OUTWARD normal at each
+    // point (away from the water, onto the grass) — the renderer scatters rocks
+    // in a band from the rim outward so they dissolve into the terrain. Each
+    // entry: [x, z, outNx, outNz]. Left rim faces +perp, right rim faces −perp.
+    rim: {
+      left:  rimLpt.map((p, i) => [p[0], p[1],  perp[i][0],  perp[i][1]]),
+      right: rimRpt.map((p, i) => [p[0], p[1], -perp[i][0], -perp[i][1]]),
+    },
+  };
 }
 
 /** The baked shapes as (entryEdge, exitEdge) in the canonical frame. Only TWO
