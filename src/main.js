@@ -4492,6 +4492,11 @@ function initScenario(def) {
   // Grant the hero leader the Horn key item so a `{ ref:'hero', soundHorn:true }`
   // heroPlan step is valid (the Sound Horn action gates on hasItem('horn')).
   if (def.heroHorn && state.hero && !state.hero.hasItem('horn')) state.hero.addItem('horn');
+  // Visual-testing hook: override a leader's equipped weapon so the
+  // weapon-in-hand renderer (sword/axe/rifle/dagger GLBs) can be screenshotted
+  // per weapon type. The hero leader starts with a sword by default.
+  if (def.heroWeapon && state.hero)   state.hero.equipWeapon(def.heroWeapon);
+  if (def.witchWeapon && state.witch) state.witch.equipWeapon(def.witchWeapon);
   for (const ef of def.witchEffects ?? []) {
     if (!state.witch) break;
     if (typeof ef === 'string') applyEffect(state.witch, ef);
