@@ -1588,6 +1588,33 @@
         },
         "x": 280,
         "y": 700
+      },
+      {
+        "id": "objStart0",
+        "type": "onMissionStart",
+        "params": {},
+        "x": 40,
+        "y": 900
+      },
+      {
+        "id": "set_slay_witch",
+        "type": "setObjective",
+        "params": {
+          "id": "slay_witch",
+          "label": "Slay the Witch"
+        },
+        "x": 300,
+        "y": 900
+      },
+      {
+        "id": "set_deny_ritual",
+        "type": "setObjective",
+        "params": {
+          "id": "deny_ritual",
+          "label": "Deny her the nodes — stop the ritual completing"
+        },
+        "x": 300,
+        "y": 980
       }
     ],
     "edges": [
@@ -1686,6 +1713,28 @@
         },
         "to": {
           "node": "n15",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "objStart0",
+          "pin": "out"
+        },
+        "to": {
+          "node": "set_slay_witch",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "objStart0",
+          "pin": "out"
+        },
+        "to": {
+          "node": "set_deny_ritual",
           "pin": "in"
         },
         "kind": "exec"

@@ -5,7 +5,7 @@
   "title": "Marsh's End",
   "chapter": 1,
   "briefing": "Word reaches you of Marsh's End, a sodden hamlet a day's ride east of the Hollow. The witch's reach has crept into its bogs and the power nodes pulse with her ritual. Drive her back and hold the nodes before her grip tightens.",
-  "victoryText": "Marsh's End is free. The bog-lights dim and the villagers breathe easier — one more hamlet beyond the witch's reach.",
+  "victoryText": "Marsh's End is free. The bog-lights dim and the villagers breathe easier — one hamlet reclaimed, and her grip on the outlands loosens a fraction. More villages still burn under her shadow; each one freed is one less candle feeding her ritual.",
   "defeatText": "The marsh swallows the last of the light. Marsh's End belongs to her now.",
   "mapSize": "skirmish",
   "hasWitch": true,
@@ -13,17 +13,93 @@
   "nodeScoreThreshold": 3,
   "disableScoring": false,
   "healBonus": 25,
-  "requires": ["dark_ritual"],
-  "rewards": { "food": 2, "herbs": 1 },
-  "map": { "mode": "procedural", "seed": 31002, "mapSize": "skirmish", "nodeCount": 2 },
+  "requires": [
+    "dark_ritual"
+  ],
+  "rewards": {
+    "food": 2,
+    "herbs": 1
+  },
+  "map": {
+    "mode": "procedural",
+    "seed": 31002,
+    "mapSize": "skirmish",
+    "nodeCount": 2
+  },
   "objectives": {
     "win": [
-      { "type": "slay_witch" },
-      { "type": "control_nodes" }
+      {
+        "type": "slay_witch"
+      },
+      {
+        "type": "control_nodes"
+      }
     ],
     "lose": [
-      { "type": "hero_killed" },
-      { "type": "witch_score_threshold", "points": 3 }
+      {
+        "type": "hero_killed"
+      },
+      {
+        "type": "witch_score_threshold",
+        "points": 3
+      }
+    ]
+  },
+  "logic": {
+    "version": 1,
+    "variables": [],
+    "nodes": [
+      {
+        "id": "objStart0",
+        "type": "onMissionStart",
+        "params": {},
+        "x": 40,
+        "y": 900
+      },
+      {
+        "id": "set_hold_nodes",
+        "type": "setObjective",
+        "params": {
+          "id": "hold_nodes",
+          "label": "Take and hold the village's 3 Power Nodes"
+        },
+        "x": 300,
+        "y": 900
+      },
+      {
+        "id": "set_break_witch",
+        "type": "setObjective",
+        "params": {
+          "id": "break_witch",
+          "label": "Break the witch's hold (slay her, or win on nodes)"
+        },
+        "x": 300,
+        "y": 980
+      }
+    ],
+    "edges": [
+      {
+        "from": {
+          "node": "objStart0",
+          "pin": "out"
+        },
+        "to": {
+          "node": "set_hold_nodes",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "objStart0",
+          "pin": "out"
+        },
+        "to": {
+          "node": "set_break_witch",
+          "pin": "in"
+        },
+        "kind": "exec"
+      }
     ]
   }
 }

@@ -4,8 +4,8 @@
   "id": "long_watch",
   "title": "The Long Watch",
   "chapter": 1,
-  "briefing": "The nights are growing longer. Three Power Nodes pulse through Caleb's Hollow — seize them all and hold them until dawn. The witch herself walks the streets, but she keeps her distance; her thralls are the real threat.",
-  "victoryText": "Dawn breaks. Every node bears your mark. The town breathes again — for one more day.",
+  "briefing": "The outlying villages are reclaimed and her power is starved of them — but it has drawn back to the source. The nights are growing longer here at home. Three Power Nodes pulse through Caleb's Hollow; seize them all and hold them until dawn. The witch herself walks the streets now, though she keeps her distance — her thralls are the real threat.",
+  "victoryText": "Dawn breaks. Every node bears your mark. The town breathes again — for one more day. But the watch cannot be held forever, and she knows it. Tonight she will not keep her distance; she means to end this herself.",
   "defeatText": "Dawn breaks on a town still in her grip. The watch is broken; her ritual feeds another night.",
   "mapSize": "standard",
   "hasWitch": true,
@@ -1658,6 +1658,33 @@
         },
         "x": 280,
         "y": 810
+      },
+      {
+        "id": "objStart0",
+        "type": "onMissionStart",
+        "params": {},
+        "x": 40,
+        "y": 900
+      },
+      {
+        "id": "set_seize_nodes",
+        "type": "setObjective",
+        "params": {
+          "id": "seize_nodes",
+          "label": "Seize all three Power Nodes"
+        },
+        "x": 300,
+        "y": 900
+      },
+      {
+        "id": "set_hold_dawn",
+        "type": "setObjective",
+        "params": {
+          "id": "hold_dawn",
+          "label": "Hold every node until dawn"
+        },
+        "x": 300,
+        "y": 980
       }
     ],
     "edges": [
@@ -1822,6 +1849,28 @@
         },
         "to": {
           "node": "n22",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "objStart0",
+          "pin": "out"
+        },
+        "to": {
+          "node": "set_seize_nodes",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "objStart0",
+          "pin": "out"
+        },
+        "to": {
+          "node": "set_hold_dawn",
           "pin": "in"
         },
         "kind": "exec"
