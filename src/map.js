@@ -985,6 +985,19 @@ export function assertMapInvariants(tiles) {
   return true;
 }
 
+// Defensive coercion of a (possibly untrusted) node-count override to a finite
+// integer or null. Only a genuine number or numeric string is honored — `+x`
+// coerces null/[]/false/'' to 0, so a bare `Number.isFinite(+x)` would wrongly
+// accept those. Returns null ("no override" → size default) for anything else.
+function _coerceNodeCountOverride(v) {
+  if (typeof v === 'number') return Number.isFinite(v) ? Math.floor(v) : null;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.floor(n) : null;
+  }
+  return null;
+}
+
 export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOverride = null) {
   const cfg = MAP_SIZES[mapSize] ?? MAP_SIZES.standard;
   setMapDimensions(cfg.cols, cfg.rows);
@@ -1526,8 +1539,16 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
                   || buildingPlacements[buildingPlacements.length - 1];
   const startPositions = [heroStart, witchStart];
 
-  const resolvedNodeCount = (nodeCountOverride != null)
-    ? Math.max(cfg.nodeCountMin ?? 1, Math.min(cfg.nodeCountMax ?? cfg.nodeCount, nodeCountOverride))
+  // Coerce the override defensively (depth behind the server boundary): a non-finite
+  // value (NaN, "banana", {}, [] from a hostile client) would otherwise clamp to NaN
+  // here, which _pickNodesAcrossRiver treats as "place as many as possible" (its
+  // `count >= 2` / `placed.length >= count` guards both fail on NaN) — an unintended
+  // max-out. Only a genuine number or numeric string is honored; everything else
+  // (incl. null/undefined and empty/nullish shapes that `+x` would coerce to 0) means
+  // "no override" → the size default. Finite values floor + clamp into the band.
+  const numericOverride = _coerceNodeCountOverride(nodeCountOverride);
+  const resolvedNodeCount = (numericOverride != null)
+    ? Math.max(cfg.nodeCountMin ?? 1, Math.min(cfg.nodeCountMax ?? cfg.nodeCount, numericOverride))
     : cfg.nodeCount;
   // Battle maps: restrict nodes to the middle 2/3 of the map (away from spawn columns)
   const nodeColRange = mapSize === 'battle'

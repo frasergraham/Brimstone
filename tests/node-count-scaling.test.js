@@ -12,11 +12,12 @@
 //   - _clampNodeCount: clamps into the selected size's band (e.g. 7 → skirmish max)
 //   - generateMap(seed, size, override): produces exactly the clamped node count
 
-import { describe, test } from 'node:test';
+import { describe, test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { MAP_SIZES, generateMap } from '../src/map.js';
 import { _nodeCountOpts, _clampNodeCount } from '../src/menu/ledger.js';
+import { createLobby, getRoom, getRooms } from '../server/lobby.js';
 
 const SIZES = ['skirmish', 'standard', 'regional', 'campaign', 'battle'];
 
@@ -161,5 +162,80 @@ describe('generateMap — the chosen count flows through (offline + online share
     const colors = new Set(map.witchObjectives.map((o) => o.color));
     assert.equal(labels.size, 7, 'distinct labels');
     assert.equal(colors.size, 7, 'distinct colors');
+  });
+
+  // Hardening: a non-numeric override (NaN / "banana" / {} — only reachable from a
+  // hostile client) must NOT slip through generateMap's clamp as NaN. NaN bypasses
+  // _pickNodesAcrossRiver's `count >= 2` and `placed.length >= count` guards, which
+  // would fill ALL candidate tiles (a max-out, capped at 7). The defensive clamp
+  // must treat any non-finite override as "no override" → the size default.
+  test('a non-numeric override falls back to the size default, never NaN/max-out', () => {
+    // standard's default (3) is strictly below its max (5), so "equals default"
+    // also proves "not maxed out" (the NaN-clamp failure mode fills up to 7).
+    assert.ok(MAP_SIZES.standard.nodeCount < MAP_SIZES.standard.nodeCountMax,
+      'precondition: standard default below its max so the assertion is meaningful');
+    for (const garbage of [NaN, 'banana', {}, [], Infinity, -Infinity, undefined]) {
+      const map = generateMap(4242, 'standard', garbage);
+      assert.equal(map.witchObjectives.length, MAP_SIZES.standard.nodeCount,
+        `standard override ${String(garbage)} → default ${MAP_SIZES.standard.nodeCount}, not NaN/max-out`);
+    }
+  });
+
+  test('a numeric-string override (legit-shaped) is still honored and clamped', () => {
+    // The real client sends a parsed int, but a stringified finite number should
+    // coerce cleanly rather than fall back to the default.
+    assert.equal(generateMap(4242, 'campaign', '7').witchObjectives.length, 7);
+    assert.equal(generateMap(4242, 'standard', '4').witchObjectives.length, 4);
+    // A fractional value floors into a valid count.
+    assert.equal(generateMap(4242, 'standard', 4.9).witchObjectives.length, 4);
+  });
+});
+
+describe('createLobby — server boundary coerces a hostile nodeCount (Guideline 5 authority path)', () => {
+  function mockWs() {
+    const ws = {
+      readyState: 1,
+      messages: [],
+      send(data) { ws.messages.push(JSON.parse(data)); },
+      findMsg(type) { return ws.messages.find((m) => m.type === type); },
+    };
+    return ws;
+  }
+
+  function makeLobby(nodeCount) {
+    const ws = mockWs();
+    const roomId = createLobby('host-nodecount', 'Host', ws, {
+      mapSize: 'standard', fog: 'none', playersPerSide: 1, nodeCount,
+    });
+    return getRoom(roomId);
+  }
+
+  afterEach(() => {
+    for (const r of getRooms()) {
+      const room = getRoom(r.id);
+      if (room?.turnTimer) clearTimeout(room.turnTimer);
+    }
+  });
+
+  test('a non-numeric nodeCount is stored as null (falls through to the map default)', () => {
+    for (const garbage of ['banana', {}, [], NaN, Infinity, true]) {
+      const room = makeLobby(garbage);
+      assert.equal(room.config.nodeCount, null,
+        `nodeCount ${String(garbage)} → null, not stored raw`);
+    }
+  });
+
+  test('a finite nodeCount is stored as a floored integer', () => {
+    assert.equal(makeLobby(4).config.nodeCount, 4);
+    assert.equal(makeLobby('5').config.nodeCount, 5);   // numeric string coerces
+    assert.equal(makeLobby(4.9).config.nodeCount, 4);   // floored
+  });
+
+  test('a missing nodeCount stays null (size default)', () => {
+    const ws = mockWs();
+    const roomId = createLobby('host-nodecount', 'Host', ws, {
+      mapSize: 'standard', fog: 'none', playersPerSide: 1,
+    });
+    assert.equal(getRoom(roomId).config.nodeCount, null);
   });
 });
