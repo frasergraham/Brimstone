@@ -1,5 +1,6 @@
 // Pure helpers for battle classification — no DOM, no state dependencies.
 import { EntityType, isLeaderType } from './entities.js';
+import { ICON } from './icons.js';
 
 // Returns true when a battle warrants the full cinematic dialog rather than a toast.
 // Leader fights only qualify if HP actually moved — a clean miss between major
@@ -210,8 +211,8 @@ export function compileTurnBattleSummary(steps, finalEntities, ResEventType, Pla
     const aKilled = _wasKilled(snapA, finalEntities);
     const bKilled = _wasKilled(snapB, finalEntities);
     const parts = [];
-    if (hpLostByA > 0) parts.push(`${nameA} \u2212${hpLostByA}HP${aKilled ? ' \u{1F480}' : ''}`);
-    if (hpLostByB > 0) parts.push(`${nameB} \u2212${hpLostByB}HP${bKilled ? ' \u{1F480}' : ''}`);
+    if (hpLostByA > 0) parts.push(`${nameA} \u2212${hpLostByA}HP${aKilled ? ` ${ICON.defeat}` : ''}`);
+    if (hpLostByB > 0) parts.push(`${nameB} \u2212${hpLostByB}HP${bKilled ? ` ${ICON.defeat}` : ''}`);
     lines.push(`\u2694 ${nameA} vs ${nameB}: ${parts.join(', ')}`);
   }
   return lines;

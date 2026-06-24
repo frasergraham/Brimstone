@@ -843,8 +843,8 @@ export function buildOutcomeSummary(entry) {
   }
   for (const sh of entry.splashHits ?? []) {
     lines.push(sh.killed
-      ? `\u{1F4A2} ${sh.name ?? 'A bystander'} takes ${sh.damage ?? 1} splash — slain!`
-      : `\u{1F4A2} ${sh.name ?? 'A bystander'} takes ${sh.damage ?? 1} splash.`);
+      ? `${ICON.splash} ${sh.name ?? 'A bystander'} takes ${sh.damage ?? 1} splash — slain!`
+      : `${ICON.splash} ${sh.name ?? 'A bystander'} takes ${sh.damage ?? 1} splash.`);
   }
   return { kind, headline, reason, lines };
 }

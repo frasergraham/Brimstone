@@ -9,6 +9,7 @@
 // glyph fallback for portrait-less units lives here.
 
 import { ENTITY_COLOR } from './entities.js';
+import { ICON } from './icons.js';
 
 export const WRAPUP_GLYPHS = Object.freeze({
   hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003',
@@ -79,7 +80,7 @@ export function buildWrapupCombatsHtml(combats, iconFor) {
     // bystander damage is called out rather than silently absorbed.
     if (splash?.length) {
       const splashCells = splash.map(u => wrapupUnitCellHtml(u, iconFor(u, 36))).join('');
-      html += `<div class="wrapup-splash"><span class="wrapup-splash-label">\u{1F4A2} splash</span>${splashCells}</div>`;
+      html += `<div class="wrapup-splash"><span class="wrapup-splash-label">${ICON.splash} splash</span>${splashCells}</div>`;
     }
   }
   return html;
