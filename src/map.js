@@ -15,9 +15,15 @@ const WITCH_OBJECTIVE_LABELS = [
 export const SEASONS = Object.freeze(['summer', 'fall', 'spring', 'winter']);
 
 // Distinct colors for each power node index — used in renderer and score tracker.
-// Chosen to be visually distinct from hero blue (#4488ff) and witch red (#cc3333).
+// Chosen to be visually distinct from hero blue (#4488ff), witch red (#cc3333),
+// and the green "you can move here" reachable-hex highlight (~hue 128°, see
+// HIGHLIGHT_DEFAULT_RGBA `rgba(60,220,80,…)` in renderer-3d.js). Node 0 used to be
+// emerald green (#22c55e, ~hue 142°) which read almost identically to that move
+// highlight; it is now magenta/fuchsia (~hue 292°) — far from the green highlight
+// and from both faction colors. Lime (index 5, ~hue 84°) is yellow-green and stays
+// distinguishable from the highlight; everything else is unchanged.
 export const NODE_COLORS = [
-  '#22c55e', // emerald green
+  '#d946ef', // fuchsia (was emerald green; clashed with the move-here highlight)
   '#f59e0b', // amber
   '#06b6d4', // cyan
   '#a855f7', // violet
