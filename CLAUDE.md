@@ -50,6 +50,16 @@ These directives apply to all code changes — follow them without exception.
 - Any change to the 3D renderer, UI overlays/HUD, replay/conversation presentation, `styles.css`, or `index.html` must be verified by **running the game and looking at screenshots** before pushing — unit tests can't see a clipped billboard or a camera-framing bug.
 - Use the **`verifier-browser` skill** (`.claude/skills/verifier-browser/`): it drives the real game in headless Chromium (SwiftShader WebGL) via `scripts/verify/browser-harness.mjs`, captures screenshots + console errors, and documents the menu/replay selectors. Capture before/after screenshots for fixes, and actually read the images.
 
+### 8. No color emoji in player-facing UI — use the icon font
+- **Never put a color emoji in any player-facing string, label, log, HTML, or CSS.** Color emoji render inconsistently across platforms and as full-color glyphs on iOS/Android (even "monochrome-looking" BMP symbols like `⚔ ☀ ⛪ ⚰`), which breaks the gothic theme. The guard test `tests/no-ui-emoji.test.js` fails the build if one creeps in.
+- Use the **monochrome icon font** instead — `BrimstoneIcons` (`assets/fonts/brimstone-icons.woff2`, Private-Use-Area `U+E000–E0FF`, built from [game-icons.net](https://game-icons.net)). It's scoped by `unicode-range` and prepended to the global font stack, so an icon char renders as a glyph anywhere and **inherits `color`** (tint a node dot red/blue, a check green, etc.).
+  - **JS:** import `{ ICON }` from `src/icons.js` and use `ICON.<name>` (e.g. `` `${ICON.shield} Shield` ``). In a non-template quoted string, the `\uE0xx` escape works too.
+  - **`index.html`:** the numeric entity `&#xE0xx;`. **CSS `content`:** `'\eXXXX'`.
+  - **Canvas (`renderer-3d.js` / `renderer.js`):** include `BrimstoneIcons` in the `ctx.font` family list (canvas does per-glyph fallback) — already wired; new paint sites must keep it. The font must be loaded (`document.fonts.load`) before the first draw or glyphs paint as tofu.
+  - **Voiced text** (tutorial/hint bodies, conversations): icons display but are stripped before TTS by `narrationText()` in `scripts/generate-voiceover.mjs` (strips the `U+E000–E0FF` range). Changing voiced text means re-running that script to regenerate audio + `assets/voice/manifest.json`.
+- **Adding/changing an icon:** edit `scripts/icon-manifest.mjs` (the single source of truth — name, PUA codepoint, game-icons `gi` id, the glyphs it replaces), then run `node scripts/gen-icons.mjs` (writes `src/icons.js`) and `node scripts/build-icon-font.mjs` (rebuilds the woff2/ttf). Art is decoupled from call sites — swapping the `gi:` id and rebuilding restyles every use with zero code churn. `node scripts/gen-icon-sheet.mjs` renders a contact sheet.
+- Carve-outs (emoji allowed): code comments, `tests/`, `scripts/`, the internal mission editor / admin tools (`src/tools/`, `admin*.html`), and `src/icons.js` (the migration map).
+
 ---
 
 ## Project Overview

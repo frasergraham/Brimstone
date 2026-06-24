@@ -277,15 +277,18 @@ describe('_doSubmitPlan', () => {
       'end-turn-btn should be hidden after submission');
   });
 
-  test('shows plan-return-btn after submit', () => {
+  test('hides plan-return-btn after submit (WAITING is title-only)', () => {
     const { ui, els } = makeUI();
-    // Collapse the panel so the return button isn't hidden by plan-open logic
+    // Collapse the panel so plan-open logic isn't what hides the button.
     els['plan-panel'].classList.add('collapsed');
     ui.enterPlanningMode('hero', 3);
     els['plan-panel'].classList.add('collapsed');
     ui._doSubmitPlan();
-    assert.equal(els['plan-return-btn'].style.display, '',
-      'plan-return-btn should be visible after submission');
+    // After submit the header is the title-only WAITING FOR OPPONENTS state:
+    // the return-to-menu button is hidden; the top-left menu (☰) is the single
+    // consistent exit across all three header states.
+    assert.equal(els['plan-return-btn'].style.display, 'none',
+      'plan-return-btn should be hidden after submission (title-only WAITING state)');
   });
 });
 

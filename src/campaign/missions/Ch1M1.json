@@ -21,7 +21,7 @@
   "disableScoring": true,
   "aiPersonality": "balanced",
   "aiBudgetBonus": 0,
-  "maxSurvivorsFromRoster": 0,
+  "maxSurvivorsFromRoster": 3,
   "missionSurvivors": 1,
   "maxDiscoverableSurvivors": 0,
   "startingResources": {
@@ -1174,7 +1174,7 @@
                 "attack": 1,
                 "defense": 1
               },
-              "spawnLog": "🗿 A crude wood-and-bone golem lurches out of the alley!"
+              "spawnLog": "\uE098 A crude wood-and-bone golem lurches out of the alley!"
             }
           ]
         },

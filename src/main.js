@@ -1,6 +1,7 @@
 // Entry point: wires all modules, setup screen flow, resize
 import { onInactiveChange, tryGameCenterAuth, isNativeMobile, refreshPushToken, loadGameCenterFriends, shareInvite } from './platform.js'; // must be first — sets server globals for Capacitor builds
 import { AppMode, getMode, setMode, isInGame, isAnimating, shouldBufferMessages, onModeChange } from './app-mode.js';
+import { ICON } from './icons.js';
 import { GameState, phaseForRound, getCycleLength } from './game.js';
 import { DAMAGE_SCALE } from './balance.js';
 import { Renderer3D, BLOCK_WORD_VARIANTS } from './renderer-3d.js';
@@ -26,34 +27,37 @@ import {
   MultiplayerClient, MirrorState, loadSession, clearSession,
   checkEmailTokenInUrl, requestLinkEmail, requestEmailLogin,
 } from './multiplayer.js';
-import { VERSION, BUILD_VERSION } from './version.js';
+import { VERSION, BUILD_VERSION, SAVE_VERSION } from './version.js';
 import { buildPlayerStatusHtml } from './ui-render.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType, groupPlanByEntity } from './planner.js';
 import { buildStepDigest, buildStoryBeatDigest, isEventVisible, compactUneventfulTurns } from './replay-timeline.js';
 import { hexDistance, getNeighbors, hexKey } from './hex.js';
-import { planCombatFrames } from './combat-presentation.js';
+import { planCombatFrames, resolveLungeTargetWorld } from './combat-presentation.js';
 import { MAX_FORTIFY_LEVEL, MAX_FORTIFY_HP, FORTIFY_HP_PER_LEVEL, FORT_IMPASSABLE_THRESHOLD, deriveBlockedSlots } from './tiles.js';
 import { sightRange, computeLineOfSight, hasLineOfSight, assignSlotOnTile } from './actions.js';
 import { ITEMS } from './items.js';
 import { ABILITIES } from './abilities.js';
 import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
 import { isFactionAvailable } from './demo-config.js';
-import { compileTurnBattleSummary, compileTurnBattlePairs, collectTurnFinds, deferredMoveEntityIds } from './battle-utils.js';
+import { compileTurnBattleSummary, compileTurnBattlePairs, collectTurnFinds, deferredMoveEntityIds, groupWhiffEvents } from './battle-utils.js';
 import { collectWrapUpAttrition } from './post-round-effects.js';
 import { applyEffect } from './effects.js';
 import { installKeybindings } from './keybindings.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import * as audio from './audio.js';
 import { playback, resetPlayback, replayFullGame, playbackDelay, swapState, patchAlive, withPinnedPhase } from './playback.js';
+import { finalizeAndPersistRound } from './round-finalize.js';
 import { ReplayCache } from './replay-cache.js';
 import { makeShowLoadingAndReveal } from './loading-reveal.js';
-import { MAP_SIZES } from './map.js';
 import { nodeController } from './game.js';
 import { MissionConductor, areHintsSuppressed, markHintsSeen, resetAllHintsForCampaign } from './mission-conductor.js';
+import {
+  buildLearnMap, placeLearnUnits, LEARN_STEPS, LEARN_CONDUCTOR_CONFIG,
+} from './learn/learn-config.js';
 import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel, getEquippedWeaponIdOf, normalizeItems, flattenItemCounts } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
-import { Campaign, CAMPAIGN_SLOT_COUNT, getActiveSlot, setActiveSlot, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout } from './campaign/campaign.js';
+import { Campaign, CAMPAIGN_SLOT_COUNT, getActiveSlot, setActiveSlot, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout, deploySpots, resolveDeployIndices } from './campaign/campaign.js';
 import { CAMPAIGNS } from './campaign/campaign-registry.js';
 import { campaignMissionNumber as _campaignMissionNumber, campaignMissionTotal as _campaignMissionTotal, hasCampaignToContinue } from './campaign/continue-resolver.js';
 import { saveThumb, deleteThumb, loadThumb, saveStats, loadStats, campaignMissionRowId } from './menu/thumbnails.js';
@@ -81,6 +85,8 @@ import {
   debriefPartyHTML as _debriefPartyHTML, debriefRewardsSectionHTML as _debriefRewardsSectionHTML,
   missionRows as _missionRows,
   departureMessage as _departureMessage, arrivalMessage as _arrivalMessage,
+  buildDeployPartyPreview as _buildDeployPartyPreview,
+  buildSavedPartyPreview as _buildSavedPartyPreview,
 } from './campaign/campaign-ui.js';
 import { requestNotificationPermission, notifyRoundReady, notifyWaitingOnYou, notifyDeadlineApproaching, notifyGameOver } from './notifications.js';
 import { mmSortRows, mmFormatRow, mmDedupeCampaignRows } from './main-menu-games.js';
@@ -410,7 +416,8 @@ function init(witchIsAI, heroIsAI, autoplay = false, humanFactionId = null, opts
   const nodeCount = opts?.nodeCount != null
     ? opts.nodeCount
     : parseInt(document.getElementById('select-node-count')?.value ?? '3', 10);
-  state    = new GameState(witchIsAI, heroIsAI, mapSize, nodeCount);
+  const startingResources = opts?.startingResources ?? 'none';
+  state    = new GameState(witchIsAI, heroIsAI, mapSize, nodeCount, null, startingResources);
 
   // Difficulty applies to human-vs-AI only — AI-vs-AI (autoplay/balance) and
   // two-human games always run at the tuned 'normal' baseline.
@@ -1252,7 +1259,9 @@ function _focusInitialView(humanFaction) {
     if (!main || !main.alive) return;
     // Tutorial teaches unit selection itself, so don't pre-select there.
     if (ui && !ui.tutorialMode) ui._selectEntity?.(main);
-    renderer.frameHexes([main], { maxZoom: 3.5, paddingHexes: 1.5, duration: 550, orientNorth: true });
+    // Initial level framing — a deliberate distance set (fit), so it computes
+    // the zoom-in radius even before the player has touched zoom.
+    renderer.frameHexes([main], { maxZoom: 3.5, paddingHexes: 1.5, duration: 550, orientNorth: true, fit: true });
     redraw();
   };
   // Apply now (renderer usually ready), then again once the lazily-initialised
@@ -1302,6 +1311,32 @@ async function _runLocalResolution(skipSummary = false) {
   // Hold a reference to the final entity array so we can restore it after animation.
   const finalEntities = state.entities;
 
+  // Game-over auto-finish (Mission 1 / prologue "stuck in replay" fix): the
+  // outcome is sealed the instant resolvePlans() returns, but the win/lose is
+  // only WRITTEN to state by finalizeRound() AFTER the replay below. A manual-
+  // stepping player who doesn't click NEXT all the way through a game-ending
+  // round never reaches finalizeRound — so the Victory/Defeat modal + campaign
+  // debrief never appear and they're stranded on the replay HUD. peekVictory()
+  // is a read-only probe of the resolved state; when it reports a win we run
+  // this round's replay to completion automatically (no manual gate), so the
+  // terminal modal is always reached. Online has no gap — the server runs
+  // finalizeRound() before clients replay. Harmless if mis-detected: it just
+  // auto-plays one round's replay.
+  //
+  // The resolver REMOVES dead entities, so a post-resolution witch-unit count of
+  // zero is ambiguous (a hero-only mission also has none). peekVictory() needs to
+  // know the witch/night side actually FIELDED a unit this round for its mission-
+  // logic "all enemies dead" win proxy (the prologue's golem) — read that off the
+  // pre-resolution snapshot captured above.
+  let _hadWitchUnitsPreResolve = false;
+  try {
+    const pre = JSON.parse(_preResolveStateJson);
+    _hadWitchUnitsPreResolve = (pre.entities ?? []).some(e => e.owner === 'witch');
+  } catch { /* snapshot parse failure → fall back to the standard checks only */ }
+  if (!_autoplay && state.peekVictory({ hadWitchUnits: _hadWitchUnitsPreResolve })) {
+    playback.autoFinish = true;
+  }
+
   // Snapshot post-resolution explored flags, then revert to pre-resolution state
   // so the explored dot only appears when the EXPLORE step is actually animated.
   const postExplored = new Map();
@@ -1323,19 +1358,76 @@ async function _runLocalResolution(skipSummary = false) {
     owner: nodeController(obj, preResEntities),
   }));
 
-  // Animate the turn. The Redo control sets playback.restart to replay the
-  // turn's animations from the start — reset to pre-resolution and re-run.
-  do {
-    playback.restart = false;
-    await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
-    if (playback.restart) {
+  // ── Finalize + PERSIST the round NOW, before the player watches ──────────
+  // The Sim is sealed the instant resolvePlans() returns (docs/09 invariant 1),
+  // so the round can be finalized and durably saved immediately — BEFORE the
+  // blocking replay watch below. This is the fix for "close/crash mid-replay
+  // loses the just-computed round": both offline saves used to be gated behind
+  // the watch, so the persisted save lagged a round behind whatever the player
+  // had already seen resolve. Online already saves server-side at resolve-time
+  // (server/lobby.js `_resolveRoom`), independent of any client replay.
+  //
+  // finalizeAndPersistRound runs the deterministic Sim + persist unit in order:
+  // battle-summary log → finalizeRound() (advances the day cycle + scoring +
+  // victory) → _roundHistory push → _saveSpGame → _saveCampaignMission. It
+  // returns the pre-advance score + the round's FOUGHT phase so the replay can
+  // be pinned to it (finalizeRound has since advanced state.phase).
+  const { prevScore, roundPhase } = finalizeAndPersistRound({
+    state,
+    compileSummary: () => compileTurnBattleSummary(steps, state.entities, ResEventType, PlanActionType),
+    renderLog:      () => ui?._renderLog(),
+    appendRoundHistory: () => {
+      // MUST run before _saveSpGame(), which serializes _roundHistory to
+      // localStorage. Appending first keeps the persisted history in lockstep
+      // with the live game, so a resumed save shows the replay exactly as a
+      // fresh round-end (and the "Last Turn" button appears). state.gameOver is
+      // already set (checkVictory ran in finalizeRound).
+      if (_autoplay) return;
+      _roundHistory.push({
+        roundNum:     _preResolveRoundNum,
+        preState:     _preResolveStateJson,
+        steps:        JSON.stringify(steps),
+        // Save post-resolution entities for the last round so the replay
+        // correctly snaps to the outcome (not back to pre-action positions).
+        finalEntities: state.gameOver ? finalEntities : undefined,
+      });
+    },
+    saveSp: _saveSpGame,  // early-returns on game over (cleanup path persists instead)
+    saveCampaign: () => {
+      // Skip conductor-driven missions like the tutorial; hint-mode conductors
+      // ride along normal missions, which save.
+      if (_activeCampaign && _activeMissionDef && !state.gameOver &&
+          (!_missionConductor || _missionConductor.isHints)) {
+        _saveCampaignMission();
+      }
+    },
+  });
+
+  // ── Now WATCH the replay (pure Show) ─────────────────────────────────────
+  // finalizeRound() advanced the day cycle, so the watch must be pinned to the
+  // round's FOUGHT phase (lighting + sight ranges) and play against the
+  // pre-resolution entity snapshot — EXACTLY as the re-watch path (_reReplay)
+  // below does, so the first watch matches the re-watch. Nothing here mutates
+  // authoritative state: replay is reproduction, never authorship (docs/09
+  // invariant 1). The Redo control sets playback.restart to replay the turn's
+  // animations from the start — reset to pre-resolution and re-run.
+  await withPinnedPhase(state, roundPhase, async () => {
+    do {
+      playback.restart = false;
       state.entities = preReplayEntities;
       for (const [k, t] of state.tiles) {
         if (t.explored && !preExploredSet.has(k)) t.explored = false;
       }
       redraw();
+      await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+    } while (playback.restart);
+    // Restore final explored state after animation completes.
+    for (const [k, v] of postExplored) {
+      const t = state.tiles.get(k);
+      if (t) t.explored = v;
     }
-  } while (playback.restart);
+  });
+  redraw();  // final frame back under the live (post-round) phase
 
   // Update AI debug panel with resolution outcomes so the user can see
   // which planned actions actually executed vs were skipped/failed
@@ -1343,39 +1435,15 @@ async function _runLocalResolution(skipSummary = false) {
     _updateAIDebugResolutionOutcome(steps);
   }
 
-  // Restore final explored state after animation completes.
-  for (const [k, v] of postExplored) {
-    const t = state.tiles.get(k);
-    if (t) t.explored = v;
-  }
-
   // Notify mission conductor that resolution animation has finished.
   if (_missionConductor) _missionConductor.onResolutionComplete();
 
-  // Add aggregate battle summary to the log before endRound inserts phase entries
-  const summaryLines = compileTurnBattleSummary(steps, state.entities, ResEventType, PlanActionType);
-  for (const line of summaryLines) state.log.push(line);
-  if (summaryLines.length && ui) ui._renderLog();
-
-  // Snapshot score BEFORE endRound so we can detect scoring changes
-  const prevScore = { hero: state.nodeScore.hero, witch: state.nodeScore.witch };
-  // The phase this round was FOUGHT in — finalizeRound() advances the day
-  // cycle, and any re-watch from the review must replay under the round's own
-  // phase (lighting + sight ranges) or it won't match the original watch.
-  const roundPhase = state.phase;
-
-  // Shared post-resolution finalization (node discovery → control-change log →
-  // explored-hex update → endRound). endRound() internally invokes
-  // state._waveProcessor (set during mission load) before checkVictory, so
-  // triggered wave spawns can pre-empt an otherwise-firing eliminate_all win.
-  state.finalizeRound();
-
   // Mission Log (docs/09): finalizeRound() ran pumpMissionLogic('postResolution'),
   // which may have advanced kill-count objectives (e.g. "kill 3 zombies"). Toast
-  // those + refresh the panel now, right at the end of this round's resolution,
-  // so the marker ticks 1/3 → 2/3 → 3/3 in step with the kills. The Sim state
-  // already mutated; this drains only the SHOW objectiveLog half (story beats +
-  // conversations stay queued for the next planning gate, unchanged).
+  // those + refresh the panel now, right after the watch, so the marker ticks
+  // 1/3 → 2/3 → 3/3. The Sim state already mutated inside finalizeRound; this
+  // drains only the SHOW objectiveLog half (story beats + conversations stay
+  // queued for the next planning gate, unchanged).
   _presentRoundObjectiveLogs();
 
   // Show encounter dialogs for survivors spawned at power nodes during endRound
@@ -1388,32 +1456,9 @@ async function _runLocalResolution(skipSummary = false) {
   if (ui) await ui._triggerPostRoundEffects();
   redraw();
 
-  // Persist single-player progress to localStorage
-  _saveSpGame();
-
-  // Persist campaign mid-mission progress (skip conductor-driven missions like
-  // the tutorial; hint-mode conductors ride along normal missions, which save)
-  if (_activeCampaign && _activeMissionDef && !state.gameOver &&
-      (!_missionConductor || _missionConductor.isHints)) {
-    _saveCampaignMission();
-  }
-
   // Snapshot the board for the menu save lists (end of every round). Fire-and-
   // forget — an offscreen render that never disturbs the live view.
   _captureRoundThumbnail();
-
-  // Accumulate round for full-game replay
-  if (!_autoplay) {
-    _roundHistory.push({
-      roundNum:     _preResolveRoundNum,
-      preState:     _preResolveStateJson,
-      steps:        JSON.stringify(steps),
-      // Save post-resolution entities for the last round so the replay
-      // correctly snaps to the outcome (not back to pre-action positions).
-      // Captured before endRound() so it reflects combat results only.
-      finalEntities: state.gameOver ? finalEntities : undefined,
-    });
-  }
 
   // Post-resolution: normal turns end with a wrap-up CARD + review (the timeline
   // stays up; arrows scrub the cards). Game-over keeps its dedicated modal.
@@ -1641,11 +1686,23 @@ function _playAttackIntroAnim(actorSnap, targetSnap, fromCol, fromRow, toCol, to
       owner: actorSnap.owner,
     });
   } else {
+    // Aim the lunge at the defender's ACTUAL sub-hex slot (its live standee
+    // position) rather than the hex centre, so the attacker meets the defender
+    // where it stands instead of snapping it to the middle of the hex. The
+    // defender holds its slot — render-only, no state mutation. Falls back to
+    // the hex centre (targetWorld=null) when there's no defender to aim at:
+    //   • a WHIFF (ACTION_SKIP `targetFled` / empty-hex BATTLE_HEX) passes
+    //     targetSnap=null — the attacker swings at the planned hex, not a unit;
+    //   • the renderer can't resolve the slot (e.g. the 2D editor renderer).
+    // Without the targetSnap guard, reading `targetSnap.id` here threw
+    // `Cannot read properties of null (reading 'id')` on every whiff replay.
+    const targetWorld = resolveLungeTargetWorld(renderer, targetSnap);
     renderer.addLungeAnim(
       actorSnap.id,
       fromCol, fromRow,
       toCol, toRow,
       actorSnap.type, actorSnap.owner, actorSnap.title ?? null,
+      0, false, targetWorld,
     );
   }
 }
@@ -1759,7 +1816,7 @@ function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
   if (result?.fortHpDamage) {
     // Floater shows HP chipped; if the hit also dropped a level, note that.
     const lvlNote = result.fortDamaged ? ` (-${result.fortDamaged} lvl)` : '';
-    renderer.addFlash(tgtCol, tgtRow, `🏰-${result.fortHpDamage}${lvlNote}`,
+    renderer.addFlash(tgtCol, tgtRow, `${ICON.fort}-${result.fortHpDamage}${lvlNote}`,
       'rgba(120,120,140,0.15)', 1600, 0.65, 'rgba(180,180,200,1)');
     // Apply the fort-HP delta now so the hex ring visibly thins out in sync with
     // the floater (fortifyHP was rewound at the start of _animateResolutionSteps
@@ -1940,7 +1997,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   const skipHudActive = !_autoplay && ui && !ui._replayOnControl;
   if (skipHudActive) {
     // Start in the player's remembered mode: AutoPlay (continuous) or manual.
-    playback.paused = !ui.replayAutoPlay;
+    // A game-ending round auto-runs to completion so the player can't be
+    // stranded mid-replay before the terminal modal (see playback.autoFinish /
+    // the peekVictory() hook in _runLocalResolution). The flag is one-shot:
+    // consume it here so the next round respects the player's manual/auto choice.
+    playback.paused = playback.autoFinish ? false : !ui.replayAutoPlay;
+    playback.autoFinish = false;
     playback.stepRequested = false;
     ui.showInlineReplayHUD?.((action) => {
       switch (action) {
@@ -2340,7 +2402,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         ? step.entitySnapshot?.find(e => e.id === actionEv.action.entityId)
         : null;
       if (actorSnap) {
-        renderer.addFlash(actorSnap.col, actorSnap.row, '-1\u00a0🍞', 'rgba(200,140,40,0.1)', 1600, 0.72, '#e8c84a');
+        renderer.addFlash(actorSnap.col, actorSnap.row, '-1\u00a0\uE012', 'rgba(200,140,40,0.1)', 1600, 0.72, '#e8c84a');
         redrawFn();
       }
     }
@@ -2484,7 +2546,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               bumpSlot, true, // start in slot, stop at the hex boundary
             );
             if (ev.result.blockedByFort) {
-              renderer.addFlash(bumpTo.col, bumpTo.row, '🏰',
+              renderer.addFlash(bumpTo.col, bumpTo.row, '\uE03B',
                 'rgba(170,170,175,0.15)', 900, 0.75, 'rgba(200,200,210,1)');
             }
           }
@@ -2535,7 +2597,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
           preSnap.slot ?? 0,
         );
         if (ev.blockedByFort) {
-          renderer.addFlash(bumpTo.col, bumpTo.row, '🏰',
+          renderer.addFlash(bumpTo.col, bumpTo.row, '\uE03B',
             'rgba(170,170,175,0.15)', 900, 0.75, 'rgba(200,200,210,1)');
         }
         hadMove = true;
@@ -2809,10 +2871,18 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     }
 
     // ── Phase 2a: empty-hex attack whiffs (lunge + "no enemy" floater) ───────
+    // A fleeing target that out-ran a unit's WHOLE plan produces several
+    // identical whiffs against the same hex IN ONE STEP (drainOneStep loops over
+    // free skips). Replaying each as its own lunge+return reads as the same unit
+    // lunging at empty grass N times and (with the return not awaited in fast
+    // modes) warping back. Collapse runs of identical whiffs — same actor, same
+    // target hex — into ONE clean beat (the resolution is the same "swung at
+    // nothing"; N copies add no information). Each distinct (actor,hex) whiff
+    // still animates. `groupWhiffEvents` is pure + tested.
     const whiffEvents = allStepEvents.filter(
       ev => ev.type === ResEventType.ACTION_SKIP && ev.whiffTarget && ev.battleSnaps?.actorSnap
     );
-    for (const ev of whiffEvents) {
+    for (const ev of groupWhiffEvents(whiffEvents)) {
       const { actorSnap } = ev.battleSnaps;
       const { col: tCol, row: tRow } = ev.whiffTarget;
 
@@ -2844,9 +2914,13 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         redrawFn();
         await playbackDelay(speed === 'vfast' ? 200 : 400);
 
-        // Return lunge (projectiles self-clear on impact; this is a no-op for them)
+        // Return lunge, then ALWAYS settle it before the next presentation —
+        // not only in cinematic. Otherwise a following lunge (this step or the
+        // next) captures the standee mid-return as its "home" and the unit
+        // warps. waitForAnimations resolves immediately when nothing's in
+        // flight, so this is cheap for projectile whiffs that self-clear.
         renderer.returnAllLungeAnims();
-        if (speed === 'cinematic') await renderer.waitForAnimations();
+        await renderer.waitForAnimations();
         redrawFn();
       }
       // Reveal the whiff's NO TARGET / TARGET FLED note at the end of THIS
@@ -2886,7 +2960,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         await playbackDelay(speed === 'vfast' ? 140 : 280);
 
         if (r.hit) {
-          const label = r.crush ? '💥 🏰-2' : '🏰-1';
+          const label = r.crush ? '\uE096 \uE03B-2' : '\uE03B-1';
           renderer.addFlash(tCol, tRow, label,
             'rgba(180,100,100,0.18)', 1600, 0.75, 'rgba(230,180,180,1)');
         } else {
@@ -3152,7 +3226,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (!_evVisible(ev, step.entitySnapshot, postEntities)) continue;
       await _actionGate();
       const gain = result.defGain ?? 1;
-      renderer.addFlash(actor.col, actor.row, `🛡+${gain}`,
+      renderer.addFlash(actor.col, actor.row, `${ICON.shield}+${gain}`,
         'rgba(100,180,255,0.1)', 1800, 0.72, 'rgba(130,200,255,1)');
       _presentedSinceGate = true;
     }
@@ -3841,6 +3915,10 @@ function _saveCampaignMission() {
     missionId:      _activeMissionDef.id,
     state:          serializeState(state),
     roundHistory:   _roundHistory,
+    // Version stamp — the state-sync schema version of the embedded snapshot.
+    // loadCampaignMissionSave() gates on this so a stale save from an incompatible
+    // build can't resume into a desynced GameState (matches server/saves.js).
+    saveVersion:    SAVE_VERSION,
     updatedAt:      Date.now(),
   };
   try { localStorage.setItem(key, JSON.stringify(data)); } catch {}
@@ -3854,6 +3932,15 @@ function _resumeCampaignMission(missionId) {
 
   const missionDef = _activeCampaign.getMissionDef(missionId);
   if (!missionDef) return;
+
+  // A disabled mission is shelved — never playable, never resumable. Even if a
+  // resume row leaked through (a stale mid-mission save of a now-disabled
+  // mission, e.g. the shelved tutorial), refuse to launch it and discard the
+  // stale save so it stops resurfacing.
+  if (_activeCampaign._isMissionDisabled(missionDef)) {
+    deleteCampaignMissionSave(_activeCampaign.campaignDef.id, missionId, slot);
+    return;
+  }
 
   // Sanity guard — if the mission's hasWitch shape changed since the save was
   // written (e.g. M5 flipped from no-witch to witch in the mission-5-7 rework)
@@ -3945,9 +4032,10 @@ async function _showCampaignScreen(campaignDef, autoMissionId, slotIndex = 1) {
     _showMissionBriefing(autoMissionId);
     return;
   }
-  if (_activeCampaign?.campaignDef?.missions?.length === 1) {
+  const _playable = _activeCampaign?.playableMissions?.() ?? [];
+  if (_playable.length === 1) {
     showStep('campaign');
-    const missionId = _activeCampaign.campaignDef.missions[0].id;
+    const missionId = _playable[0].id;
     _campaignSelectedMission = missionId;
     _showMissionBriefing(missionId);
     return;
@@ -4279,8 +4367,8 @@ function _showMissionBriefing(missionId) {
   const winDesc = _objectiveDescription(missionDef.objectives?.win) || 'Complete the mission';
   const loseDesc = _objectiveDescription(missionDef.objectives?.lose) || 'The hero falls';
   (objEl || _legacyEl).innerHTML = `
-    <div class="campaign-obj"><span class="campaign-obj-icon">☀</span> <strong>Victory:</strong> ${winDesc}</div>
-    <div class="campaign-obj"><span class="campaign-obj-icon">💀</span> <strong>Defeat:</strong> ${loseDesc}</div>
+    <div class="campaign-obj"><span class="campaign-obj-icon">${ICON.day}</span> <strong>Victory:</strong> ${winDesc}</div>
+    <div class="campaign-obj"><span class="campaign-obj-icon">${ICON.defeat}</span> <strong>Defeat:</strong> ${loseDesc}</div>
   `;
 
   // Switch roster summary into Active/Reserve deploy mode. The deploy cap is the
@@ -4418,6 +4506,11 @@ function initScenario(def) {
   // Grant the hero leader the Horn key item so a `{ ref:'hero', soundHorn:true }`
   // heroPlan step is valid (the Sound Horn action gates on hasItem('horn')).
   if (def.heroHorn && state.hero && !state.hero.hasItem('horn')) state.hero.addItem('horn');
+  // Visual-testing hook: override a leader's equipped weapon so the
+  // weapon-in-hand renderer (sword/axe/rifle/dagger GLBs) can be screenshotted
+  // per weapon type. The hero leader starts with a sword by default.
+  if (def.heroWeapon && state.hero)   state.hero.equipWeapon(def.heroWeapon);
+  if (def.witchWeapon && state.witch) state.witch.equipWeapon(def.witchWeapon);
   for (const ef of def.witchEffects ?? []) {
     if (!state.witch) break;
     if (typeof ef === 'string') applyEffect(state.witch, ef);
@@ -4459,6 +4552,18 @@ function initScenario(def) {
     state.entities.push(e);
     assignSlotOnTile(state, e);
     if (u.ref) byRef.set(u.ref, e);
+  }
+
+  // Dev hook: a fixed-end (non-looping) day-cycle + a starting round, so the
+  // verifier can screenshot the cycle-bar deadline countdown without grinding a
+  // real campaign mission. cycleConfig: { phases:[…], loop:false }; round: N.
+  if (def.cycleConfig) {
+    state.cycleConfig = { phases: [...def.cycleConfig.phases], loop: !!def.cycleConfig.loop };
+    if (def.disableScoring) state.disableScoring = true;
+  }
+  if (def.round && def.round > 1) {
+    state.round = def.round;
+    state.phase = phaseForRound(state.round, state.cycleConfig);
   }
 
   _setupLocalUI(canvas, null, null, false);  // also drives the loading reveal
@@ -4667,7 +4772,11 @@ function _initCampaignMission(missionDef) {
   // PARTY_CAP (≤3), so no mission can START with more than 3 roster survivors.
   const _maxFromRoster = _effectivePartyCap(missionDef.maxSurvivorsFromRoster, missionDef.id, 'maxSurvivorsFromRoster');
   if (_activeCampaign && _maxFromRoster > 0) {
-    const toDeploy = _activeRosterIndices.slice(0, _maxFromRoster);
+    // Defense-in-depth: when the live working selection is empty (e.g. a caller
+    // launched straight into the mission without visiting the Party screen), fall
+    // back to the player's persisted active party instead of deploying nobody —
+    // otherwise the minSurvivors balancer backfills random generics.
+    const toDeploy = resolveDeployIndices(_activeRosterIndices, _activeCampaign, _maxFromRoster);
     // Place survivors at explicit start positions if the mission specifies
     // them; otherwise fall back to neighbors of the hero's start tile.
     const heroStart = mapData.heroStart;
@@ -4675,7 +4784,10 @@ function _initCampaignMission(missionDef) {
       ? [...missionDef.survivorStartPositions]
       : null;
     const neighbors = getNeighbors(heroStart.col, heroStart.row);
-    const spots = explicitSpots ?? neighbors;
+    // Authored positions first, then hero-neighbours as overflow (deploySpots),
+    // so a mission that authored fewer positions than its start cap still
+    // deploys the full allowed party instead of silently dropping the surplus.
+    const spots = deploySpots(explicitSpots, neighbors);
     for (let i = 0; i < toDeploy.length && i < spots.length; i++) {
       const rosterEntry = _activeCampaign.roster[toDeploy[i]];
       if (!rosterEntry) continue;
@@ -4896,8 +5008,8 @@ function _initCampaignMission(missionDef) {
   const winDesc = _objectiveDescription(missionDef.objectives?.win);
   const loseDesc = _objectiveDescription(missionDef.objectives?.lose);
   state.addLog(`═══ ${missionDef.title} ═══`);
-  state.addLog(`☀ Victory: ${winDesc}`);
-  state.addLog(`💀 Defeat: ${loseDesc}`);
+  state.addLog(`${ICON.day} Victory: ${winDesc}`);
+  state.addLog(`${ICON.defeat} Defeat: ${loseDesc}`);
 
   redraw();
   _enterGameView();
@@ -5021,6 +5133,11 @@ function _handleCampaignMissionEnd() {
       flags: {},
     });
     rewardSummary = _missionResult?.rewards ?? rewardSummary;
+    // The roster was just reordered (deployed-first) and the active-party
+    // selection remapped by name (Campaign.applyMissionResult); resync the
+    // in-memory working copy so the NEXT mission's deploy uses the player's
+    // actual chosen squad, not stale pre-reorder indices.
+    _activeRosterIndices = _activeCampaign.getActiveParty();
   } else {
     // Defeat: restore party to pre-mission state (no permadeath, no stat changes)
     survivors = _activeCampaign.roster;
@@ -5064,7 +5181,7 @@ function _handleCampaignMissionEnd() {
     document.getElementById('debrief-overlay')?.querySelectorAll('.debrief-heal').forEach(el => el.remove());
     if (won && missionDef.healBonus) {
       statsEl.insertAdjacentHTML('afterend',
-        `<div class="debrief-heal">✦ Rest bonus: all survivors healed +${missionDef.healBonus} HP</div>`);
+        `<div class="debrief-heal">\uE09F Rest bonus: all survivors healed +${missionDef.healBonus} HP</div>`);
     }
   }
 
@@ -5355,6 +5472,10 @@ function _gameDetail(row) {
     phaseLabel: _PHASE_NAMES[phase] ?? phase,
     mapSize:    stats?.mapSize ?? row.map_size ?? row.mapSize ?? null,
     thumb:      loadThumb(row.room_id),
+    // The persistent Battle has no first-to-N node goal — the detail panel must
+    // show a Day-vs-Night running total instead of the 4-dot tracker. Flow the
+    // row kind through so _detailStatsHTML can branch (hero=Day, witch=Night).
+    kind:       row.kind ?? null,
   };
   if (!stats) {
     return { ...base, score: null, kills: null, participants: null,
@@ -5384,7 +5505,7 @@ function _renderSpSaves() {
     emptyHtml: '',
     actionsFor: (row) => [
       {
-        icon: '✕',
+        icon: '\uE070',
         title: 'Delete save',
         className: 'mm-action-delete',
         onClick: () => {
@@ -5462,7 +5583,7 @@ async function _fetchActiveSaves() {
       actionsFor: (row) => {
         if (row.kind === 'game' && row.room_id) {
           return [{
-            icon: '✕',
+            icon: '\uE070',
             title: 'Resign',
             className: 'mm-action-delete',
             onClick: () => _confirmResign(row.room_id),
@@ -5470,7 +5591,7 @@ async function _fetchActiveSaves() {
         }
         if (row.kind === 'battle' && row.room_id) {
           return [{
-            icon: '✕',
+            icon: '\uE070',
             title: 'Quit battle',
             className: 'mm-action-delete',
             onClick: () => {
@@ -5686,7 +5807,7 @@ function _renderAsyncGames(games) {
 
   (list || _legacyEl).innerHTML = '';
   for (const g of games) {
-    const factionSymbol = g.my_faction === 'hero' ? '⚔' : '✦';
+    const factionSymbol = g.my_faction === 'hero' ? '\uE000' : '\uE001';
     const phaseLabel = { dawn: 'Dawn', day: 'Day', dusk: 'Dusk', night: 'Night' }[g.phase] ?? g.phase;
     const entry = document.createElement('div');
     entry.className = 'save-entry';
@@ -5744,7 +5865,7 @@ function _renderAsyncGames(games) {
     // Add delete button to every entry
     const delBtn = document.createElement('button');
     delBtn.className = 'setup-btn secondary async-del-btn';
-    delBtn.textContent = '✕';
+    delBtn.textContent = '\uE070';
     delBtn.title = 'Delete game';
     delBtn.addEventListener('click', (e) => { e.stopPropagation(); _deleteAsyncGame(g.room_id); });
     entry.appendChild(delBtn);
@@ -5905,7 +6026,7 @@ function _mmGameListActions(row) {
   switch (row.kind) {
     case 'local-sp':
       return [{
-        icon: '✕',
+        icon: '\uE070',
         title: 'Delete save',
         className: 'mm-action-delete',
         onClick: () => {
@@ -5916,7 +6037,7 @@ function _mmGameListActions(row) {
       }];
     case 'local-campaign':
       return [{
-        icon: '✕',
+        icon: '\uE070',
         title: 'Abandon mission progress',
         className: 'mm-action-delete',
         onClick: () => {
@@ -5930,7 +6051,7 @@ function _mmGameListActions(row) {
     case 'game':
       if (row.room_id) {
         return [{
-          icon: '✕',
+          icon: '\uE070',
           title: 'Resign',
           className: 'mm-action-delete',
           onClick: () => { _confirmResignFromMenu(row.room_id); },
@@ -5940,7 +6061,7 @@ function _mmGameListActions(row) {
     case 'battle':
       if (row.room_id) {
         return [{
-          icon: '✕',
+          icon: '\uE070',
           title: 'Quit battle',
           className: 'mm-action-delete',
           onClick: () => {
@@ -5962,9 +6083,9 @@ function _mmGameListActions(row) {
 function _localSpRows() {
   const saves = _loadSpSaves().filter(s => s.id); // skip stale null-id campaign ghosts
   const modeLabels = {
-    hero: '⚔ vs AI (Hero)',
-    witch: '✦ vs AI (Witch)',
-    'two-players': '👥 Two Players',
+    hero: '\uE000 vs AI (Hero)',
+    witch: '\uE001 vs AI (Witch)',
+    'two-players': '\uE080 Two Players',
   };
   return saves.map(s => ({
     kind: 'local-sp',
@@ -5997,9 +6118,14 @@ function _localCampaignRows() {
   try {
     for (const camp of CAMPAIGNS) {
       if (camp.disabled) continue;
-      const missions = camp.missions || [];
-      // Denominator excludes the tutorial (Mission 0), so the last real mission
-      // reads "Mission 12 / 12" rather than "/13".
+      // Only PLAYABLE (non-disabled) missions may surface a resume row — a
+      // shelved mission (e.g. the disabled tutorial) must never produce a
+      // clickable Continue entry even when a stale mid-mission save lingers in
+      // localStorage. All gameplay enumeration excludes disabled missions; the
+      // viewer lists them greyed via a separate path.
+      const missions = (camp.missions || []).filter(m => !m.disabled);
+      // Denominator excludes disabled missions (the tutorial today), so the last
+      // real mission reads "Mission 12 / 12" rather than "/13".
       const missionTotal = _campaignMissionTotal(camp);
 
       // Continue tracks ONE playthrough per campaign — the persisted active slot
@@ -6009,7 +6135,7 @@ function _localCampaignRows() {
       const slot = getActiveSlot(camp.id);
       const hasMidMissionSave = new Set();
 
-      // 1. Scan missions for any that have a mid-mission save file in this slot
+      // 1. Scan playable missions for any with a mid-mission save in this slot
       for (const m of missions) {
         const save = loadCampaignMissionSave(camp.id, m.id, slot);
         if (!save) continue;
@@ -6018,7 +6144,7 @@ function _localCampaignRows() {
         rows.push({
           kind: 'local-campaign',
           room_id: campaignMissionRowId(camp.id, slot, m.id),
-          title: `📖 ${m.title || m.id}`,
+          title: `${ICON.book} ${m.title || m.id}`,
           round: null,
           phase: null,
           action_needed: false,
@@ -6049,7 +6175,7 @@ function _localCampaignRows() {
       rows.push({
         kind: 'campaign-next',
         room_id: campaignMissionRowId(camp.id, slot, nextId),
-        title: `📖 ${camp.title}`,
+        title: `${ICON.book} ${camp.title}`,
         action_needed: false,
         turn_deadline: null,
         updated_at: c.updatedAt ? Math.floor(c.updatedAt / 1000) : 0,
@@ -6121,7 +6247,7 @@ async function _fetchAllGames() {
     if (pps <= 1) {
       const myFaction = s.hero_player_id === session?.id ? 'hero' : 'witch';
       const oppName = myFaction === 'hero' ? (s.witch_name || 'Witch') : (s.hero_name || 'Hero');
-      const sym = myFaction === 'hero' ? '⚔' : '✦';
+      const sym = myFaction === 'hero' ? '\uE000' : '\uE001';
       title = `${sym} vs ${oppName}`;
     } else {
       title = `${pps}v${pps} Game`;
@@ -6151,7 +6277,7 @@ async function _fetchAllGames() {
     rows.push({
       kind: 'battle',
       room_id: b.roomId,
-      title: '⚔✦ Battle for Caleb\'s Hollow',
+      title: '\uE000\uE001 Battle for Caleb\'s Hollow',
       round: b.round,
       action_needed: !b.mySubmitted,
       turn_deadline: b.turnDeadline ?? null,
@@ -6167,7 +6293,7 @@ async function _fetchAllGames() {
     rows.push({
       kind: 'battle-invite',
       room_id: null,
-      title: '⚔✦ Battle for Caleb\'s Hollow',
+      title: '\uE000\uE001 Battle for Caleb\'s Hollow',
       round: null,
       action_needed: false,
       turn_deadline: null,
@@ -6263,13 +6389,13 @@ async function _renderReplaysList() {
   try {
     _pruneCompletedSpGames();
     const index = _loadCompletedSpIndex();
-    const modeLabels = { hero: '⚔ vs AI', witch: '✦ vs AI', 'two-players': '👥 Two Players' };
+    const modeLabels = { hero: '\uE000 vs AI', witch: '\uE001 vs AI', 'two-players': '\uE080 Two Players' };
     for (const g of index) {
       const winnerLabel = g.winner === 'hero' ? 'Hero wins' : 'Witch wins';
       rows.push({
         kind: 'completed-sp',
         room_id: g.id,
-        title: `${modeLabels[g.mode] ?? g.mode} — ${winnerLabel}${g.pinned ? ' 📌' : ''}`,
+        title: `${modeLabels[g.mode] ?? g.mode} — ${winnerLabel}${g.pinned ? ' \uE07C' : ''}`,
         win_reason: g.winReason,
         total_rounds: g.totalRounds,
         action_needed: false,
@@ -6301,14 +6427,14 @@ async function _renderReplaysList() {
             myFaction = g.hero_player_id === session?.id ? 'hero' : 'witch';
           }
           const resultLabel = g.winner === myFaction ? 'Victory' : 'Defeat';
-          const winnerIcon  = g.winner === 'hero' ? '⚔' : '✦';
+          const winnerIcon  = g.winner === 'hero' ? '\uE000' : '\uE001';
           const title = pps > 1
             ? `${winnerIcon} ${pps}v${pps} — ${resultLabel}`
             : `${winnerIcon} ${g.hero_name} vs ${g.witch_name} — ${resultLabel}`;
           rows.push({
             kind: 'completed-mp',
             room_id: g.game_id,
-            title: title + (g.pinned ? ' 📌' : ''),
+            title: title + (g.pinned ? ' \uE07C' : ''),
             win_reason: g.win_reason,
             total_rounds: g.total_rounds,
             action_needed: false,
@@ -6328,12 +6454,12 @@ async function _renderReplaysList() {
         const meta = row._completedMeta;
         return [
           {
-            icon: meta.pinned ? '📌' : '📎',
+            icon: meta.pinned ? '\uE07C' : '\uE07D',
             title: meta.pinned ? 'Unpin' : 'Pin to keep',
             onClick: () => { _pinCompletedSpGame(meta.id, !meta.pinned); _renderReplaysList(); },
           },
           {
-            icon: '✕',
+            icon: '\uE070',
             title: 'Delete',
             className: 'mm-action-delete',
             onClick: () => { _deleteCompletedSpGame(meta.id); _renderReplaysList(); },
@@ -6346,7 +6472,7 @@ async function _renderReplaysList() {
         const token = session?.token;
         return [
           {
-            icon: meta.pinned ? '📌' : '📎',
+            icon: meta.pinned ? '\uE07C' : '\uE07D',
             title: meta.pinned ? 'Unpin' : 'Pin to keep',
             onClick: async () => {
               await fetch(
@@ -6361,7 +6487,7 @@ async function _renderReplaysList() {
             },
           },
           {
-            icon: '✕',
+            icon: '\uE070',
             title: 'Delete',
             className: 'mm-action-delete',
             onClick: async () => {
@@ -6422,7 +6548,7 @@ function _fetchMainMenuAsyncGames() {
       (box || _legacyEl).style.display = '';
       (list || _legacyEl).innerHTML = '';
       for (const g of actionable) {
-        const factionSymbol = g.my_faction === 'hero' ? '⚔' : '✦';
+        const factionSymbol = g.my_faction === 'hero' ? '\uE000' : '\uE001';
         const item = document.createElement('div');
         item.className = 'menu-async-item';
 
@@ -6952,22 +7078,22 @@ function _renderCompletedSpGames() {
     (list || _legacyEl).innerHTML = '<p class="saves-empty">No completed games yet.</p>';
     return;
   }
-  const modeLabels = { hero: '⚔ vs AI', witch: '✦ vs AI', 'two-players': '👥 Two Players' };
+  const modeLabels = { hero: '\uE000 vs AI', witch: '\uE001 vs AI', 'two-players': '\uE080 Two Players' };
   (list || _legacyEl).innerHTML = '';
   for (const g of index) {
-    const winnerLabel = g.winner === 'hero' ? '⚔ Hero wins' : '✦ Witch wins';
+    const winnerLabel = g.winner === 'hero' ? '\uE000 Hero wins' : '\uE001 Witch wins';
     const ago = _timeAgo(g.createdAt);
     const entry = document.createElement('div');
     entry.className = 'save-entry';
     entry.innerHTML = `
       <div class="save-entry-info">
         <div class="save-entry-title">${modeLabels[g.mode] ?? g.mode} — ${winnerLabel}</div>
-        <div class="save-entry-meta">${_esc(g.winReason)} · ${g.totalRounds} rounds · ${ago}${g.pinned ? ' 📌' : ''}</div>
+        <div class="save-entry-meta">${_esc(g.winReason)} · ${g.totalRounds} rounds · ${ago}${g.pinned ? ' \uE07C' : ''}</div>
       </div>
       <div style="display:flex;gap:0.4rem">
         <button class="setup-btn primary sp-completed-replay-btn">Replay</button>
-        <button class="setup-btn sp-completed-pin-btn"   title="${g.pinned ? 'Unpin' : 'Pin to keep'}">${g.pinned ? '📌' : '📎'}</button>
-        <button class="setup-btn sp-completed-delete-btn" title="Delete">✕</button>
+        <button class="setup-btn sp-completed-pin-btn"   title="${g.pinned ? 'Unpin' : 'Pin to keep'}">${g.pinned ? '\uE07C' : '\uE07D'}</button>
+        <button class="setup-btn sp-completed-delete-btn" title="Delete">${ICON.close}</button>
       </div>
     `;
     entry.querySelector('.sp-completed-replay-btn').addEventListener('click', async () => {
@@ -7105,19 +7231,19 @@ function _renderCompletedGames(games, session) {
     }
 
     const winnerLabel = g.winner === myFaction ? 'Victory' : 'Defeat';
-    const winnerIcon  = g.winner === 'hero' ? '⚔' : '✦';
+    const winnerIcon  = g.winner === 'hero' ? '\uE000' : '\uE001';
     const ago = _timeAgo(g.created_at);
     const entry = document.createElement('div');
     entry.className = 'save-entry';
     entry.innerHTML = `
       <div class="save-entry-info">
         <div class="save-entry-title">${winnerIcon} ${title} — ${winnerLabel}</div>
-        <div class="save-entry-meta">${_esc(g.win_reason)} · ${g.total_rounds} rounds · ${ago}${g.pinned ? ' 📌' : ''}</div>
+        <div class="save-entry-meta">${_esc(g.win_reason)} · ${g.total_rounds} rounds · ${ago}${g.pinned ? ' \uE07C' : ''}</div>
       </div>
       <div style="display:flex;gap:0.4rem">
         <button class="setup-btn primary mp-completed-replay-btn">Replay</button>
-        <button class="setup-btn mp-completed-pin-btn"   title="${g.pinned ? 'Unpin' : 'Pin to keep'}">${g.pinned ? '📌' : '📎'}</button>
-        <button class="setup-btn mp-completed-delete-btn" title="Delete">✕</button>
+        <button class="setup-btn mp-completed-pin-btn"   title="${g.pinned ? 'Unpin' : 'Pin to keep'}">${g.pinned ? '\uE07C' : '\uE07D'}</button>
+        <button class="setup-btn mp-completed-delete-btn" title="Delete">${ICON.close}</button>
       </div>
     `;
     entry.querySelector('.mp-completed-replay-btn').addEventListener('click', async () => {
@@ -7293,21 +7419,21 @@ async function _showBattleScreen() {
       // Your status box
       const myBox = document.getElementById('battle-my-status');
       (myBox || _legacyEl).style.display = '';
-      const fIcon = my.myFaction === 'hero' ? '⚔' : '✦';
+      const fIcon = my.myFaction === 'hero' ? '\uE000' : '\uE001';
       const fName = my.myFaction === 'hero' ? 'Hero' : 'Witch';
       (document.getElementById('battle-my-faction') || _legacyEl).innerHTML =
         `<span style="color:var(--${my.myFaction})">${fIcon} Fighting as ${fName}</span>`;
       if (my.mySubmitted) {
         (document.getElementById('battle-my-plan-status') || _legacyEl).innerHTML =
-          '<span style="color:var(--green)">✓ Plan submitted</span>';
+          '<span style="color:var(--green)">\uE071 Plan submitted</span>';
       } else {
         (document.getElementById('battle-my-plan-status') || _legacyEl).innerHTML =
-          '<span style="color:var(--day)">⚠ Plan not yet submitted</span>';
+          '<span style="color:var(--day)">\uE083 Plan not yet submitted</span>';
       }
       if (my.turnDeadline) {
         const deadlineEl = document.getElementById('battle-my-deadline');
         const secsLeft = my.turnDeadline - Math.floor(Date.now() / 1000);
-        (deadlineEl || _legacyEl).textContent = '⏱ Deadline in ' + _formatTimeRemaining(my.turnDeadline);
+        (deadlineEl || _legacyEl).textContent = '\uE0B6 Deadline in ' + _formatTimeRemaining(my.turnDeadline);
         (deadlineEl || _legacyEl).style.color = secsLeft <= 1800 ? 'var(--red)' : 'var(--text-dim)';
       }
 
@@ -7404,7 +7530,7 @@ async function _showBattleScreen() {
           <td style="padding:0.3rem;text-align:right">${b.total_rounds}</td>
           <td style="padding:0.3rem;text-align:right">
             <a href="/replay?replayGame=${encodeURIComponent(b.game_id)}&source=mp" target="_blank"
-               class="setup-btn" style="padding:0.15rem 0.5rem;font-size:0.7rem">Replay</a>
+               class="setup-btn" style="padding:0.15rem 0.5rem;font-size:var(--fs-xs)">Replay</a>
           </td>
         </tr>`;
       }).join('');
@@ -7422,32 +7548,6 @@ async function _showBattleScreen() {
 
 // ── Online flow ───────────────────────────────────────────────────────────────
 
-
-// ── Node count selectors — populate options based on map size ─────────────────
-
-function _populateNodeCountSelect(selectId, mapSizeSelectId) {
-  const mapSizeEl  = document.getElementById(mapSizeSelectId);
-  const nodeEl     = document.getElementById(selectId);
-  if (!mapSizeEl || !nodeEl) return;
-  const cfg        = MAP_SIZES[mapSizeEl.value] ?? MAP_SIZES.standard;
-  const min        = cfg.nodeCountMin ?? 1;
-  const max        = cfg.nodeCountMax ?? cfg.nodeCount ?? 3;
-  const current    = parseInt(nodeEl.value, 10);
-  nodeEl.innerHTML = '';
-  for (let i = min; i <= max; i++) {
-    const opt = document.createElement('option');
-    opt.value = String(i);
-    opt.textContent = String(i);
-    if (i === cfg.nodeCount) opt.selected = true;
-    nodeEl.appendChild(opt);
-  }
-  // Restore previous selection if still in range; otherwise default
-  if (current >= min && current <= max) nodeEl.value = String(current);
-}
-
-// Initialize on load
-_populateNodeCountSelect('select-node-count', 'select-map-size');
-_populateNodeCountSelect('cg-node-count', 'cg-map-size');
 
 // ── Create Game flow ──────────────────────────────────────────────────────────
 
@@ -7623,7 +7723,7 @@ function _renderPublicLobbies(rooms) {
     entry.className = 'save-entry save-entry-joinable';
     entry.innerHTML = `
       <div class="save-entry-info">
-        <div class="save-entry-title">⚔ ${_esc(host)}'s game</div>
+        <div class="save-entry-title">${ICON.hero} ${_esc(host)}'s game</div>
         <div class="save-entry-meta">${pps}v${pps} · ${_esc(mapLabel)} · ${modeLabel} · ${statusLabel}</div>
       </div>
     `;
@@ -7690,7 +7790,7 @@ function _renderLobby(lobby) {
   if (isNativeMobile && linkWrap) {
     const shareBtn = document.createElement('button');
     shareBtn.className = 'setup-btn lobby-share-btn';
-    shareBtn.style.cssText = 'font-size:0.8rem;margin-left:0.3rem';
+    shareBtn.style.cssText = 'font-size:var(--fs-sm);margin-left:0.3rem';
     shareBtn.textContent = '↗ Share';
     shareBtn.addEventListener('click', () => {
       shareInvite("Join my game of Caleb's Hollow!", inviteUrl);
@@ -7741,7 +7841,7 @@ function _renderLobby(lobby) {
   const container = document.createElement('div');
   container.className = 'lobby-factions';
 
-  for (const [label, icon, slots] of [['Day Side', '☀', daySlots], ['Night Side', '🌙', nightSlots]]) {
+  for (const [label, icon, slots] of [['Day Side', '\uE021', daySlots], ['Night Side', '\uE023', nightSlots]]) {
     const col = document.createElement('div');
     col.className = 'lobby-faction-col';
     col.innerHTML = `<div class="lobby-faction-label">${icon} ${label}</div>`;
@@ -7756,12 +7856,12 @@ function _renderLobby(lobby) {
                         _lobbyFactionTag(slot, isMe);
         if (isMe) row.appendChild(_buildLobbyFactionPicker(lobby, slot));
       } else if (slot.status === 'ai') {
-        row.innerHTML = `<span class="lobby-slot-name ai-slot">🤖 ${_esc(slot.name ?? 'AI')}</span>` +
+        row.innerHTML = `<span class="lobby-slot-name ai-slot">${ICON.bot} ${_esc(slot.name ?? 'AI')}</span>` +
                         _lobbyFactionTag(slot, false);
         if (isHost) {
           const removeBtn = document.createElement('button');
           removeBtn.className = 'setup-btn secondary lobby-slot-btn';
-          removeBtn.textContent = '✕';
+          removeBtn.textContent = '\uE070';
           removeBtn.addEventListener('click', () => {
             mp.removeSlotAI(lobby.id, slot.seatIndex + (slot.faction === 'witch' ? pps : 0));
           });
@@ -7788,7 +7888,7 @@ function _renderLobby(lobby) {
           // Invite button
           const inviteBtn = document.createElement('button');
           inviteBtn.className = 'setup-btn secondary lobby-slot-btn';
-          inviteBtn.textContent = '✉ Invite';
+          inviteBtn.textContent = '\uE082 Invite';
           inviteBtn.addEventListener('click', () => {
             const slotIdx = lobby.slots.indexOf(slot);
             _showSlotInvitePopup(lobby, slotIdx, slot.faction, inviteBtn);
@@ -7847,7 +7947,7 @@ function _renderLobby(lobby) {
     hintEl = document.createElement('p');
     (hintEl || _legacyEl).id = 'lobby-open-slots-hint';
     (hintEl || _legacyEl).className = 'setup-lore';
-    (hintEl || _legacyEl).style.cssText = 'font-size:0.8rem;margin-top:0.5rem;opacity:0.7';
+    (hintEl || _legacyEl).style.cssText = 'font-size:var(--fs-sm);margin-top:0.5rem;opacity:0.7';
     (grid || _legacyEl).parentNode.insertBefore(hintEl, (grid || _legacyEl).nextSibling?.nextSibling);
   }
 
@@ -7922,11 +8022,11 @@ function _showSlotInvitePopup(lobby, slotIndex, faction, anchorEl) {
   popup.innerHTML = `
     ${friendsSection}
     <input type="email" class="setup-input" placeholder="Email address" autocomplete="email"
-           style="font-size:0.8rem;margin:0">
+           style="font-size:var(--fs-sm);margin:0">
     <div style="display:flex;gap:0.3rem;margin-top:0.3rem">
-      <button class="setup-btn primary" style="font-size:0.75rem;flex:1">Send</button>
-      <button class="setup-btn" style="font-size:0.75rem;flex:1">Copy Link</button>
-      ${isNativeMobile ? '<button class="setup-btn" style="font-size:0.75rem;flex:1">Share</button>' : ''}
+      <button class="setup-btn primary" style="font-size:var(--fs-xs);flex:1">Send</button>
+      <button class="setup-btn" style="font-size:var(--fs-xs);flex:1">Copy Link</button>
+      ${isNativeMobile ? '<button class="setup-btn" style="font-size:var(--fs-xs);flex:1">Share</button>' : ''}
     </div>
   `;
   const buttons = popup.querySelectorAll('button');
@@ -8641,12 +8741,12 @@ function _createMpClient() {
       showStep('waiting');
       if (resumed) {
         (document.getElementById('waiting-subtitle') || _legacyEl).textContent =
-          `Resuming as ${faction === 'hero' ? 'Hero ⚔' : 'Witch ✦'}`;
+          `Resuming as ${faction === 'hero' ? 'Hero \uE000' : 'Witch \uE001'}`;
         (document.getElementById('waiting-message') || _legacyEl).textContent =
           `Restored! Starting game…`;
       } else {
         (document.getElementById('waiting-subtitle') || _legacyEl).textContent =
-          `Game starting as ${faction === 'hero' ? 'Hero ⚔' : 'Witch ✦'}`;
+          `Game starting as ${faction === 'hero' ? 'Hero \uE000' : 'Witch \uE001'}`;
         (document.getElementById('waiting-message') || _legacyEl).textContent =
           `Starting game…`;
       }
@@ -9270,8 +9370,8 @@ function _updateSpectatorInfoBar(players, st) {
   if (players) {
     const heroNames  = players.filter(p => p.faction === 'hero').map(p => p.name).join(', ');
     const witchNames = players.filter(p => p.faction === 'witch').map(p => p.name).join(', ');
-    document.getElementById('sp-hero').textContent  = `⚔ ${heroNames  || 'Hero'}`;
-    document.getElementById('sp-witch').textContent = `✦ ${witchNames || 'Witch'}`;
+    document.getElementById('sp-hero').textContent  = `${ICON.hero} ${heroNames  || 'Hero'}`;
+    document.getElementById('sp-witch').textContent = `${ICON.witch} ${witchNames || 'Witch'}`;
   }
   _updateSpectatorRoundLabel(st);
 }
@@ -9301,12 +9401,12 @@ function _renderSpectatorReadyList(players, submittedIds) {
     const submitted = submittedIds.has(p.playerId);
     const fCls      = `sp-ready-faction-${p.faction}`;
     const dotCls    = submitted ? 'sp-ready-dot submitted' : 'sp-ready-dot';
-    const status    = submitted ? '✓' : '…';
+    const status    = submitted ? '\uE071' : '…';
     const safeName  = String(p.name).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     return `<div class="sp-ready-row">
       <span class="${dotCls}"></span>
       <span class="sp-ready-name ${fCls}" title="${safeName}">${safeName}</span>
-      <span style="font-size:0.72rem;color:${submitted ? 'var(--green)' : 'var(--text-dim)'}">${status}</span>
+      <span style="font-size:var(--fs-xs);color:${submitted ? 'var(--green)' : 'var(--text-dim)'}">${status}</span>
     </div>`;
   }).join('');
 }
@@ -9336,6 +9436,13 @@ const _genThumbParam = new URLSearchParams(location.search).get('genMissionThumb
 if (_genThumbParam) {
   (async () => {
     try {
+      // The standalone Learn-to-Play tutorial isn't a campaign mission — boot its
+      // board directly (fog cleared so the whole map shows in the card image).
+      if (_genThumbParam === 'learn') {
+        _startLearnToPlay();
+        if (state) { state.fogOfWar = 'none'; redraw(); }
+        return;
+      }
       const camp = CAMPAIGNS.find(c => !c.disabled && (c.missions || []).some(m => m.id === _genThumbParam));
       if (!camp) { console.error('genMissionThumb: no campaign has mission', _genThumbParam); return; }
       _activeCampaign = new Campaign(camp, 1);
@@ -9361,11 +9468,11 @@ async function _collectReplayRows() {
   const rows = [];
   try {
     _pruneCompletedSpGames();
-    const modeLabels = { hero: '⚔ vs AI', witch: '✦ vs AI', 'two-players': '👥 Two Players' };
+    const modeLabels = { hero: '\uE000 vs AI', witch: '\uE001 vs AI', 'two-players': '\uE080 Two Players' };
     for (const g of _loadCompletedSpIndex()) {
       const winnerLabel = g.winner === 'hero' ? 'Hero wins' : 'Witch wins';
       rows.push({ kind: 'completed-sp', room_id: g.id, win_reason: g.winReason,
-        title: `${modeLabels[g.mode] ?? g.mode} — ${winnerLabel}${g.pinned ? ' 📌' : ''}`,
+        title: `${modeLabels[g.mode] ?? g.mode} — ${winnerLabel}${g.pinned ? ' \uE07C' : ''}`,
         total_rounds: g.totalRounds, action_needed: false, turn_deadline: null,
         updated_at: g.createdAt ?? 0, is_local: true, _completedMeta: g });
     }
@@ -9382,9 +9489,9 @@ async function _collectReplayRows() {
           ? (players.find(p => p.playerId === session?.id)?.faction ?? 'hero')
           : (g.hero_player_id === session?.id ? 'hero' : 'witch');
         const resultLabel = g.winner === myFaction ? 'Victory' : 'Defeat';
-        const icon = g.winner === 'hero' ? '⚔' : '✦';
+        const icon = g.winner === 'hero' ? '\uE000' : '\uE001';
         rows.push({ kind: 'completed-mp', room_id: g.game_id, win_reason: g.win_reason,
-          title: (pps > 1 ? `${icon} ${pps}v${pps} — ${resultLabel}` : `${icon} ${g.hero_name} vs ${g.witch_name} — ${resultLabel}`) + (g.pinned ? ' 📌' : ''),
+          title: (pps > 1 ? `${icon} ${pps}v${pps} — ${resultLabel}` : `${icon} ${g.hero_name} vs ${g.witch_name} — ${resultLabel}`) + (g.pinned ? ' \uE07C' : ''),
           total_rounds: g.total_rounds, action_needed: false, turn_deadline: null,
           updated_at: g.created_at ?? 0, _replayMeta: g });
       }
@@ -9414,6 +9521,11 @@ function _ledgerCampaignData() {
       resumeMissionId,
       missions: (c.getMissionList?.() ?? []).map(m => ({
         id: m.id, title: m.title, completed: !!m.completed, available: !!m.available,
+        disabled: !!m.disabled,
+        // Stable catalog number (tutorial=0, prologue=1, …) — NOT the list position,
+        // so dropping disabled missions doesn't renumber the survivors. Matches the
+        // briefing's "Mission N" and the on-disk Ch1M<N> files.
+        number: _campaignMissionNumber(camp, m.id) ?? 0,
         chapter: c.getMissionDef?.(m.id)?.chapter ?? 1,
         briefing: c.getMissionDef?.(m.id)?.briefing ?? '',
       })),
@@ -9445,6 +9557,13 @@ async function _ledgerStartCampaignMission(slotIndex, missionId, resume = false)
   const id = missionId || _activeCampaign.getNextMission?.();
   const missionDef = id && _activeCampaign.getMissionDef?.(id);
   if (!missionDef) return;
+  // Seed the working active-squad selection from the persisted choice before
+  // launching. The Ledger "Begin Mission" path skips the Party screen (where
+  // _activeRosterIndices is normally populated), so without this the fresh-launch
+  // deploy loop reads an empty selection and the player's chosen party never
+  // deploys — the minSurvivors balancer backfills random generics instead.
+  // Harmless on the resume path (which restores the saved entity list directly).
+  _seedActiveRosterForProgress();
   document.getElementById('ledger-screen')?.classList.remove('is-active'); // hand off to the game
   await _loadCampaignPortraits?.();
   if (resume) _resumeCampaignMission(id);
@@ -9507,6 +9626,83 @@ function _ledgerStartSkirmish(factionId, opts = {}) {
   init(/*witchIsAI*/ isDay, /*heroIsAI*/ !isDay, /*autoplay*/ false, factionId, { ...opts, enemyFactionId });
 }
 
+// ── Learn to Play (standalone guided tutorial) ──────────────────────────────
+// A self-contained onboarding flow, NOT a campaign mission: a fixed smallest-size
+// map, the MissionConductor steering the first three rounds with strict click /
+// action gating, then a handoff to the witch AI for a real, winnable battle.
+function _startLearnToPlay() {
+  _autoplay = false;
+  _gameStartTime = Date.now();
+  _missionConductor?.destroy();
+  _missionConductor = null;
+  _activeCampaign   = null;
+  _activeMissionDef = null;
+  _roundHistory     = [];
+  _spSaveId         = null;   // never persists to the Continue feed
+
+  document.getElementById('ledger-screen')?.classList.remove('is-active');
+  document.getElementById('setup-screen').style.display = 'none';
+  document.getElementById('game-screen').style.display  = 'flex';
+  const canvas = document.getElementById('game-canvas');
+
+  const mapData = buildLearnMap();
+  state = new GameState(false /* witchIsAI */, false /* heroIsAI */, 'tutorial', null, mapData);
+  state.fogOfWar = 'partial';   // so the Witch's forces "appear" as they close in
+
+  // A melee townsperson who shares the hero's tile + Isaac the archer, plus the
+  // Witch's two (fragile) zombies. Shared with the validation test.
+  placeLearnUnits(state);
+
+  // Starting wood so the fortify lesson is affordable.
+  state.inventory.hero = normalizeItems({ wood: 2, food: 1 });
+
+  witchAI = null; heroAI = null;
+  _setupLocalUI(canvas, null, null, false);
+  // Verification probes (mirror the campaign loader); inert in normal play.
+  if (typeof window !== 'undefined') {
+    if (!Object.getOwnPropertyDescriptor(window, '__ui')) {
+      Object.defineProperty(window, '__ui', { configurable: true, get: () => ui });
+    }
+    window.__learnState = state;
+    window.__renderer3d = renderer;
+  }
+  ui.tutorialMode = true;
+  ui.onPlanActionAdded = (action) => _missionConductor?.onActionQueued(action);
+  ui.onEntitySelected  = (entity) => _missionConductor?.onEntitySelected(entity);
+  ui._setChronicleOpen(false);
+
+  _missionConductor = new MissionConductor(
+    state, ui, renderer, redraw, LEARN_STEPS,
+    { ...LEARN_CONDUCTOR_CONFIG, onHandoff: () => _learnHandoff() },
+  );
+
+  redraw();
+  _enterGameView();
+  _missionConductor.start();
+  _startLocalPlanningPhase();
+}
+
+// Release the guided overlay and let the Witch fight as a normal AI from here:
+// the tiny map plays out as a real, winnable game (hold the node to 4 points or
+// slay the Witch). Fired by the conductor's `handoff` step.
+function _learnHandoff() {
+  _missionConductor = null;          // already destroyed itself before this fires
+  if (ui) ui.tutorialMode = false;
+  state.witchIsAI = true;            // _enterLocalPlanningMode routes to the AI submit path
+  // Keep the free-play battle winnable for a first-timer: strip the witch's
+  // summon resources and hard-cap her total summons so she can't immediately
+  // raise golems / a horde for the rest of the fight.
+  state.inventory.witch = normalizeItems({});
+  state.maxWitchSummons = 2;
+  witchAI = new WitchAIEngine(state, redraw);
+  witchAI.onBattleResult = (actorSnap, targetSnap, result) =>
+    new Promise(resolve => ui._showBattleDialog(actorSnap, targetSnap, result, resolve));
+  const resignBtn = document.getElementById('menu-resign-btn');
+  if (resignBtn) resignBtn.style.display = '';
+  ui.onResignGame = () => _resignLocalGame('hero');
+  _enterLocalPlanningMode();
+}
+
 // Online snapshot for Play With Others: signed-in flag, live games, and the
 // active Battle row (if any). Derived from the same unified feed as Continue.
 async function _ledgerOnline() {
@@ -9544,6 +9740,54 @@ function _ledgerCampaignParty(slot) {
   const started = _activeCampaign.load();
   _seedActiveRosterForProgress();
   return { started, title: camp.title, html: _ledgerPartyHTML() };
+}
+
+// Read-only "who deploys this mission" preview for the Begin Mission screen.
+// Loads the campaign on the chosen slot, then:
+//   - RESUME (a compatible mid-mission save exists): preview the SAVED snapshot's
+//     party — the units actually on the board (the player may have edited their
+//     squad or a survivor leveled since the save), so the fresh deploy set could
+//     mislead. buildSavedPartyPreview maps the snapshot's hero-faction entities.
+//   - NEW start (no save): seed the working squad exactly as the launch path does,
+//     then resolve the deploy set through the SAME resolveDeployIndices() call
+//     _initCampaignMission uses — so the displayed party CANNOT drift from what
+//     actually deploys ("what you see is what deploys").
+// Returns null when there's no campaign/mission (the strip is then skipped).
+function _ledgerBeginMissionParty(slot, missionId) {
+  const camp = CAMPAIGNS.find(c => !c.disabled) || CAMPAIGNS[0];
+  if (!camp) return null;
+  _activeCampaign = new Campaign(camp, slot);
+  _activeCampaign.load();
+  const missionDef = missionId && _activeCampaign.getMissionDef?.(missionId);
+  if (!missionDef) return null;
+  // RESUME: a compatible mid-mission save means the briefing is "RESUMING SAVE"
+  // (loadCampaignMissionSave discards an incompatible one → falls back to fresh).
+  // Preview the actual saved party, not the freshly-resolved deploy set.
+  const save = loadCampaignMissionSave(camp.id, missionId, slot ?? _activeCampaign.slotIndex);
+  if (save?.state) {
+    const preview = _buildSavedPartyPreview(save.state);
+    if (preview.length > 0) return preview;
+    // A structurally odd snapshot (no hero-faction units) shouldn't blank the
+    // strip — fall through to the fresh deploy preview below.
+  }
+  // NEW start: seed the live working selection from the persisted squad (the
+  // Ledger path skips the Party screen), mirroring _ledgerStartCampaignMission.
+  _seedActiveRosterForProgress();
+  const maxFromRoster = _effectivePartyCap(
+    missionDef.maxSurvivorsFromRoster, missionDef.id, 'maxSurvivorsFromRoster');
+  const toDeploy = resolveDeployIndices(_activeRosterIndices, _activeCampaign, maxFromRoster);
+  return _buildDeployPartyPreview(_activeCampaign.heroStats, _activeCampaign.roster, toDeploy);
+}
+
+// Abandon a mid-mission save so the next Begin starts the mission FRESH. This
+// deletes ONLY the mission-in-progress localStorage key (deleteCampaignMissionSave)
+// — it must NEVER call Campaign.delete(), which would wipe the entire playthrough
+// (roster, progress, resources). That total wipe is the slot ✕ (deleteCampaignSlot).
+// Mirrors the _ledgerAbandonRow 'local-campaign' branch.
+function _ledgerAbandonMissionSave(slot, missionId) {
+  const camp = CAMPAIGNS.find(c => !c.disabled) || CAMPAIGNS[0];
+  if (!camp || !missionId) return;
+  deleteCampaignMissionSave(camp.id, missionId, slot ?? 1);
 }
 
 function _ledgerPartyAction(kind, target, weapon) {
@@ -9698,6 +9942,10 @@ function _buildLedgerData() {
     },
     startMission:     (slot, missionId, resume) => _ledgerStartCampaignMission(slot, missionId, resume),
     campaignParty:    (slot) => _ledgerCampaignParty(slot),
+    // Read-only "who deploys" preview for the Begin Mission screen (== deploy set).
+    beginMissionParty: (slot, missionId) => _ledgerBeginMissionParty(slot, missionId),
+    // Delete ONLY the mid-mission save (not the playthrough) so Begin starts fresh.
+    abandonMissionSave: (slot, missionId) => _ledgerAbandonMissionSave(slot, missionId),
     deleteCampaignSlot: (slot) => {
       const camp = CAMPAIGNS.find(c => !c.disabled) || CAMPAIGNS[0];
       if (!camp) return;
@@ -9708,6 +9956,7 @@ function _buildLedgerData() {
     partyAction:      (kind, target, weapon) => _ledgerPartyAction(kind, target, weapon),
     skirmishFactions: () => _ledgerSkirmishFactions(),
     startSkirmish:    (factionId, opts) => _ledgerStartSkirmish(factionId, opts),
+    startLearnToPlay: () => _startLearnToPlay(),
     online:           () => _ledgerOnline(),
     signOut:          () => _signOut(),
     activate:         (row) => _mmDefaultRowClick(row),   // resume / open / replay
@@ -9741,10 +9990,10 @@ function _buildLedgerData() {
     ss?.style.setProperty('display', 'none');
     import('./menu/ledger.js').then(({ initLedger }) => {
       const session = loadSession();
-      // Land a brand-new player (nothing to resume) on Campaign so they head
-      // straight for the tutorial; anyone with a game in progress opens on
-      // Continue. Uses the same active-slot-aware continuable check.
-      const start = hasContinuableGames() ? 'continue' : 'campaign';
+      // Everyone opens on Continue: returning players resume in-progress games,
+      // and brand-new players (nothing to resume) see the Learn to Play card as
+      // the headline there — the first thing a first-timer sees.
+      const start = 'continue';
       const api = initLedger({ playerName: session?.username || 'Wanderer', data: _buildLedgerData(), start });
       // Stash the api module-side so the campaign debrief's Continue can route
       // back into the Campaign panel (api.show() + api.select('campaign')) without
@@ -9755,6 +10004,8 @@ function _buildLedgerData() {
       // can reach a specific mission's debrief. Inert in normal play.
       window.__startCampaignMission = (missionId, slot = 1, resume = false) =>
         _ledgerStartCampaignMission(slot, missionId, resume);
+      // Verification hook: launch the standalone Learn-to-Play tutorial directly.
+      window.__startLearnToPlay = () => _startLearnToPlay();
       api?.show();
       // Re-show the ledger if anything reveals the legacy #setup-screen (e.g.
       // game-over → back to menu) while we're not in a game.

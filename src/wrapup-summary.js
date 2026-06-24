@@ -9,10 +9,11 @@
 // glyph fallback for portrait-less units lives here.
 
 import { ENTITY_COLOR } from './entities.js';
+import { ICON } from './icons.js';
 
 export const WRAPUP_GLYPHS = Object.freeze({
-  hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟',
-  zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙',
+  hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003',
+  zombie: '\uE005', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007',
 });
 
 /**
@@ -38,7 +39,7 @@ export function wrapupIconHtml(u, { src = null, cls = 'wrapup-unit-icon' } = {})
  */
 export function wrapupUnitCellHtml(u, iconHtml) {
   const effect = u.killed
-    ? `<div class="wrapup-dmg kill">☠ DIED</div>`
+    ? `<div class="wrapup-dmg kill">\uE097 DIED</div>`
     : (u.hpLost > 0 ? `<div class="wrapup-dmg">−${u.hpLost}</div>` : `<div class="wrapup-dmg none">—</div>`);
   return `<div class="wrapup-unit">${iconHtml}${effect}</div>`;
 }
@@ -79,7 +80,7 @@ export function buildWrapupCombatsHtml(combats, iconFor) {
     // bystander damage is called out rather than silently absorbed.
     if (splash?.length) {
       const splashCells = splash.map(u => wrapupUnitCellHtml(u, iconFor(u, 36))).join('');
-      html += `<div class="wrapup-splash"><span class="wrapup-splash-label">\u{1F4A2} splash</span>${splashCells}</div>`;
+      html += `<div class="wrapup-splash"><span class="wrapup-splash-label">${ICON.splash} splash</span>${splashCells}</div>`;
     }
   }
   return html;

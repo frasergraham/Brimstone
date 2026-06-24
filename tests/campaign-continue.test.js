@@ -25,6 +25,7 @@ import {
   campaignMissionSaveKey,
 } from '../src/campaign/campaign-ui.js';
 import { getCampaignById } from '../src/campaign/campaign-registry.js';
+import { SAVE_VERSION } from '../src/version.js';
 import { mmUrgencyScore } from '../src/main-menu-games.js';
 
 const hollowDef = getCampaignById('calebs_hollow_prologue');
@@ -39,11 +40,13 @@ function startCampaign(slot, completed = []) {
   return c;
 }
 
-// Helper: drop a fake mid-mission save for a mission in a slot.
+// Helper: drop a fake mid-mission save for a mission in a slot. Stamps the current
+// SAVE_VERSION so loadCampaignMissionSave's version gate treats it as compatible
+// (an unstamped/incompatible save is discarded → resume falls back to fresh).
 function writeMissionSave(missionId, slot) {
   localStorage.setItem(
     campaignMissionSaveKey(hollowDef.id, missionId, slot),
-    JSON.stringify({ updatedAt: Date.now() }));
+    JSON.stringify({ saveVersion: SAVE_VERSION, updatedAt: Date.now() }));
 }
 
 describe('campaignMissionNumber', () => {
@@ -63,10 +66,29 @@ describe('campaignMissionNumber', () => {
 });
 
 describe('campaignMissionTotal', () => {
-  test('counts the real missions, excluding the tutorial', () => {
-    // 13 catalog entries (1 tutorial + 12 real) → denominator 12.
-    assert.equal(campaignMissionTotal(hollowDef), hollowDef.missions.length - 1);
+  test('counts the non-disabled missions (tutorial is shelved)', () => {
+    // 13 catalog entries (1 disabled tutorial + 12 real) → denominator 12.
+    assert.equal(
+      campaignMissionTotal(hollowDef),
+      hollowDef.missions.filter(m => !m.disabled).length);
     assert.equal(campaignMissionTotal(hollowDef), 12);
+  });
+  test('derives from non-disabled missions, not the positional length-1', () => {
+    // Shelf a SECOND mission: a positional `length - 1` would still read 12,
+    // but the honest non-disabled count is 11. Guards against the old
+    // "tutorial is index 0" assumption silently miscounting shelved missions.
+    const def = {
+      missions: hollowDef.missions.map((m, i) =>
+        m.id === 'prologue' ? { ...m, disabled: true } : m),
+    };
+    assert.equal(def.missions.length - 1, 12, 'positional formula would lie here');
+    assert.equal(campaignMissionTotal(def), 11);
+  });
+  test('a fully-enabled campaign counts every mission', () => {
+    // No disabled flag anywhere → total equals the catalog length (no implicit
+    // "first entry is the tutorial" subtraction).
+    const def = { missions: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] };
+    assert.equal(campaignMissionTotal(def), 3);
   });
   test('safe on an empty / missing campaign', () => {
     assert.equal(campaignMissionTotal({ missions: [] }), 0);
@@ -240,5 +262,53 @@ describe('hasCampaignToContinue — drives default-to-Campaign (Task 6)', () => 
 
   test('skips disabled campaigns', () => {
     assert.equal(hasCampaignToContinue([{ id: 'd', disabled: true, missions: [] }]), false);
+  });
+});
+
+// Mirror of _localCampaignRows' mid-mission save scan (the resume-row path).
+// _localCampaignRows lives in main.js behind the DOM-heavy app, so we replicate
+// just its scan: a resume row is emitted per PLAYABLE mission that has a
+// mid-mission save in the active slot. This is the seam that keeps a disabled
+// mission's stale save from ever becoming a clickable Continue row.
+function resumeRowMissionIdsForActiveSlot(def) {
+  const slot = 1; // tests set active slot 1
+  const ids = [];
+  for (const m of (def.missions || []).filter(mm => !mm.disabled)) {
+    if (localStorage.getItem(campaignMissionSaveKey(def.id, m.id, slot))) ids.push(m.id);
+  }
+  return ids;
+}
+
+describe('resume rows exclude disabled missions (Finding 1)', () => {
+  beforeEach(() => localStorage.clear());
+
+  test('a stale mid-mission save of the DISABLED tutorial yields no resume row', () => {
+    // The shelved tutorial is the danger case: a returning player can still have
+    // a `brimstone-...tutorial` mid-mission save on disk. It must NOT surface.
+    assert.ok(hollowDef.missions[0].disabled, 'fixture: tutorial is disabled');
+    startCampaign(1, []);
+    writeMissionSave('tutorial', 1);            // stale save of the disabled mission
+    setActiveSlot(hollowDef.id, 1);
+    const ids = resumeRowMissionIdsForActiveSlot(hollowDef);
+    assert.ok(!ids.includes('tutorial'), 'disabled tutorial must not produce a resume row');
+    assert.deepEqual(ids, [], 'no resume rows at all when only the tutorial has a save');
+  });
+
+  test('a mid-mission save of a PLAYABLE mission still surfaces', () => {
+    startCampaign(1, ['tutorial']);
+    writeMissionSave('prologue', 1);            // legitimate mid-mission save
+    setActiveSlot(hollowDef.id, 1);
+    const ids = resumeRowMissionIdsForActiveSlot(hollowDef);
+    assert.deepEqual(ids, ['prologue'], 'a real mission still resumes');
+  });
+
+  test('with saves for BOTH, only the playable mission surfaces', () => {
+    startCampaign(1, ['tutorial']);
+    writeMissionSave('tutorial', 1);            // disabled — must be dropped
+    writeMissionSave('prologue', 1);            // playable — must remain
+    setActiveSlot(hollowDef.id, 1);
+    const ids = resumeRowMissionIdsForActiveSlot(hollowDef);
+    assert.ok(!ids.includes('tutorial'));
+    assert.deepEqual(ids, ['prologue']);
   });
 });

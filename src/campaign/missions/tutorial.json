@@ -2,6 +2,7 @@
   "schema": 1,
   "campaignId": "calebs_hollow_prologue",
   "id": "tutorial",
+  "disabled": true,
   "title": "The Road to Caleb's Hollow - Tutorial",
   "chapter": 1,
   "briefing": "On the road to Caleb's Hollow, the forest grows darker with every step. Shadows twist between the trees, and the air carries the faint stench of decay. Something is very wrong ahead.",
@@ -29,7 +30,7 @@
   "enemyUnits": [],
   "aiPersonality": "balanced",
   "aiBudgetBonus": 0,
-  "maxSurvivorsFromRoster": 0,
+  "maxSurvivorsFromRoster": 3,
   "missionSurvivors": 0,
   "maxDiscoverableSurvivors": 1,
   "objectives": {
@@ -74,7 +75,7 @@
             "row": 5
           }
         ],
-        "color": "#22c55e",
+        "color": "#d946ef",
         "seenByHero": false,
         "seenByWitch": true,
         "prevCtrl": "neutral"
@@ -438,5 +439,41 @@
   },
   "conductor": {
     "scriptKey": "tutorial"
+  },
+  "logic": {
+    "version": 1,
+    "variables": [],
+    "nodes": [
+      {
+        "id": "objStart",
+        "type": "onMissionStart",
+        "params": {},
+        "x": 40,
+        "y": 900
+      },
+      {
+        "id": "set_learn",
+        "type": "setObjective",
+        "params": {
+          "id": "learn",
+          "label": "Reach Caleb's Hollow alive"
+        },
+        "x": 300,
+        "y": 900
+      }
+    ],
+    "edges": [
+      {
+        "from": {
+          "node": "objStart",
+          "pin": "out"
+        },
+        "to": {
+          "node": "set_learn",
+          "pin": "in"
+        },
+        "kind": "exec"
+      }
+    ]
   }
 }

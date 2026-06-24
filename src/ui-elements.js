@@ -36,10 +36,7 @@ export function collectUIElements(doc = document) {
     // ── Plan panel ────────────────────────────────────────────────────────
     'plan-panel':              g('plan-panel'),
     'plan-tab':                g('plan-tab'),
-    'plan-tab-count':          g('plan-tab-count'),
-    'plan-toggle-btn':         g('plan-toggle-btn'),
     'plan-steps':              g('plan-steps'),
-    'plan-budget-badge':       g('plan-budget-badge'),
     'plan-status':             g('plan-status'),
     'plan-players':            g('plan-players'),
     'plan-food-row':           g('plan-food-row'),

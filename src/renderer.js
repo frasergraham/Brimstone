@@ -15,6 +15,7 @@ import {
 import { ENTITY_COLOR, EntityType, SurvivorAbility, isLeaderType } from './entities.js';
 import { getVisiblePositions, sightRange, computeLineOfSight, hasLineOfSight } from './actions.js';
 import { getFaction } from './factions.js';
+import { ICON } from './icons.js';
 import { getFactionTheme, NEUTRAL_NODE_FILL } from './theme.js';
 import { nodeController, Phase } from './game.js';
 import { installOverlayShims, OVERLAY_METHODS } from './overlays.js';
@@ -662,7 +663,7 @@ export class Renderer {
   /** Sparkle animation at a hex — used for summon/spawn. */
   addSpawnAnim(col, row, color = '#b39ddb') {
     // Reuse flash with sparkle text and a short purple burst
-    this.addFlash(col, row, '✦', color, 900, 1.1, null);
+    this.addFlash(col, row, '\uE001', color, 900, 1.1, null);
     this._deathAnims.push({ col, row, color, startTime: Date.now(), duration: 500, spawn: true });
     this._startAnimLoop();
   }
@@ -1703,7 +1704,7 @@ export class Renderer {
         const tc = f.textColor ?? 'rgba(255,120,120,1)';
         // Replace last alpha group in rgba(...) if present, otherwise append
         ctx.fillStyle = tc.replace(/,\s*[\d.]+\)$/, `, ${t.toFixed(2)})`);
-        ctx.font         = `bold ${Math.floor(hs * (f.fontScale ?? 0.85))}px sans-serif`;
+        ctx.font         = `bold ${Math.floor(hs * (f.fontScale ?? 0.85))}px BrimstoneIcons, sans-serif`;
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
         this._shadowText(f.text, x, y - rise);
@@ -1972,7 +1973,7 @@ export class Renderer {
         x - hs, y - hs, hs * 2, hs * 2);
     } else {
       // Emoji icon fallback when there's no sprite for this building type.
-      ctx.font         = `${Math.floor(hs * 0.55)}px serif`;
+      ctx.font         = `${Math.floor(hs * 0.55)}px BrimstoneIcons, serif`;
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'middle';
       this._shadowText(BUILDING_ICON[entranceTile.building] || '?', x, y - hs * 0.10);
@@ -1992,7 +1993,7 @@ export class Renderer {
       const prevAlpha = ctx.globalAlpha;
       ctx.globalAlpha = prevAlpha * labelAlpha;
       ctx.fillStyle    = 'rgba(255,248,230,0.92)';
-      ctx.font         = `bold ${Math.max(7, Math.floor(hs * 0.25))}px "Georgia", serif`;
+      ctx.font         = `bold ${Math.max(7, Math.floor(hs * 0.25))}px BrimstoneIcons, "Georgia", serif`;
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'middle';
       this._shadowText(BUILDING_LABEL[entranceTile.building] || entranceTile.building, ex, ey + hs * 0.58);
@@ -2501,14 +2502,14 @@ export class Renderer {
     ctx.shadowColor = glowColor;
     ctx.shadowBlur  = ctrl === 'neutral' ? 4 : 8;
     ctx.fillStyle    = nodeColor;
-    ctx.font         = `bold ${Math.floor(hs * 0.5)}px serif`;
+    ctx.font         = `bold ${Math.floor(hs * 0.5)}px BrimstoneIcons, serif`;
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
-    this._shadowText('⛧', x, y - hs * 0.15);
+    this._shadowText('\uE0B0', x, y - hs * 0.15);
     ctx.shadowBlur = 0;
 
     ctx.fillStyle = nodeColor + 'cc';
-    ctx.font      = `${Math.max(6, Math.floor(hs * 0.2))}px sans-serif`;
+    ctx.font      = `${Math.max(6, Math.floor(hs * 0.2))}px BrimstoneIcons, sans-serif`;
     this._shadowText(label, x, y + hs * 0.35);
   }
 
@@ -2519,13 +2520,13 @@ export class Renderer {
     ctx.shadowColor = mt.color;
     ctx.shadowBlur  = 6;
     ctx.fillStyle   = mt.color;
-    ctx.font        = `bold ${Math.floor(hs * 0.5)}px serif`;
+    ctx.font        = `bold ${Math.floor(hs * 0.5)}px BrimstoneIcons, serif`;
     ctx.textAlign   = 'center';
     ctx.textBaseline = 'middle';
-    this._shadowText('⚑', x, y - hs * 0.15);
+    this._shadowText('\uE0B1', x, y - hs * 0.15);
     ctx.shadowBlur = 0;
     ctx.fillStyle  = mt.color + 'cc';
-    ctx.font       = `${Math.max(6, Math.floor(hs * 0.2))}px sans-serif`;
+    ctx.font       = `${Math.max(6, Math.floor(hs * 0.2))}px BrimstoneIcons, sans-serif`;
     this._shadowText(mt.label, x, y + hs * 0.35);
   }
 
@@ -2784,7 +2785,7 @@ export class Renderer {
       if (glyph) {
         if (grayscale) ctx.filter = 'grayscale(100%)';
         ctx.fillStyle    = '#ffffffdd';
-        ctx.font         = `bold ${Math.floor(r * 1.1)}px serif`;
+        ctx.font         = `bold ${Math.floor(r * 1.1)}px BrimstoneIcons, serif`;
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
         this._shadowText(glyph, x, y + 1);
@@ -2865,7 +2866,7 @@ export class Renderer {
         ctx.stroke();
         // Charge number
         ctx.fillStyle = '#fff';
-        ctx.font = `bold ${Math.max(7, Math.floor(br * 1.3))}px monospace`;
+        ctx.font = `bold ${Math.max(7, Math.floor(br * 1.3))}px BrimstoneIcons, monospace`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(String(entity.guarding), bx, by + 0.5);
@@ -2880,7 +2881,7 @@ export class Renderer {
       ctx.fillStyle    = '#333c';
       ctx.fillRect(bx, by, 14, 10);
       ctx.fillStyle    = '#fff';
-      ctx.font         = `${Math.max(7, Math.floor(hs * 0.25))}px monospace`;
+      ctx.font         = `${Math.max(7, Math.floor(hs * 0.25))}px BrimstoneIcons, monospace`;
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(`+${stack.length - 3}`, bx + 7, by + 5);
@@ -3019,7 +3020,7 @@ export class Renderer {
 
       ctx.globalAlpha = 0.6;
       ctx.fillStyle   = '#fff';
-      ctx.font        = `${Math.floor(r * 1.1)}px sans-serif`;
+      ctx.font        = `${Math.floor(r * 1.1)}px BrimstoneIcons, sans-serif`;
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(entityGlyph(type), center.x, center.y + 1);
@@ -3085,10 +3086,10 @@ export class Renderer {
       ctx.fillStyle = ob ? 'rgba(60,60,60,0.80)' : rgba(baseColor, 0.85);
       ctx.fill();
       ctx.fillStyle    = ob ? 'rgba(180,80,80,0.95)' : '#111';
-      ctx.font         = `bold ${Math.floor(badgeR * 1.1)}px sans-serif`;
+      ctx.font         = `bold ${Math.floor(badgeR * 1.1)}px BrimstoneIcons, sans-serif`;
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(ob ? '✕' : String(num), to.x, to.y + 0.5);
+      ctx.fillText(ob ? '\uE070' : String(num), to.x, to.y + 0.5);
     });
 
     // ── Layer 4: Red attack arrows with ×N badge ─────────────────────────────
@@ -3144,7 +3145,7 @@ export class Renderer {
       if (!drawnBadges.has(badgeKey)) {
         drawnBadges.add(badgeKey);
         const count  = attackCounts.get(badgeKey) ?? 1;
-        const label  = count > 1 ? `×${count}` : '⚔';
+        const label  = count > 1 ? `×${count}` : '\uE000';
         const badgeR = hs * 0.24;
         const bx     = to.x + hs * 0.28;
         const by     = to.y - hs * 0.28;
@@ -3153,7 +3154,7 @@ export class Renderer {
         ctx.fillStyle = 'rgba(180,30,30,0.85)';
         ctx.fill();
         ctx.fillStyle    = '#fff';
-        ctx.font         = `bold ${Math.floor(badgeR * (count > 1 ? 0.9 : 1.1))}px sans-serif`;
+        ctx.font         = `bold ${Math.floor(badgeR * (count > 1 ? 0.9 : 1.1))}px BrimstoneIcons, sans-serif`;
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(label, bx, by + 0.5);
@@ -3246,7 +3247,7 @@ export class Renderer {
         ctx.fillStyle = 'rgba(100,100,100,0.85)';
         ctx.fill();
         ctx.fillStyle    = '#fff';
-        ctx.font         = `bold ${Math.floor(badgeR * 1.1)}px sans-serif`;
+        ctx.font         = `bold ${Math.floor(badgeR * 1.1)}px BrimstoneIcons, sans-serif`;
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(String(arrow.stepNumber ?? (i + 1)), to.x, to.y + 0.5);
@@ -3276,7 +3277,7 @@ export class Renderer {
         // Label below
         if (marker.label) {
           const fontSize = Math.max(8, Math.floor(hs * 0.26));
-          ctx.font = `bold ${fontSize}px sans-serif`;
+          ctx.font = `bold ${fontSize}px BrimstoneIcons, sans-serif`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'top';
           ctx.fillStyle = _hexToRgba(color, 0.85);
@@ -3288,7 +3289,7 @@ export class Renderer {
     // 2. Node feasibility badges — score at each power node
     if (overlay.nodes) {
       const fontSize = Math.max(9, Math.floor(hs * 0.32));
-      ctx.font = `bold ${fontSize}px sans-serif`;
+      ctx.font = `bold ${fontSize}px BrimstoneIcons, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
 
@@ -3320,7 +3321,7 @@ export class Renderer {
     // 3. Combat estimate badges — classification near enemy entities
     if (overlay.combatEstimates) {
       const fontSize = Math.max(8, Math.floor(hs * 0.26));
-      ctx.font = `bold ${fontSize}px sans-serif`;
+      ctx.font = `bold ${fontSize}px BrimstoneIcons, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
 
@@ -3353,10 +3354,10 @@ export class Renderer {
 
         const fav = est.favorability != null ? (est.favorability > 0 ? '+' : '') + est.favorability.toFixed(1) : '';
         if (fav) {
-          ctx.font = `${Math.floor(fontSize * 0.85)}px sans-serif`;
+          ctx.font = `${Math.floor(fontSize * 0.85)}px BrimstoneIcons, sans-serif`;
           ctx.fillStyle = 'rgba(255,255,255,0.7)';
           ctx.fillText(fav, bx + bw / 2, by + bh + fontSize * 0.6);
-          ctx.font = `bold ${fontSize}px sans-serif`;
+          ctx.font = `bold ${fontSize}px BrimstoneIcons, sans-serif`;
         }
       }
     }
@@ -3364,7 +3365,7 @@ export class Renderer {
     // 4. Unit goal labels — small text above each AI entity showing its committed goal
     if (overlay.unitCommitments && overlay.faction) {
       const fontSize = Math.max(8, Math.floor(hs * 0.24));
-      ctx.font = `bold ${fontSize}px sans-serif`;
+      ctx.font = `bold ${fontSize}px BrimstoneIcons, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'bottom';
 
@@ -3644,18 +3645,18 @@ Object.assign(Renderer.prototype, OVERLAY_METHODS);
 
 function entityGlyph(type) {
   switch (type) {
-    case EntityType.HERO:        return '⚔';   // Paladin (alias of PALADIN)
-    case EntityType.ROGUE:       return '🗡';   // stub — placeholder glyph
-    case EntityType.CAPTAIN:     return '⛨';   // stub — placeholder glyph
-    case EntityType.WITCH:       return '✦';
-    case EntityType.NECROMANCER: return '☥';   // stub — placeholder glyph
+    case EntityType.HERO:        return ICON.hero;   // Paladin (alias of PALADIN)
+    case EntityType.ROGUE:       return ICON.rogue;   // stub — placeholder glyph
+    case EntityType.CAPTAIN:     return ICON.captain;   // stub — placeholder glyph
+    case EntityType.WITCH:       return ICON.witch;
+    case EntityType.NECROMANCER: return ICON.necromancer;   // stub — placeholder glyph
     case EntityType.BRUTE:       return '▲';   // stub — placeholder glyph
-    case EntityType.SURVIVOR:    return '☺';
-    case EntityType.SOLDIER:     return '♟';
-    case EntityType.ZOMBIE:      return '†';
-    case EntityType.MINION:      return '☠';
-    case EntityType.WOOD_GOLEM:  return '🪵';
-    case EntityType.IRON_GOLEM:  return '⚙';
+    case EntityType.SURVIVOR:    return ICON.survivor;
+    case EntityType.SOLDIER:     return ICON.soldier;
+    case EntityType.ZOMBIE:      return ICON.zombie;
+    case EntityType.MINION:      return ICON.minion;
+    case EntityType.WOOD_GOLEM:  return ICON.woodGolem;
+    case EntityType.IRON_GOLEM:  return ICON.ironGolem;
     default: return '?';
   }
 }

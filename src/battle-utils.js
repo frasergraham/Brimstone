@@ -1,5 +1,6 @@
 // Pure helpers for battle classification — no DOM, no state dependencies.
 import { EntityType, isLeaderType } from './entities.js';
+import { ICON } from './icons.js';
 
 // Returns true when a battle warrants the full cinematic dialog rather than a toast.
 // Leader fights only qualify if HP actually moved — a clean miss between major
@@ -28,8 +29,16 @@ export function isBattleSignificant(actorSnap, targetSnap, result, humanFaction)
  * such a unit back to its start hex for the strike and then zip it forward.
  *
  * Returns the set of entity ids whose MOVE this step must be deferred until
- * after the battle pass: a unit that both MOVES and is snapped by a battle on
- * its pre-move (entitySnapshot) hex. Pure — exported for tests.
+ * after the battle pass: a unit that both MOVES and is struck by a battle that
+ * RESOLVED EARLIER (lower `resOrder`) on its pre-move (entitySnapshot) hex.
+ * Pure — exported for tests.
+ *
+ * `resOrder` (set by the resolver in true agility-sorted drain order) is the
+ * authoritative cross-faction order. We use it to defer ONLY when the strike
+ * genuinely preceded the move; a move that resolved BEFORE the strike (the unit
+ * was hit at its destination) must NOT be deferred. When `resOrder` is absent
+ * (legacy saves / plain fixtures) we fall back to the position-only heuristic:
+ * a battle snapping the unit on its pre-move hex implies the strike came first.
  *
  * @param {Array}  events          — this step's ACTION_OK events (move + battle)
  * @param {Array}  entitySnapshot  — pre-step entity snapshot (positions)
@@ -39,18 +48,24 @@ export function isBattleSignificant(actorSnap, targetSnap, result, humanFaction)
 export function deferredMoveEntityIds(events, entitySnapshot, PlanActionType) {
   const out = new Set();
   if (!events?.length) return out;
-  // The position a battle this step captured for `id` (as target or attacker),
-  // or null if the unit didn't fight.
-  const battleSnapPosOf = (id) => {
+  // The EARLIEST battle (lowest resOrder) that snapped `id` on its pre-move hex
+  // `(preCol,preRow)`, as target or attacker — or null if no such strike. We
+  // care about the earliest because that's the one that resolved before the
+  // move and forces the deferral.
+  const preMoveStrike = (id, preCol, preRow) => {
+    let best = null;
     for (const ev of events) {
       const t = ev.action?.type;
       if (t !== PlanActionType.BATTLE_UNIT && t !== PlanActionType.BATTLE_HEX) continue;
       const bs = ev.battleSnaps;
       if (!bs) continue;
-      if (bs.targetSnap?.id === id) return bs.targetSnap;
-      if (bs.actorSnap?.id  === id) return bs.actorSnap;
+      const snap = bs.targetSnap?.id === id ? bs.targetSnap
+                 : bs.actorSnap?.id  === id ? bs.actorSnap
+                 : null;
+      if (!snap || snap.col !== preCol || snap.row !== preRow) continue;
+      if (best == null || (ev.resOrder ?? Infinity) < (best.resOrder ?? Infinity)) best = ev;
     }
-    return null;
+    return best;
   };
   for (const ev of events) {
     if (ev.action?.type !== PlanActionType.MOVE) continue;
@@ -63,10 +78,42 @@ export function deferredMoveEntityIds(events, entitySnapshot, PlanActionType) {
     const dest = path[path.length - 1];
     // Only a real relocation can warp; a no-op / blocked-to-start move is fine.
     if (dest.col === pre.col && dest.row === pre.row) continue;
-    const bpos = battleSnapPosOf(id);
-    // Battle captured the unit on its start hex ⇒ the strike resolved before the
-    // move ⇒ defer the move until after the battle.
-    if (bpos && bpos.col === pre.col && bpos.row === pre.row) out.add(id);
+    const strike = preMoveStrike(id, pre.col, pre.row);
+    if (!strike) continue;
+    // Both events carry resOrder ⇒ defer only if the strike actually resolved
+    // BEFORE this move. Either side missing resOrder ⇒ legacy fallback: a strike
+    // captured on the pre-move hex implies it came first, so defer.
+    const haveOrder = strike.resOrder != null && ev.resOrder != null;
+    if (!haveOrder || strike.resOrder < ev.resOrder) out.add(id);
+  }
+  return out;
+}
+
+/**
+ * Collapse runs of IDENTICAL whiff events — same actor, same target hex — into a
+ * single representative event, preserving order. A unit whose whole plan whiffs
+ * against a fled target emits one ACTION_SKIP per queued attack in ONE step
+ * (drainOneStep loops over free skips); replaying each as its own lunge reads as
+ * the unit lunging at empty grass N times (and warping on the un-awaited return
+ * in fast modes). One swing-at-nothing carries the same information.
+ *
+ * Only CONSECUTIVE duplicates fold (a different actor or a different hex between
+ * them starts a new run), so a back-and-forth between two whiffing units still
+ * shows both. Pure — exported for tests.
+ *
+ * @param {Array} whiffEvents — ACTION_SKIP events that carry whiffTarget + actorSnap
+ * @returns {Array} the de-duplicated list (first event of each identical run)
+ */
+export function groupWhiffEvents(whiffEvents) {
+  const out = [];
+  let prevKey = null;
+  for (const ev of whiffEvents ?? []) {
+    const actorId = ev.battleSnaps?.actorSnap?.id;
+    const wt = ev.whiffTarget;
+    const key = `${actorId}:${wt?.col},${wt?.row}`;
+    if (key === prevKey) continue;   // same actor swinging at the same empty hex — fold
+    out.push(ev);
+    prevKey = key;
   }
   return out;
 }
@@ -164,8 +211,8 @@ export function compileTurnBattleSummary(steps, finalEntities, ResEventType, Pla
     const aKilled = _wasKilled(snapA, finalEntities);
     const bKilled = _wasKilled(snapB, finalEntities);
     const parts = [];
-    if (hpLostByA > 0) parts.push(`${nameA} \u2212${hpLostByA}HP${aKilled ? ' \u{1F480}' : ''}`);
-    if (hpLostByB > 0) parts.push(`${nameB} \u2212${hpLostByB}HP${bKilled ? ' \u{1F480}' : ''}`);
+    if (hpLostByA > 0) parts.push(`${nameA} \u2212${hpLostByA}HP${aKilled ? ` ${ICON.defeat}` : ''}`);
+    if (hpLostByB > 0) parts.push(`${nameB} \u2212${hpLostByB}HP${bKilled ? ` ${ICON.defeat}` : ''}`);
     lines.push(`\u2694 ${nameA} vs ${nameB}: ${parts.join(', ')}`);
   }
   return lines;

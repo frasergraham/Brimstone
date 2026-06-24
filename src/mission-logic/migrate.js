@@ -118,10 +118,16 @@ function addObjective(b, spec, side) {
     b.exec(fe, 'onLeaderDead', b.node('winMission', { winner: 'hero', reason: spec.reason ?? null }));
     return;
   }
-  // Everything else: poll each round, delegating to the existing victory logic
-  // (phase/survive/score conditions; DEFERRED types like control_nodes are still
-  // resolved by the built-in node scoring, so this node is just a no-op for them).
-  const ev = b.node('onRoundStart', { round: 'any' });
+  // Phase-keyed DEADLINE conditions (survive_with_party, phase_without_survivors,
+  // witch_holds_node, …) fire at the END of the final turn of a non-looping cycle,
+  // not at its start — so they poll On Cycle End. Wiring them to On Round Start
+  // would end a fixed-end mission before the player plays the deadline (e.g. dawn)
+  // turn. `gather_and_survive` keeps its On Round Start poll (it can win EARLY on a
+  // kill quota, independent of the phase fallback), so it's excluded here.
+  const isPhaseDeadline = spec && typeof spec.phase === 'string' && spec.type !== 'gather_and_survive';
+  const ev = isPhaseDeadline
+    ? b.node('onCycleEnd', {})
+    : b.node('onRoundStart', { round: 'any' });
   b.exec(ev, 'out', b.node('objectiveOutcome', { side, spec, reason: spec.reason ?? null }));
 }
 

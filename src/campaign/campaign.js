@@ -2,6 +2,7 @@
 // Stored in localStorage; optionally synced to server for verified users.
 
 import { countHeldNodes } from '../game.js';
+import { ICON } from '../icons.js';
 import { getFaction } from '../factions.js';
 import { hexDistance } from '../hex.js';
 import { EntityType, applyLevel, normalizeItems, getEquippedWeaponIdOf,
@@ -275,6 +276,59 @@ export function collectFallenAfterMission(entities, missionId) {
 }
 
 /**
+ * Ordered deploy spots for a mission's starting party: a mission's authored
+ * `survivorStartPositions` are used FIRST, then hero-start neighbours (deduped)
+ * as overflow. This lets the full allowed party deploy even when a mission
+ * authored fewer positions than its start cap (e.g. 2 spots but a party of up
+ * to 3) instead of silently dropping the surplus — the placement mechanism is
+ * unchanged, only short position lists no longer cap the party below its size.
+ * Pure: takes plain {col,row} lists, returns a new ordered list.
+ *
+ * @param {{col:number,row:number}[]|null} explicitSpots  mission.survivorStartPositions, or null/empty
+ * @param {{col:number,row:number}[]} neighbors           hero-start neighbours (fallback + overflow)
+ * @returns {{col:number,row:number}[]}
+ */
+export function deploySpots(explicitSpots, neighbors) {
+  if (!explicitSpots || explicitSpots.length === 0) return [...(neighbors ?? [])];
+  const overflow = (neighbors ?? []).filter(
+    n => !explicitSpots.some(s => s.col === n.col && s.row === n.row)
+  );
+  return [...explicitSpots, ...overflow];
+}
+
+/**
+ * Decide which roster indices to deploy at mission start.
+ *
+ * The working selection (`_activeRosterIndices` in main.js) is the player's live
+ * squad choice, populated by the Party / Progress screen. But the Ledger "Begin
+ * Mission" path launches a mission WITHOUT visiting that screen, leaving the
+ * working selection empty — in which case we must fall back to the persisted
+ * `Campaign.activeParty` (the player's saved NAMED squad) rather than deploying
+ * nobody (which lets the minSurvivors balancer backfill random generics — the
+ * "I had 4 units, only 2 showed up" bug). Mirrors the legacy briefing fallback.
+ *
+ * Pure: reads only the args (Campaign.getActiveParty itself sanitizes against the
+ * current roster), returns a new clamped, sanitized index list.
+ *
+ * @param {number[]|null} workingIndices  the live working selection (may be empty)
+ * @param {Campaign|null} campaign        the active campaign (for the persisted fallback)
+ * @param {number} maxFromRoster          the mission's clamped start cap
+ * @returns {number[]} roster indices to deploy, length ≤ maxFromRoster
+ */
+export function resolveDeployIndices(workingIndices, campaign, maxFromRoster) {
+  const cap = Math.max(0, Math.floor(Number(maxFromRoster) || 0));
+  if (cap === 0 || !campaign) return [];
+  const size = Array.isArray(campaign.roster) ? campaign.roster.length : 0;
+  // The live working selection wins when present (validated against the roster).
+  const working = Array.isArray(workingIndices)
+    ? workingIndices.filter(i => Number.isInteger(i) && i >= 0 && i < size)
+    : [];
+  if (working.length > 0) return working.slice(0, cap);
+  // Empty working selection → fall back to the persisted squad (sanitized + clamped).
+  return campaign.getActiveParty(cap);
+}
+
+/**
  * Build victory/defeat delegate function from mission objectives.
  * Returns a function (state) => { winner, winReason, log } | null.
  *
@@ -350,7 +404,7 @@ function _checkLoseCondition(cond, state) {
         return {
           winner: 'witch',
           winReason: cond.reason || 'The hero has fallen.',
-          log: '💀 The hero has been slain…',
+          log: '\uE097 The hero has been slain…',
         };
       }
       return null;
@@ -359,7 +413,7 @@ function _checkLoseCondition(cond, state) {
         return {
           winner: 'witch',
           winReason: cond.reason || `Failed to complete the mission in ${cond.rounds} rounds.`,
-          log: `⏳ Time ran out — the mission is lost.`,
+          log: `${ICON.hourglass} Time ran out — the mission is lost.`,
         };
       }
       return null;
@@ -368,7 +422,7 @@ function _checkLoseCondition(cond, state) {
         return {
           winner: 'witch',
           winReason: cond.reason || `Night fell before you gathered enough survivors.`,
-          log: `🌒 The light fades and you stand alone — the mission is lost.`,
+          log: `${ICON.newMoon} The light fades and you stand alone — the mission is lost.`,
         };
       }
       return null;
@@ -378,7 +432,7 @@ function _checkLoseCondition(cond, state) {
         return {
           winner: 'witch',
           winReason: cond.reason || 'A companion has fallen — the party is broken.',
-          log: '💔 The party is broken.',
+          log: '\uE09D The party is broken.',
         };
       }
       return null;
@@ -391,7 +445,7 @@ function _checkLoseCondition(cond, state) {
       return {
         winner: 'witch',
         winReason: cond.reason || 'The witch holds a node at dawn.',
-        log: '🌑 Dawn breaks and her power still pulses through the grove.',
+        log: '\uE024 Dawn breaks and her power still pulses through the grove.',
       };
     }
     case 'witch_score_threshold': {
@@ -400,7 +454,7 @@ function _checkLoseCondition(cond, state) {
       return {
         winner: 'witch',
         winReason: cond.reason || 'The witch has held the nodes too long.',
-        log: '🌑 The ritual has reached its climax.',
+        log: '\uE024 The ritual has reached its climax.',
       };
     }
     default:
@@ -420,7 +474,7 @@ function _checkWinCondition(cond, state) {
         return {
           winner: 'hero',
           winReason: cond.reason || 'All enemies have been eliminated.',
-          log: '☀ Every last enemy has been vanquished!',
+          log: '\uE021 Every last enemy has been vanquished!',
         };
       }
       return null;
@@ -430,7 +484,7 @@ function _checkWinCondition(cond, state) {
         return {
           winner: 'hero',
           winReason: cond.reason || `Survived ${cond.rounds} rounds.`,
-          log: `☀ You held the line! The darkness recedes… for now.`,
+          log: `${ICON.day} You held the line! The darkness recedes… for now.`,
         };
       }
       return null;
@@ -439,7 +493,7 @@ function _checkWinCondition(cond, state) {
         return {
           winner: 'hero',
           winReason: cond.reason || 'Reached the objective.',
-          log: '☀ The hero has reached the objective!',
+          log: '\uE021 The hero has reached the objective!',
         };
       }
       return null;
@@ -448,7 +502,7 @@ function _checkWinCondition(cond, state) {
         return {
           winner: 'hero',
           winReason: cond.reason || 'The witch has been slain!',
-          log: '☀ The witch has been defeated! Caleb\'s Hollow is saved!',
+          log: '\uE021 The witch has been defeated! Caleb\'s Hollow is saved!',
         };
       }
       return null;
@@ -463,7 +517,7 @@ function _checkWinCondition(cond, state) {
         return {
           winner: 'hero',
           winReason: cond.reason || 'Survivors gathered — the mission is a success.',
-          log: '☀ The survivors are safe!',
+          log: '\uE021 The survivors are safe!',
         };
       }
       return null;
@@ -476,7 +530,7 @@ function _checkWinCondition(cond, state) {
       return {
         winner: 'hero',
         winReason: cond.reason || 'You and your companions survived until dawn.',
-        log: '☀ Dawn breaks — you have survived the night.',
+        log: '\uE021 Dawn breaks — you have survived the night.',
       };
     }
     case 'all_party_at_hexes': {
@@ -497,7 +551,7 @@ function _checkWinCondition(cond, state) {
       return {
         winner: 'hero',
         winReason: cond.reason || 'The party has reached the target.',
-        log: '☀ The whole party has made it through.',
+        log: '\uE021 The whole party has made it through.',
       };
     }
     case 'witch_denied_nodes': {
@@ -509,7 +563,7 @@ function _checkWinCondition(cond, state) {
       return {
         winner: 'hero',
         winReason: cond.reason || 'The witch has been denied at every node.',
-        log: '☀ Dawn breaks over silent nodes — the ritual is broken!',
+        log: '\uE021 Dawn breaks over silent nodes — the ritual is broken!',
       };
     }
     case 'hero_holds_all_nodes': {
@@ -522,7 +576,7 @@ function _checkWinCondition(cond, state) {
       return {
         winner: 'hero',
         winReason: cond.reason || 'You hold every node at dawn.',
-        log: '☀ Every node bears your banner at first light.',
+        log: '\uE021 Every node bears your banner at first light.',
       };
     }
     case 'control_nodes':
@@ -580,7 +634,7 @@ export function processWaves(state, waves, createEnemyFn) {
         if (unit.level) applyLevel(entity, unit.level);
         if (unit.overrides) Object.assign(entity, unit.overrides);
         state.entities.push(entity);
-        logs.push(unit.spawnLog ?? `🌑 ${entity.displayName} emerges from the shadows!`);
+        logs.push(unit.spawnLog ?? `${ICON.newMoon} ${entity.displayName} emerges from the shadows!`);
       }
     }
   }
@@ -736,7 +790,13 @@ export class Campaign {
     this.slotIndex         = clampSlotIndex(slotIndex);
     this.saveSlot          = campaignSlotSaveSlot(campaignDef.id, this.slotIndex);
     this.version           = SAVE_VERSION;
-    this.currentMission    = campaignDef.firstMission;
+    // Seed the starting mission. If the authored `firstMission` is itself
+    // disabled (e.g. the tutorial was shelved), fall through to the first
+    // PLAYABLE mission so a fresh campaign opens on something launchable rather
+    // than pointing at a shelved mission.
+    this.currentMission    = this._isMissionIdDisabled(campaignDef.firstMission)
+      ? (this.playableMissions()[0]?.id ?? campaignDef.firstMission)
+      : campaignDef.firstMission;
     this.completedMissions = new Set();
     this.roster            = []; // Array of snapshotSurvivor() objects
     // Permadeath memorial: survivors who died on a COMPLETED (won) mission.
@@ -853,6 +913,41 @@ export class Campaign {
     return this.campaignDef.missions.find(m => m.id === missionId) ?? null;
   }
 
+  /**
+   * Whether a mission def is DISABLED — flagged `disabled: true` in its JSON to
+   * shelve it without deleting it. A disabled mission is COMPLETELY ignored by
+   * game logic: it is never playable, never the next mission, never counted in
+   * progression totals, and any `requires`/`unlock` dependency that points at it
+   * is treated as already satisfied (so downstream missions still unlock). The
+   * campaign viewer drops it entirely too (see getMissionList) — distinct from a
+   * merely LOCKED mission, which stays listed (greyed) until its prereqs are met.
+   * @param {object} mission  a runtime mission def
+   * @returns {boolean}
+   */
+  _isMissionDisabled(mission) {
+    return !!mission?.disabled;
+  }
+
+  /**
+   * Whether the mission with `id` is disabled. Unknown ids are NOT disabled (a
+   * dependency on a mission that doesn't exist is a real, unsatisfiable blocker —
+   * only an explicitly-shelved mission is auto-satisfied). Used so a `requires`/
+   * `missionDone` pointing at a disabled mission counts as satisfied.
+   * @param {string} id
+   * @returns {boolean}
+   */
+  _isMissionIdDisabled(id) {
+    return this._isMissionDisabled(this.getMissionDef(id));
+  }
+
+  /** The list of NON-disabled missions — the set game logic should ever act on
+   *  (next mission, available, progression totals, completion). The viewer reads
+   *  this same set (via getMissionList) so disabled missions never surface in the
+   *  UI either; the full `campaignDef.missions` is only for raw def lookups. */
+  playableMissions() {
+    return this.campaignDef.missions.filter(m => !this._isMissionDisabled(m));
+  }
+
   /** Get the map builder function for a mission. */
   getMapBuilder(mapBuilderKey) {
     return this.campaignDef.mapBuilders[mapBuilderKey] ?? null;
@@ -866,7 +961,10 @@ export class Campaign {
    */
   buildUnlockContext() {
     return {
-      isCompleted: (id) => this.completedMissions.has(id),
+      // A disabled mission counts as completed for the purposes of unlock
+      // criteria, so a downstream mission whose `unlock` names a shelved one
+      // (missionDone / anyOf) still opens — it never soft-locks the chain.
+      isCompleted: (id) => this.completedMissions.has(id) || this._isMissionIdDisabled(id),
       hasItem: (id) => (this.heroStats?.items?.[id]?.count ?? 0) > 0,
       level: this.heroStats?.level ?? this.getCompletedCount(),
       getFlag: (key) => this.storyFlags?.[key],
@@ -882,8 +980,13 @@ export class Campaign {
    * drifts between the two.
    */
   _canPlayMission(mission) {
+    // A disabled mission is shelved — never launchable, never the next mission.
+    if (this._isMissionDisabled(mission)) return false;
     if (this.completedMissions.has(mission.id)) return false;
-    if (mission.requires && !mission.requires.every(r => this.completedMissions.has(r))) return false;
+    // A `requires` entry is satisfied when completed OR when its target mission
+    // is itself disabled (a shelved prerequisite never blocks downstream play).
+    if (mission.requires && !mission.requires.every(
+      r => this.completedMissions.has(r) || this._isMissionIdDisabled(r))) return false;
     if (mission.unlock != null && !evaluateUnlock(mission.unlock, this.buildUnlockContext())) return false;
     return true;
   }
@@ -904,7 +1007,10 @@ export class Campaign {
    */
   _missionBlockers(mission) {
     const ctx = this.buildUnlockContext();
-    const reqMissing = (mission.requires ?? []).filter(r => !this.completedMissions.has(r));
+    // A disabled prerequisite is satisfied (see _canPlayMission) — it never
+    // counts as a blocker. ctx.isCompleted already folds disabled in for unlock.
+    const reqMissing = (mission.requires ?? [])
+      .filter(r => !this.completedMissions.has(r) && !this._isMissionIdDisabled(r));
     const unlockMissing = this._unlockMissionBlockers(mission.unlock, ctx);
     if (unlockMissing === null) return null;
     return [...reqMissing, ...unlockMissing];
@@ -968,10 +1074,13 @@ export class Campaign {
    * Check if all missions in this campaign are completed.
    * Returns false for a campaign with no missions defined — an empty missions
    * array isn't "complete", it's unpopulated (e.g. a Coming Soon chapter).
+   * Disabled missions are ignored: a campaign is "complete" when every PLAYABLE
+   * mission is done, even if a shelved mission was never (and can never be) won.
    */
   isComplete() {
-    if (this.campaignDef.missions.length === 0) return false;
-    return this.campaignDef.missions.every(m => this.completedMissions.has(m.id));
+    const playable = this.playableMissions();
+    if (playable.length === 0) return false;
+    return playable.every(m => this.completedMissions.has(m.id));
   }
 
   /**
@@ -986,14 +1095,16 @@ export class Campaign {
     return false;
   }
 
-  /** Count of missions completed so far in this campaign. */
+  /** Count of PLAYABLE missions completed so far in this campaign (disabled
+   *  missions never count toward progress — they're shelved, not "done"). */
   getCompletedCount() {
-    return this.campaignDef.missions.filter(m => this.completedMissions.has(m.id)).length;
+    return this.playableMissions().filter(m => this.completedMissions.has(m.id)).length;
   }
 
-  /** Total number of missions in this campaign. */
+  /** Total number of PLAYABLE missions in this campaign (the progress
+   *  denominator — disabled missions are excluded so "N / total" stays honest). */
   getMissionCount() {
-    return this.campaignDef.missions.length;
+    return this.playableMissions().length;
   }
 
   /**
@@ -1073,9 +1184,15 @@ export class Campaign {
    * `visible` marks whether the row should be shown at all: completed and
    * playable missions always show; a locked mission shows only when it's the
    * immediate next one ("one step from playable", see `_isMissionVisible`).
+   *
+   * Disabled missions (shelved via `disabled: true`) are DROPPED entirely — they
+   * never appear in the returned list, as if they weren't in the campaign. This
+   * is deliberately distinct from a LOCKED mission (prerequisites unmet), which
+   * is still listed (greyed, `available: false`) so the player can see what's
+   * coming. All gameplay enumeration likewise flows through playableMissions().
    */
   getMissionList() {
-    return this.campaignDef.missions.map(m => ({
+    return this.playableMissions().map(m => ({
       id: m.id,
       title: m.title,
       briefing: m.briefing,
@@ -1116,9 +1233,21 @@ export class Campaign {
     }
     this.currentMission = this.getNextMission() ?? missionId;
 
-    // Permadeath: replace roster with only surviving survivors
+    // Permadeath: replace roster with only surviving survivors. The new roster
+    // is reordered (deployed-first), so remap the active-party selection by NAME
+    // — `activeParty` stores roster INDICES, which would otherwise drift to
+    // different survivors (or shrink) and deploy the wrong/too-few units next
+    // mission. The player's chosen squad is preserved by identity; newly
+    // recruited (unselected) survivors stay in reserve until promoted.
     if (result.survivors) {
+      const prevRoster  = Array.isArray(this.roster) ? this.roster : [];
+      const activeNames = this._sanitizeRosterIndices(this.activeParty)
+        .map(i => prevRoster[i]?.name)
+        .filter(Boolean);
       this.roster = result.survivors.map(s => snapshotSurvivor(s));
+      this.activeParty = activeNames
+        .map(name => this.roster.findIndex(s => s.name === name))
+        .filter(i => i >= 0);
     }
 
     // Permadeath memorial: a survivor who died on this COMPLETED mission is

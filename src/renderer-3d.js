@@ -50,6 +50,7 @@ export const scaledForestTreeCount = _scaledForestTreeCount;
 import {
   EntityType, isLeaderType, ADVANTAGE_CAP,
   factionHasMultipleLeaders, leaderColorFor, applyProjectedEquip,
+  getEquippedWeaponIdOf,
 } from './entities.js';
 import {
   buildingRenderHex,
@@ -76,6 +77,7 @@ export {
   GROUND_LABEL_EDGE_INSET,
 };
 import { Renderer } from './renderer.js';
+import { ICON, splitColoredFloaterSegments } from './icons.js';
 import { BLOCK_WORD_VARIANTS, pickBlockWord } from './combat-words.js';
 import {
   FACE_TURN_MS, FACING_EPSILON,
@@ -85,6 +87,7 @@ import {
 export { BLOCK_WORD_VARIANTS };   // re-exported for existing importers (main.js)
 import { getFactionTheme } from './theme.js';
 import { hexKey, hexDistance, getNeighbors, hexRange } from './hex.js';
+import { buildRiverChannelGeometry, classifyRiverEdges, RIVER_SHAPES } from './river-channel-mesh.js';
 import { nodeController, Phase } from './game.js';
 import { findFaction, sightRangeForEntity } from './factions.js';
 import { computeLineOfSight, hasLineOfSight } from './actions.js';
@@ -96,11 +99,11 @@ import {
   makeOverlay, overlayMaterialKey,
 } from './overlays.js';
 import {
-  hexSplatWeights, hexFogWeights, hexTintWeights, splatChannelForTile,
+  hexSplatWeights, hexFogWeights, hexTintWeights, splatChannelForTile, SPLAT_DIRT,
   worldToHex, neighborDeltas, DEFAULT_TERRAIN_TINTS,
 } from './terrain-splat.js';
 import { makeTerrainSplatPlugin, SPLAT_UNIFORM_DEFAULTS } from './terrain-splat-plugin.js';
-import { attachFogDarkenToMaterial, MAX_FOG_TILES } from './fog-darken-plugin.js';
+import { makeWaterRipplePlugin } from './water-ripple-plugin.js';
 import { attachRoadEdgeToMaterial } from './road-edge-plugin.js';
 
 // Babylon core + glTF loaders are served from the packaged `assets/vendor/`
@@ -113,8 +116,14 @@ import { attachRoadEdgeToMaterial } from './road-edge-plugin.js';
 // own internal copy of core, so the plugin registered on the wrong BABYLON
 // and SceneLoader rejected GLB files with "Unable to find a plugin to load
 // .glb".)
-const BABYLON_CORE_LOCAL    = '/assets/vendor/babylonjs/babylon.js';
-const BABYLON_LOADERS_LOCAL = '/assets/vendor/babylonjs/babylonjs.loaders.min.js';
+// RELATIVE paths (no leading slash) so they resolve under every host root: the
+// dev server (`/`), capacitor://localhost/, the Electron file root, AND a static
+// itch.io zip served from a sub-path (e.g. html.itch.zone/html/<id>/). A leading
+// slash anchors to the ORIGIN root, which 404s on itch's sub-path host and left
+// Babylon unloaded → the 3D renderer never initialised (black canvas, no game).
+// Same bug class as the missing-CSS regression guarded by cap-web-assets.test.js.
+const BABYLON_CORE_LOCAL    = 'assets/vendor/babylonjs/babylon.js';
+const BABYLON_LOADERS_LOCAL = 'assets/vendor/babylonjs/babylonjs.loaders.min.js';
 
 // ─── House GLB model (replaces the procedural box+roof building) ───────────
 // Path is relative to the assets base directory (`assets/` in production), so
@@ -718,15 +727,32 @@ export function unitUsesPaladinModel(_entity) {
 // owner. Loaded once and cloned for any unit that has no `<type>-idle.glb`.
 export const MANNEQUIN_RIG_FILE = 'mannequin-idle.glb';
 
+/** Entity types that actually ship a `<type>-idle.glb` rig in `assets/models/`.
+ *  Only these are PROBED for their own rig; every other type goes straight to
+ *  the shared mannequin (no doomed 404 request, no network-log noise — see
+ *  `entityTypeRigFile` / `fallbackRigCandidates`). Keep in sync with the rig
+ *  GLBs on disk: today that's `paladin-idle.glb` and `zombie-idle.glb` (the
+ *  universal `mannequin-idle.glb` is the fallback, not a per-type rig). Add a
+ *  type here the moment its `<type>-idle.glb` is committed and the cascade will
+ *  pick it up — no other code change needed. Pure data; exported for tests. */
+export const RIGGED_ENTITY_TYPES = Object.freeze(new Set([
+  EntityType.PALADIN,  // 'paladin' — paladin-idle.glb (hero leader)
+  EntityType.ZOMBIE,   // 'zombie'  — zombie-idle.glb
+]));
+
 /** Convention model filename for an entity's own rig — `<type>-idle.glb`
- *  (e.g. 'zombie-idle.glb'). Returns null when the entity has no usable type.
- *  The slug mirrors EntityType values, which are already lowercase
- *  underscore-safe ('zombie', 'wood_golem', …). Pure; exported for tests. */
+ *  (e.g. 'zombie-idle.glb') — but ONLY for types in `RIGGED_ENTITY_TYPES` that
+ *  actually ship a rig on disk. Returns null for a missing/unusable type AND for
+ *  any type without a committed `<type>-idle.glb`, so callers never probe a file
+ *  that's guaranteed to 404. The slug mirrors EntityType values, which are
+ *  already lowercase underscore-safe ('zombie', 'wood_golem', …). Pure;
+ *  exported for tests. */
 export function entityTypeRigFile(entity) {
   if (!entity || typeof entity.type !== 'string') return null;
   const slug = entity.type.toLowerCase().replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
-  return slug ? `${slug}-idle.glb` : null;
+  if (!slug || !RIGGED_ENTITY_TYPES.has(slug)) return null;
+  return `${slug}-idle.glb`;
 }
 
 /** Entity types whose rig is loaded JUST-IN-TIME (during the round replay that
@@ -737,10 +763,11 @@ export function entityTypeRigFile(entity) {
  *  up-front preload (`_preloadCharacterRigs`). */
 export const LAZY_RIG_TYPES = Object.freeze(new Set([EntityType.SURVIVOR]));
 
-/** Ordered rig-file cascade for a non-paladin unit: its own `<type>-idle.glb`
- *  first, then the shared mannequin. The caller tries each in turn and uses the
- *  first that loads. Paladin-typed units never reach here — they keep the
- *  dedicated _paladinSource path. Pure; exported for tests. */
+/** Ordered rig-file cascade for a unit: its own `<type>-idle.glb` first (ONLY
+ *  for a type in `RIGGED_ENTITY_TYPES` — `entityTypeRigFile` returns null
+ *  otherwise, so a type with no committed rig is never probed and never 404s),
+ *  then the shared mannequin. The caller tries each in turn and uses the first
+ *  that loads. Pure; exported for tests. */
 export function fallbackRigCandidates(entity) {
   const out = [];
   const typeFile = entityTypeRigFile(entity);
@@ -850,6 +877,151 @@ export function weaponStandInTransform(paladinScale) {
     // the hand bone rather than the cylinder's centre.
     offset:   { x: 0, y: height / 2, z: 0 },
   };
+}
+
+// ─── Weapon GLB models (real held weapons; replaces the cylinder stand-in) ──
+// Four hand-weapon GLBs ship in `assets/`: Sword, Axe, Rifle, Dagger. Each
+// equippable weapon id (src/items.js ITEMS, `kind:'weapon'`) maps to whichever
+// of the four reads closest; a few (shield, staff, magic_bolt) have no good
+// physical analogue and fall through to the cylinder stand-in so equipping them
+// still shows *something* in-hand. Path is relative to the assets base captured
+// by loadImages(); the files sit directly under assets/, not assets/models/.
+export const WEAPON_MODEL_FILES = Object.freeze({
+  sword:  'Sword.glb',
+  axe:    'Axe.glb',
+  rifle:  'Rifle.glb',
+  dagger: 'Dagger.glb',
+});
+
+/** weapon item id → weapon model name ('sword'|'axe'|'rifle'|'dagger'|null).
+ *  Bladed melee (sword/greatsword) → sword; chopping/blunt (axe/warhammer) →
+ *  axe; firearms + thrown/launched ranged (musket/pistol/longrifle/bow/
+ *  crossbow/sling) → rifle; the knife → dagger. shield/staff/magic_bolt have
+ *  no matching model → null (cylinder fallback). Pure; exported for tests. */
+export const WEAPON_ID_TO_MODEL = Object.freeze({
+  sword:      'sword',
+  greatsword: 'sword',
+  axe:        'axe',
+  warhammer:  'axe',
+  dagger:     'dagger',
+  bow:        'rifle',
+  crossbow:   'rifle',
+  musket:     'rifle',
+  pistol:     'rifle',
+  longrifle:  'rifle',
+  sling:      'rifle',
+  // shield / staff / magic_bolt: no GLB analogue → cylinder stand-in.
+});
+
+/** Map an equipped weapon id to its weapon-model name, or null if none of the
+ *  four GLBs fits (caller falls back to the cylinder). Pure; exported. */
+export function weaponModelForId(weaponId) {
+  if (typeof weaponId !== 'string') return null;
+  return WEAPON_ID_TO_MODEL[weaponId] || null;
+}
+
+/** Per-model grip transform, in the hand-bone-LOCAL frame, so the weapon sits
+ *  in the fist rather than floating in front. Each entry describes how that
+ *  GLB is oriented as Babylon imports it (with the glTF node's baked scale 100
+ *  + axis rotation applied) and where its handle/grip end lands:
+ *   - `worldLength` — target on-screen size of the weapon's LONG axis, in
+ *     world units (same units as TARGET_PALADIN_WORLD_HEIGHT ≈ 0.69). The
+ *     loader measures the template's long-axis span from its LOCAL geometry
+ *     bbox (`weaponModelLongSpan`) and derives a uniform scale to hit this; the
+ *     per-standee paladin scale is divided back out at attach time (see
+ *     weaponGripLocalTransform). All four weapons use the same world-unit scale
+ *     (~0.3–0.7); the rifle is no longer special.
+ *   - `rotation` {x,y,z} — Euler radians applied to the clone so the long axis
+ *     points up-and-forward out of the fist (matching the old cylinder pose).
+ *   - `offset` {x,y,z} — local translation (in the SAME post-rotation frame)
+ *     to slide the grip onto the bone. Hand-tuned against browser screenshots.
+ *  Operator-tunable — these are pure presentation. Exported for tests. */
+export const WEAPON_GRIP_TRANSFORMS = Object.freeze({
+  // Sword: imported long axis = +Y (blade up), handle near the model origin.
+  // Tilt forward like the stand-in; lift so the grip (not the bbox centre)
+  // meets the fist.
+  sword:  { worldLength: 0.62, rotation: { x: -Math.PI * 0.14, y: 0, z: 0 },     offset: { x: 0, y: 0.02, z: 0 } },
+  // Axe: long axis = +Y, head splayed in -X near the top. Same forward tilt.
+  axe:    { worldLength: 0.58, rotation: { x: -Math.PI * 0.14, y: 0, z: 0 },     offset: { x: 0.02, y: 0.04, z: 0 } },
+  // Dagger: long axis = +Y, short. Slight forward tilt; small lift.
+  dagger: { worldLength: 0.30, rotation: { x: -Math.PI * 0.18, y: 0, z: 0 },     offset: { x: 0, y: 0.01, z: 0 } },
+  // Rifle: long axis = +X (barrel forward in the model). The old pose yawed the
+  // barrel into the unit's FORWARD/DOWN direction — straight along the steep
+  // top-down camera's view axis — so it foreshortened to a near-invisible stub.
+  // Instead carry it ANGLED ACROSS the body (barrel running diagonally up + to
+  // the side, ~perpendicular to the view axis) and lifted to chest height, like
+  // a soldier at high port: ry +0.7π swings the barrel out across the unit, rz
+  // -0.15π tilts it up off the ground plane. Across-and-up length projects at
+  // close to full size on the ~30° isometric gameplay camera, so the long-gun
+  // reads clearly from above. The grip end still sits at the fist (offset slides
+  // the handle onto the bone).
+  //
+  // worldLength is ~0.7 (a touch longer than the sword — it's a long gun), the
+  // same world-unit scale as the other weapons. It used to be 70 (a magic ~100×)
+  // to cancel a measurement quirk: Rifle.glb is a SINGLE-primitive GLB, so it
+  // skips the MergeMeshes transform-bake the multi-primitive weapons get, and
+  // its glTF node scale of 100 stayed on the transform (un-baked into the
+  // geometry). The old loader measured `longSpan` from the WORLD bbox (≈2.9 vs
+  // the true ≈0.029 local vertex extent), so the derived clone scale came out
+  // 100× too small. `_loadWeaponModel` now measures the LOCAL bbox
+  // (`weaponModelLongSpan`) for every weapon, so the node scale is irrelevant
+  // and a normal worldLength works. Tuned vs gameplay-camera screenshots.
+  rifle:  { worldLength: 0.70, rotation: { x: -Math.PI * 0.06, y: Math.PI * 0.7, z: -Math.PI * 0.15 }, offset: { x: -0.02, y: 0.05, z: 0.04 } },
+});
+
+/** Compute the rig-LOCAL grip transform for a weapon model clone, given the
+ *  model's natural long-axis span (`modelLongSpan`, in the template's own
+ *  post-import units) and the per-standee uniform `rigScale` that attachToBone
+ *  folds in via the affector's world matrix. Returns `{ scale, rotation,
+ *  offset }` where `scale` is the uniform clone scale and rotation/offset are
+ *  copied from WEAPON_GRIP_TRANSFORMS. Mirrors weaponStandInTransform's
+ *  divide-out-the-rig-scale trick so the weapon lands at a constant on-screen
+ *  size regardless of rig height. Falls back gracefully on bad input. Pure;
+ *  exported for tests. */
+export function weaponGripLocalTransform(model, modelLongSpan, rigScale) {
+  const cfg = WEAPON_GRIP_TRANSFORMS[model];
+  if (!cfg) return null;
+  const span = (typeof modelLongSpan === 'number' && modelLongSpan > 0) ? modelLongSpan : 1;
+  const rs   = (typeof rigScale === 'number' && rigScale > 0) ? rigScale : 1;
+  // worldLength = span × scale × rigScale  ⇒  scale = worldLength / (span × rigScale)
+  const scale = cfg.worldLength / (span * rs);
+  return {
+    scale,
+    rotation: { ...cfg.rotation },
+    offset:   { ...cfg.offset },
+  };
+}
+
+/** Measure a weapon template's natural long-axis span (the largest of its three
+ *  bbox dimensions) from the mesh's LOCAL bounding box — the raw geometry extent,
+ *  ignoring any node transform sitting on the mesh.
+ *
+ *  Why local and not world: `_buildWeaponGlbClone` OVERWRITES the clone's
+ *  `scaling` with the grip scale, so the template's node transform is discarded
+ *  on every held weapon — only the vertex extent feeds the on-screen size. The
+ *  four weapon GLBs measure inconsistently in WORLD space: the multi-primitive
+ *  ones (sword/axe/dagger) are collapsed by MergeMeshes, which bakes each node's
+ *  world transform into the vertices and leaves an identity world matrix (local
+ *  == world). Rifle.glb is a SINGLE primitive, so it skips that merge-bake and
+ *  keeps its glTF node scale of 100 on the transform: its world bbox reads ≈2.9
+ *  while its true geometry is ≈0.029 — a 100× discrepancy that previously had to
+ *  be cancelled by a magic `worldLength`. Reading the local bbox measures all
+ *  four the same way (raw geometry), so one sane `worldLength` per weapon works.
+ *  Falls back to 1 on a missing/stubbed bounding box. Pure; exported for tests. */
+export function weaponModelLongSpan(source) {
+  if (!source || typeof source.getBoundingInfo !== 'function') return 1;
+  try {
+    const info = source.getBoundingInfo();
+    const bb   = info?.boundingBox;
+    if (!bb) return 1;
+    const min = bb.minimum ?? bb.minimumWorld ?? {};
+    const max = bb.maximum ?? bb.maximumWorld ?? {};
+    const dx = Math.abs((max.x ?? 0) - (min.x ?? 0));
+    const dy = Math.abs((max.y ?? 0) - (min.y ?? 0));
+    const dz = Math.abs((max.z ?? 0) - (min.z ?? 0));
+    const span = Math.max(dx, dy, dz);
+    return span > 0 ? span : 1;
+  } catch { return 1; }
 }
 
 /** Classify a Mixamo leg bone by name → 'thigh' | 'shin' | 'foot' | null.
@@ -1147,6 +1319,30 @@ export const SELECTION_FOCUS_RADIUS = 14;
  *  deliberate "lean in" on the two combatants. Normal play restores the
  *  prior framing on the next selection/draw — no manual restore needed. */
 export const COMBAT_FOCUS_RADIUS = 12;
+
+/** Pure helper: decide the radius an AUTO-focus (selection, turn/active-unit,
+ *  combat lean-in) should ease to.
+ *
+ *  Operator rule: once the player has DELIBERATELY set a zoom distance (wheel,
+ *  pinch, the ⛶ fit button, or the zoom-to-me button), auto-refocus must
+ *  PAN/retarget ONLY — never change the distance. So when `userZoomEstablished`
+ *  is true we return the current radius unchanged.
+ *
+ *  Before the player has touched zoom (`userZoomEstablished` false — a fresh
+ *  game still sitting at the initial map-fit), we keep the legacy "zoom in to a
+ *  sensible default" behaviour: ease IN to `fallbackRadius` but never OUT past
+ *  the current radius, and never closer than the camera's `lowerLimit`. This
+ *  preserves the first-focus framing without re-zooming an established view.
+ *
+ *  @param {number} currentRadius        camera.radius right now
+ *  @param {boolean} userZoomEstablished has the user set distance themselves?
+ *  @param {number} fallbackRadius       default zoom-in target (e.g. SELECTION_FOCUS_RADIUS)
+ *  @param {number} lowerLimit           camera.lowerRadiusLimit (closest allowed)
+ *  @returns {number} the radius the focus ease should target */
+export function resolveFocusRadius(currentRadius, userZoomEstablished, fallbackRadius, lowerLimit = 4) {
+  if (userZoomEstablished) return currentRadius;
+  return Math.min(currentRadius, Math.max(lowerLimit, fallbackRadius));
+}
 
 /** Breathing room (world units) added around an entity-framing bounding box so
  *  standees aren't flush against the viewport edge when `frameEntities` fits a
@@ -1545,7 +1741,12 @@ export function hexToWorld(col, row, radius = HEX_RADIUS_WORLD) {
  * ally's hex centre and the defender's hex centre.
  *
  * Rules:
- *   - defender re-centres on its hex.
+ *   - the defender STAYS in its current sub-hex slot (it does NOT re-centre).
+ *     `opts.defenderWorld` is the defender standee's live world position; when
+ *     omitted we fall back to the hex centre (legacy callers / tests). The
+ *     returned `defender` is that resolved position, so the caller's slide is a
+ *     no-op and the defender holds its slot for the readout. Ally edge spots
+ *     still anchor on the defender's hex CENTRE (gang-up framing unchanged).
  *   - each of the defender hex's 6 edges holds AT MOST ONE participant. The
  *     attacker (when given) reserves the edge nearest its hex first — its
  *     lunge freezes there — then the first `advantageCap` allies per side
@@ -1563,16 +1764,27 @@ export function hexToWorld(col, row, radius = HEX_RADIUS_WORLD) {
  *
  * @param {object} opts
  * @param {{id:any, col:number, row:number}} opts.defender
+ * @param {{x:number, z:number}} [opts.defenderWorld] live slot position of the
+ *        defender standee; the returned `defender` is this (or the hex centre
+ *        when absent) so the defender holds its slot — it never re-centres.
  * @param {{id:any, col:number, row:number}} [opts.attacker]
  * @param {Array<{id:any, col:number, row:number}>} [opts.attackAllies]
  * @param {Array<{id:any, col:number, row:number}>} [opts.defenseAllies]
  * @param {number} [opts.advantageCap=ADVANTAGE_CAP]
  */
 export function planCombatPositions({
-  defender, attacker = null, attackAllies = [], defenseAllies = [],
+  defender, defenderWorld = null, attacker = null,
+  attackAllies = [], defenseAllies = [],
   advantageCap = ADVANTAGE_CAP,
 } = {}) {
   const defCentre = hexToWorld(defender.col, defender.row);
+  // Where the defender actually stands (its slot), used as the returned target
+  // so the defender HOLDS its slot rather than snapping to the hex centre. The
+  // edge midpoints below still anchor on the hex CENTRE so gang-up allies frame
+  // the hex consistently regardless of which sub-slot the defender occupies.
+  const defPos = (defenderWorld && Number.isFinite(defenderWorld.x) && Number.isFinite(defenderWorld.z))
+    ? { x: defenderWorld.x, z: defenderWorld.z }
+    : defCentre;
   // The 6 edge midpoints of the defender's hex — midpoint between the defender
   // centre and each neighbour centre. fortNeighborOffset (not getNeighbors) so
   // map-border hexes keep all 6 edges.
@@ -1613,7 +1825,7 @@ export function planCombatPositions({
     return { id: ally.id, toX: edge.x, toZ: edge.z, moves: true };
   };
   return {
-    defender: defCentre,
+    defender: defPos,
     attackerAllies: attackAllies.map(project),
     defenderAllies: defenseAllies.map(project),
   };
@@ -2203,6 +2415,12 @@ export class Renderer3D {
     this.unitInfoCards      = new Map();
     this.viewLocked         = false;
     this.zoomLevel          = 1.0;
+    /** True once the player has DELIBERATELY set a camera distance — mouse
+     *  wheel, pinch, the ⛶ fit button, or the zoom-to-me button. While false
+     *  (fresh game still at the initial map-fit) auto-focus may zoom in to a
+     *  sensible default; once true, auto-refocus PANS ONLY and preserves
+     *  whatever distance the player chose. See `resolveFocusRadius`. */
+    this._userZoomEstablished = false;
     this.hexSize            = 30;
     this.useTileImages      = true;
     this._zoomAnim          = null;
@@ -2233,13 +2451,30 @@ export class Renderer3D {
     //                          of that type keep the procedural box+roof.
     this._buildingTemplates   = new Map();
     this._buildingLoadPromises = new Map();
-    // FogDarkenPlugin instances attached to building template materials. All
-    // share one global fogged-tile uniform list (no per-instance attribute —
-    // see src/fog-darken-plugin.js for why the May per-instance attempt failed).
-    // `_updateBuildingFogUniform` pushes the current fogged-building XZ centres
-    // into every plugin whenever the fog veil changes.
-    this._buildingFogPlugins = new Set();
+    // Live building meshes (CLONES of the GLB templates, each with its own
+    // cloned material) tracked so `_applyBuildingFogDarken` can tint an
+    // individual fogged building without touching the shared template. This
+    // replaces the old per-fragment FogDarkenPlugin shader, which was fragile
+    // across WebGL drivers (Chrome/ANGLE left fogged buildings bright while
+    // Safari darkened them). Fog is per-tile and a building is wholly fogged or
+    // wholly visible, so plain material darkening — the same mechanism roads and
+    // rivers already use (`_setTilePropsFogged`'s 'darken' policy) — is all that
+    // is needed, and it behaves identically on every browser.
+    this._buildingMeshes = new Set();
     this._assetsBasePath   = null; // captured by loadImages()
+    // ── Weapon GLB model state (see `_loadWeaponModel`) ───────────────────
+    // `_weaponTemplates`    : Map<modelName, { mesh, longSpan }> — one hidden
+    //                          source mesh per weapon model ('sword'|'axe'|
+    //                          'rifle'|'dagger'). Each held weapon is a CLONE of
+    //                          its template parented to the standee's right-hand
+    //                          bone (see _syncStandeeWeapon). `longSpan` is the
+    //                          template's measured long-axis span, used to derive
+    //                          a uniform grip scale (weaponGripLocalTransform).
+    // `_weaponLoadPromises` : Map<modelName, Promise> — de-dupes concurrent
+    //                          loads. A failed/missing load leaves the model
+    //                          absent so that weapon falls back to the cylinder.
+    this._weaponTemplates   = new Map();
+    this._weaponLoadPromises = new Map();
     // ── Tree-pack GLB state (see `_loadTreePackManifest`) ─────────────────
     // `_treeTemplates`     : Map<filename, mesh>   — hidden source meshes,
     //                       one per unique GLB file loaded from the manifest.
@@ -2317,8 +2552,8 @@ export class Renderer3D {
     this._useSplatTerrain = true; // 1-line rollback: set false for legacy per-hex path
     this._splatGround   = null;  // the single merged ground mesh (flag on)
     this._splatPlugin   = null;  // TerrainSplatPlugin instance on the ground material
-    this._hexVertexRange = new Map(); // hexKey → base vertex index (×7 per tile)
-    this._splatFogBuf    = null; // Float32Array(tiles×7) backing the aFog attribute
+    this._hexVertexRange = new Map(); // hexKey → base vertex index (×13 per tile)
+    this._splatFogBuf    = null; // Float32Array(tiles×13) backing the aFog attribute
     // Per-map deterministic season tag — picked in `_buildMap` from a hash of
     // the tile layout (or `state.mapSeed` if exposed later). Drives seasonal
     // tree palettes + geometry. Null until the map is built.
@@ -2691,6 +2926,9 @@ export class Renderer3D {
     // if already resolved), so this never starts a duplicate network load.
     const afterInit = (fn) => babylonP.then(() => (this._scene ? fn() : null));
     const buildingsP = afterInit(() => this._loadBuildingModels(basePath));
+    // Held-weapon GLBs (sword/axe/rifle/dagger). Lazy + fault-isolated — a
+    // missing weapon GLB just falls back to the cylinder stand-in.
+    const weaponsP   = afterInit(() => this._loadWeaponModels(basePath));
     // Pre-warm the hero rig (and, transitively, the shared walking source) via
     // the generic cascade — the hero is just EntityType.PALADIN → paladin-idle.glb.
     const paladinP   = afterInit(() => this._loadFallbackRig(PALADIN_MODEL_FILE, basePath));
@@ -2709,6 +2947,7 @@ export class Renderer3D {
       { id: 'engine',     label: 'engine',     promise: babylonP,    progress: 0 },
       { id: 'sprites',    label: 'sprites',    promise: atlasP,      progress: 0 },
       { id: 'buildings',  label: 'buildings',  promise: buildingsP,  progress: 0 },
+      { id: 'weapons',    label: 'weapons',    promise: weaponsP,    progress: 0 },
       { id: 'paladin',    label: 'paladin',    promise: paladinP,    progress: 0 },
       { id: 'characters', label: 'characters', promise: charactersP, progress: 0 },
       { id: 'forest',     label: 'forest',     promise: treesP,      progress: 0 },
@@ -3201,16 +3440,8 @@ export class Renderer3D {
 
       this._buildingTemplates.set(relPath, { mesh: source, scale });
 
-      // Fog darken: attach the FogDarkenPlugin to this template's material(s)
-      // (recursing into a MultiMaterial's submaterials). Every instance of this
-      // variant shares the template material, so the plugin's global fogged-tile
-      // uniform — pushed by `_updateBuildingFogUniform` — darkens whichever
-      // instances stand on a fogged hex, keyed by the fragment's own world XZ.
-      // This deliberately replaces the failed per-instance-attribute path.
-      // NB: we attach to the MATERIAL, not the mesh. Passing a mesh trips
-      // `MaterialPluginBase._enable` against a non-material and throws inside
-      // the load promise — silently leaving the procedural fallback in place.
-      this._attachBuildingFogPlugin(source.material);
+      // Fog darkening is handled per-building at clone time + in
+      // `_applyBuildingFogDarken` (material tint), not on the shared template.
 
       // If the map's already built (the common case — GLB load is slow,
       // _buildMap runs synchronously right after Babylon init), retrofit the
@@ -3220,6 +3451,105 @@ export class Renderer3D {
     })();
 
     this._buildingLoadPromises.set(relPath, promise);
+    return promise;
+  }
+
+  /** Kick off the load of every weapon GLB (lazily, in parallel). Fire-and-
+   *  forget from `beginLoad`; each load is de-duped + fault-isolated so a
+   *  missing/broken weapon GLB never blocks the others or gameplay (that
+   *  weapon simply falls back to the cylinder stand-in). Resolves once all
+   *  loads have settled. */
+  async _loadWeaponModels(basePath = this._assetsBasePath || 'assets') {
+    if (!this._babylon || !this._scene) return null;
+    const names = Object.keys(WEAPON_MODEL_FILES);
+    return Promise.all(names.map(name => this._loadWeaponModel(name, basePath)));
+  }
+
+  /** Lazy-load one weapon GLB (`<basePath>/<file>`) and stash it as a hidden
+   *  template in `_weaponTemplates` keyed by model name. Each held weapon is a
+   *  `mesh.clone(...)` of the template, parented to the standee's right-hand
+   *  bone (see `_syncStandeeWeapon`). The GLB is intentionally optional: any
+   *  loader / import / merge failure leaves the model absent from
+   *  `_weaponTemplates`, so that weapon keeps the cylinder stand-in. De-duped
+   *  per model via `_weaponLoadPromises`.
+   *
+   *  Mirrors `_loadBuildingModel`: same loaders-plugin registration, the same
+   *  geometry-mesh filter + MergeMeshes collapse, but it does NOT bake the
+   *  origin to the bottom — a held weapon's pivot is its grip, placed via the
+   *  per-model grip transform, not the ground. The template's long-axis span is
+   *  measured so `weaponGripLocalTransform` can derive a constant on-screen
+   *  size. */
+  async _loadWeaponModel(model, basePath = this._assetsBasePath || 'assets') {
+    if (!this._babylon || !this._scene || !model) return null;
+    const file = WEAPON_MODEL_FILES[model];
+    if (!file) return null;
+    const existing = this._weaponTemplates.get(model);
+    if (existing && existing.mesh) return existing.mesh;
+    if (this._weaponLoadPromises.has(model)) return this._weaponLoadPromises.get(model);
+    const BABYLON = this._babylon;
+
+    const promise = (async () => {
+      await this._ensureBabylonLoaders();
+      if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
+        console.warn('[Renderer3D] BABYLON.SceneLoader.ImportMeshAsync unavailable; skipping weapon model.');
+        return null;
+      }
+
+      let result;
+      try {
+        result = await BABYLON.SceneLoader.ImportMeshAsync(
+          null, `${basePath}/`, file, this._scene, this._glbProgressHandler('weapons'),
+        );
+      } catch (err) {
+        console.warn(`[Renderer3D] ${file} load failed; ${model} weapons use the cylinder stand-in.`, err);
+        return null;
+      }
+
+      const realMeshes = (result.meshes || []).filter(m =>
+        m && typeof m.getTotalVertices === 'function' && m.getTotalVertices() > 0,
+      );
+      if (realMeshes.length === 0) {
+        console.warn(`[Renderer3D] ${file} contained no geometry; ${model} weapons use the cylinder stand-in.`);
+        return null;
+      }
+
+      // Collapse to ONE source mesh so clones share a single vertex buffer.
+      let source = realMeshes[0];
+      if (realMeshes.length > 1 && typeof BABYLON.Mesh?.MergeMeshes === 'function') {
+        try {
+          const merged = BABYLON.Mesh.MergeMeshes(
+            realMeshes, true, true, undefined, false, true,
+          );
+          if (merged) source = merged;
+        } catch (err) {
+          console.warn(`[Renderer3D] ${file} merge failed; using first sub-mesh.`, err);
+          source = realMeshes[0];
+        }
+      }
+      if (!source) return null;
+
+      // Measure the natural long-axis span (largest bbox dimension) so the grip
+      // transform can scale every weapon to a constant on-screen size. Measured
+      // from the LOCAL (geometry-space) bbox, not the world bbox — see
+      // `weaponModelLongSpan` for why: a clone OVERWRITES `scaling` with the grip
+      // scale, so only the raw vertex extent matters, and world-space readings
+      // are inconsistent across the four GLBs (single-primitive Rifle.glb skips
+      // the MergeMeshes transform-bake and so carries an un-baked node scale 100,
+      // reading ~100× the others in world space).
+      const longSpan = weaponModelLongSpan(source);
+
+      // Hide the template — clones render geometry on its behalf.
+      if (typeof source.setEnabled === 'function') source.setEnabled(false);
+      source.isPickable = false;
+      if (typeof source.renderingGroupId !== 'undefined') source.renderingGroupId = WORLD_GROUP;
+      applyShadowReceiving([source, ...(typeof source.getChildMeshes === 'function' ? source.getChildMeshes() : [])]);
+
+      this._weaponTemplates.set(model, { mesh: source, longSpan });
+      console.log(`[Renderer3D] ${file} loaded (weapon model '${model}', long-span ${longSpan.toFixed(3)}).`);
+      return source;
+    })();
+
+    this._weaponLoadPromises.set(model, promise);
     return promise;
   }
 
@@ -3253,14 +3583,19 @@ export class Renderer3D {
     };
   }
 
-  /** Create one BABYLON.InstancedMesh of the building tile's chosen GLB variant
-   *  template, positioned on the tile's FOOTPRINT hex (centred, facing the
-   *  entrance) — or the legacy NE building slot for an orphan building with no
-   *  footprint (see `_buildingPlacement`). Scale is the template's bbox-derived
-   *  base (every type fills ~1 hex of ground) times a small *uniform* per-hex
-   *  jitter so a cluster doesn't look stamped. Returns the instance, or null if
-   *  no template for this tile's variant is loaded yet (caller falls back to
-   *  procedural box+roof). */
+  /** Create one building mesh from the tile's chosen GLB variant template,
+   *  positioned on the tile's FOOTPRINT hex (centred, facing the entrance) — or
+   *  the legacy NE building slot for an orphan building with no footprint (see
+   *  `_buildingPlacement`). Scale is the template's bbox-derived base (every type
+   *  fills ~1 hex of ground) times a small *uniform* per-hex jitter so a cluster
+   *  doesn't look stamped. Returns the mesh, or null if no template for this
+   *  tile's variant is loaded yet (caller falls back to procedural box+roof).
+   *
+   *  CLONE, not InstancedMesh: each building gets its OWN mesh + material so
+   *  fog-of-war can darken a single fogged building's material independently
+   *  (`_applyBuildingFogDarken`). The clone SHARES the template's geometry, so
+   *  the only added cost is one draw call + one (geometry-free) material clone
+   *  per building — negligible at the handful of buildings per map. */
   _buildBuildingInstance(tile, x, z, parent) {
     if (!this._babylon) return null;
     const variant = buildingGlbVariantForHex(tile);
@@ -3269,47 +3604,77 @@ export class Renderer3D {
     if (!tpl || !tpl.mesh) return null;
     const BABYLON = this._babylon;
     const source  = tpl.mesh;
-    if (typeof source.createInstance !== 'function') return null;
+    if (typeof source.clone !== 'function') return null;
     // Tile-top anchor — matches the procedural building's base Y (0.43 - 0.7/2).
     const tileTopY = 0.43 - 0.7 / 2;
     const baseScale = tpl.scale != null ? tpl.scale : HOUSE_INSTANCE_BASE_SCALE;
     const { bx, bz, yaw } = this._buildingPlacement(tile, x, z);
 
-    const inst = source.createInstance(`bldgInst_${tile.col}_${tile.row}`);
-    if (parent && 'parent' in inst) inst.parent = parent;
-    if (inst.position && typeof inst.position === 'object') {
-      inst.position.x = bx;
-      inst.position.y = tileTopY;
-      inst.position.z = bz;
+    const mesh = source.clone(`bldgGlb_${tile.col}_${tile.row}`);
+    if (!mesh) return null;
+    // The template is hidden (`setEnabled(false)`) — instances rendered on its
+    // behalf; a clone inherits that disabled state, so re-enable it.
+    if (typeof mesh.setEnabled === 'function') mesh.setEnabled(true);
+    // Give the clone its own material so darkening it never touches the template
+    // (or sibling buildings). `clone()` shares the material by reference.
+    const ownMat = this._cloneBuildingMaterial(source.material, `${tile.col}_${tile.row}`);
+    if (ownMat) mesh.material = ownMat;
+    if (parent && 'parent' in mesh) mesh.parent = parent;
+    if (mesh.position && typeof mesh.position === 'object') {
+      mesh.position.x = bx;
+      mesh.position.y = tileTopY;
+      mesh.position.z = bz;
     }
     const sc = houseInstanceScalingForHex(tile.col, tile.row);
     if (BABYLON.Vector3) {
-      inst.scaling = new BABYLON.Vector3(
+      mesh.scaling = new BABYLON.Vector3(
         baseScale * sc.x,
         baseScale * sc.y,
         baseScale * sc.z,
       );
-      inst.rotation = new BABYLON.Vector3(0, yaw, 0);
+      mesh.rotation = new BABYLON.Vector3(0, yaw, 0);
     }
-    inst.isPickable = false;
+    mesh.isPickable = false;
     // `respectsFog: false` keeps the per-prop veil loop (`_setTilePropsFogged`)
-    // from touching the building — its fog darkening is handled globally by the
-    // FogDarkenPlugin uniform (`_updateBuildingFogUniform`), which dims the
-    // template material's fragments wherever they land on a fogged hex.
-    inst.metadata = {
+    // from hiding/touching the building — its fog darkening is the dedicated
+    // `_applyBuildingFogDarken` pass, keyed on the building's RENDER hex
+    // (`fogHexKey`) so a footprinted building darkens with the hex it visibly
+    // stands on, matching the old behaviour.
+    mesh.metadata = {
       respectsFog: false,
       kind: 'building-glb',
       col: tile.col,
       row: tile.row,
+      fogHexKey: buildingRenderHex(tile),
     };
-    // Belt-and-suspenders: the template already carries receiveShadows (so the
-    // instance inherits it), but set it explicitly too — mirrors the tree path.
-    if ('receiveShadows' in inst) inst.receiveShadows = true;
-    this._addShadowCaster(inst);
+    if ('receiveShadows' in mesh) mesh.receiveShadows = true;
+    this._addShadowCaster(mesh);
     // World-geometry render group, same as the procedural box+roof + tile
     // cylinders — keeps the depth buffer consistent for unit/building overlap.
-    if (typeof inst.renderingGroupId !== 'undefined') inst.renderingGroupId = WORLD_GROUP;
-    return inst;
+    if (typeof mesh.renderingGroupId !== 'undefined') mesh.renderingGroupId = WORLD_GROUP;
+    // Track for the fog-darken pass and seed its current fogged state.
+    this._buildingMeshes.add(mesh);
+    this._applyBuildingFogDarkenTo(mesh);
+    return mesh;
+  }
+
+  /** Clone a building template's material (recursing into a MultiMaterial's
+   *  sub-materials) so each building can be fog-darkened independently. Returns
+   *  the cloned material, or the original if it can't be cloned (test stubs). */
+  _cloneBuildingMaterial(srcMat, tag) {
+    if (!srcMat) return null;
+    if (Array.isArray(srcMat.subMaterials)) {
+      if (typeof srcMat.clone !== 'function') return srcMat;
+      const multi = srcMat.clone(`bldgMat_${tag}`);
+      // MultiMaterial.clone keeps sub-material references; clone each so tinting
+      // one building never bleeds into another sharing the template.
+      if (multi && Array.isArray(multi.subMaterials)) {
+        multi.subMaterials = srcMat.subMaterials.map((m, i) =>
+          (m && typeof m.clone === 'function') ? m.clone(`bldgSub_${tag}_${i}`) : m);
+      }
+      return multi || srcMat;
+    }
+    return typeof srcMat.clone === 'function' ? (srcMat.clone(`bldgMat_${tag}`) || srcMat) : srcMat;
   }
 
   /** Sweep `_tilePropsByKey` for every building tile, dispose the procedural
@@ -3356,54 +3721,70 @@ export class Renderer3D {
     return upgraded;
   }
 
-  /** Attach the FogDarkenPlugin to a building template's material(s) and track
-   *  the resulting plugin instances so `_updateBuildingFogUniform` can feed them
-   *  the fogged-tile list. Seeds the per-plugin darken/radius from the current
-   *  fog floor, then primes the uniform with whatever is fogged right now (so a
-   *  template that loads AFTER the first fog pass dims immediately). No-op
-   *  without Babylon (node tests can still drive the uniform helper directly). */
-  _attachBuildingFogPlugin(material) {
-    if (!this._babylon || !material) return;
-    const plugins = attachFogDarkenToMaterial(this._babylon, material) || [];
-    for (const p of plugins) {
-      // Match the terrain/road "occluded read" floor so a fogged building reads
-      // the same darkness as the ground beneath it.
-      p.fogDarkenAmount = FOG_HIDDEN_DARKEN;
-      this._buildingFogPlugins.add(p);
+  /** Darken every fogged building and restore every visible one. Called from
+   *  `_applyFogVeil` after the fogged set is resolved. Walks the tracked building
+   *  meshes (a handful per map) and tints each one's material based on whether
+   *  its render hex is fogged — plain material darkening that behaves identically
+   *  on every WebGL driver (no shader injection). */
+  _applyBuildingFogDarken() {
+    if (!this._buildingMeshes || this._buildingMeshes.size === 0) return;
+    for (const mesh of this._buildingMeshes) {
+      if (!mesh || (typeof mesh.isDisposed === 'function' && mesh.isDisposed())) {
+        this._buildingMeshes.delete(mesh);
+        continue;
+      }
+      this._applyBuildingFogDarkenTo(mesh);
     }
-    if (plugins.length) this._updateBuildingFogUniform();
   }
 
-  /** Recompute the fogged-building XZ-centre list and push it into every
-   *  attached FogDarkenPlugin. Called from `_applyFogVeil` after the fogged set
-   *  is resolved. Cheap: walks `_fogActiveSet` (already the diffed fogged keys),
-   *  keeps only building tiles, and writes a flat Float32Array the shader reads
-   *  per fragment. Caps at MAX_FOG_TILES — surplus fogged buildings render
-   *  un-dimmed and are logged once per overflow. */
-  _updateBuildingFogUniform() {
-    if (this._buildingFogPlugins.size === 0) return;
-    const centres = buildFoggedBuildingTileList(this.state, this._fogActiveSet);
-    const n = Math.min(centres.length, MAX_FOG_TILES);
-    if (centres.length > MAX_FOG_TILES && !this._fogTileOverflowWarned) {
-      console.warn(
-        `[Renderer3D] ${centres.length} fogged building tiles exceed MAX_FOG_TILES=`
-        + `${MAX_FOG_TILES}; extras render un-dimmed.`,
-      );
-      this._fogTileOverflowWarned = true;
-    }
-    for (const p of this._buildingFogPlugins) {
-      const buf = p.fogTiles;
-      for (let i = 0; i < n; i++) {
-        buf[i * 2]     = centres[i].x;
-        buf[i * 2 + 1] = centres[i].z;
+  /** River rocks are cloned GLB models with per-tile materials (see
+   *  `_buildRiverRocks`), so they fog-darken through the exact same per-mesh
+   *  material tint buildings use — keyed on each rock's `fogHexKey` river tile. */
+  _applyRiverRockFogDarken() {
+    const rocks = this._riverRockMeshes;
+    if (!rocks || rocks.length === 0) return;
+    for (let i = rocks.length - 1; i >= 0; i--) {
+      const mesh = rocks[i];
+      if (!mesh || (typeof mesh.isDisposed === 'function' && mesh.isDisposed())) {
+        rocks.splice(i, 1);
+        continue;
       }
-      // Park unused slots at the far sentinel so a stale value can't match.
-      for (let i = n; i < MAX_FOG_TILES; i++) {
-        buf[i * 2]     = 1e8;
-        buf[i * 2 + 1] = 1e8;
-      }
-      p.fogCount = n;
+      this._applyBuildingFogDarkenTo(mesh);
     }
+  }
+
+  /** Tint a single building mesh's material(s) to the fogged "occluded" floor
+   *  when its render hex is in `_fogActiveSet`, or back to full brightness when
+   *  it isn't. Idempotent — base colours are stashed on each material the first
+   *  time so re-revealing restores the exact original tint. */
+  _applyBuildingFogDarkenTo(mesh) {
+    const key = mesh.metadata?.fogHexKey;
+    const fogged = !!(key && this._fogActiveSet && this._fogActiveSet.has(key));
+    // Same "occluded read" floor the terrain / road veil uses.
+    const k = fogged ? FOG_HIDDEN_DARKEN : 1.0;
+    const mat = mesh.material;
+    if (!mat) return;
+    const mats = Array.isArray(mat.subMaterials) ? mat.subMaterials : [mat];
+    for (const m of mats) this._setBuildingMatDarken(m, k);
+  }
+
+  /** Multiply a building material's colour(s) by `k` (1.0 = original). Handles
+   *  both PBR (`albedoColor`) and Standard (`diffuseColor`) GLB materials, plus
+   *  emissive. Base colours are cached on the material on first touch so the
+   *  multiply never compounds across fog flickers. */
+  _setBuildingMatDarken(m, k) {
+    if (!m) return;
+    const scale = (color, baseKey) => {
+      if (!color) return;
+      let base = m[baseKey];
+      if (!base) { base = m[baseKey] = { r: color.r, g: color.g, b: color.b }; }
+      color.r = base.r * k;
+      color.g = base.g * k;
+      color.b = base.b * k;
+    };
+    scale(m.albedoColor, '_fogBaseAlbedo');    // PBRMaterial
+    scale(m.diffuseColor, '_fogBaseDiffuse');  // StandardMaterial
+    scale(m.emissiveColor, '_fogBaseEmissive');
   }
 
   /** Lazy-load the tree-pack manifest at `<basePath>/<TREE_PACK_DIR>manifest.json`
@@ -4811,39 +5192,100 @@ export class Renderer3D {
   }
 
   /** ─── G6: weapon-in-hand ────────────────────────────────────────────────
-   *  Attach a per-standee weapon stand-in to the paladin's right-hand bone
-   *  when the entity has a weapon equipped; dispose it when the weapon is
-   *  dropped. Idempotent — safe to call every sync pass.
+   *  Attach a per-standee held weapon to the paladin's right-hand bone when the
+   *  entity has a weapon equipped; dispose it when the weapon is dropped, and
+   *  SWAP it when the equipped weapon changes to a different model. Idempotent —
+   *  safe to call every sync pass.
+   *
+   *  The equipped weapon id (src/items.js) maps to one of four GLB models via
+   *  `weaponModelForId` — sword/axe/rifle/dagger render the real model in the
+   *  fist; anything without a model (shield/staff/magic_bolt) or a model whose
+   *  GLB hasn't loaded yet falls back to the cylinder stand-in. `weaponKey`
+   *  records which variant is currently attached (`'glb:<model>'` |
+   *  `'cylinder'` | null) so a weapon change rebuilds and a pending GLB load
+   *  upgrades the cylinder once the template arrives.
    *
    *  Per-unit attachment on the SHARED skeleton works because Babylon's
    *  `attachToBone(bone, affectorMesh)` positions the mesh from the bone's
    *  LOCAL pose composed with the affector mesh's WORLD matrix. We pass the
-   *  standee's own skinned clone as the affector, so each unit's sword tracks
+   *  standee's own skinned clone as the affector, so each unit's weapon tracks
    *  that unit's hand — not a single shared hand. */
   _syncStandeeWeapon(standee, entity) {
     if (!standee) return;
-    const want = entityHasWeapon(entity) && !!standee.paladinClone;
-    if (want === !!standee.weaponMesh) return;  // already in the right state
-    if (!want) { this._disposeStandeeWeapon(standee); return; }
+    const equipped = (entityHasWeapon(entity) && !!standee.paladinClone)
+      ? getEquippedWeaponIdOf(entity?.items) : null;
+    if (!equipped) {
+      // No weapon (or no rig yet) → tear any attached weapon down.
+      if (standee.weaponMesh) this._disposeStandeeWeapon(standee);
+      return;
+    }
+    // Which variant do we WANT? A loaded GLB template wins; otherwise the
+    // cylinder stand-in (also the path for weapons with no GLB analogue).
+    const model = weaponModelForId(equipped);
+    const tpl   = model ? this._weaponTemplates.get(model) : null;
+    const wantKey = (model && tpl?.mesh) ? `glb:${model}` : 'cylinder';
+    if (standee.weaponKey === wantKey && standee.weaponMesh) return; // already correct
 
+    // Variant changed (equip swap, or the GLB finished loading) → rebuild.
+    if (standee.weaponMesh) this._disposeStandeeWeapon(standee);
+
+    const mesh = (wantKey === 'cylinder')
+      ? this._buildWeaponCylinder(standee, entity)
+      : this._buildWeaponGlbClone(standee, entity, model, tpl);
+    if (!mesh) return; // build failed — try again next pass (weaponKey stays null)
+    standee.weaponMesh = mesh;
+    standee.weaponKey  = wantKey;
+  }
+
+  /** Resolve the shared attach context (hand bone + affector + per-standee rig
+   *  scale) for a weapon mesh, or null if the rig isn't ready. */
+  _weaponAttachContext(standee) {
     const BABYLON = this._babylon;
-    const clone = standee.paladinClone;
+    const clone = standee?.paladinClone;
+    if (!BABYLON || !clone) return null;
     // Use the clone's OWN skeleton (every rig has its own), not the paladin's.
     const skeleton = clone.skinnedMesh?.skeleton || this._paladinSource?.skeleton || null;
-    if (!BABYLON?.MeshBuilder || !skeleton) return;
+    if (!skeleton) return null;
     const affector = clone.skinnedMesh || clone.mesh;
-    if (!affector || typeof affector.attachToBone !== 'function') return;
+    if (!affector || typeof affector.attachToBone !== 'function') return null;
     const handBone = findBoneByName(skeleton, WEAPON_BONE_NAME_RE);
-    if (!handBone) return;
-
-    // World-size blade → rig-LOCAL cylinder dims. The per-standee scale lives
-    // on the clone root; attachToBone folds it in via the affector's world
-    // matrix, so we divide it back out here to land a constant on-screen size.
-    // Read the clone root's actual scale so any rig (not just paladin) is right.
+    if (!handBone) return null;
+    // The per-standee scale lives on the clone root; attachToBone folds it in
+    // via the affector's world matrix, so callers divide it back out to land a
+    // constant on-screen size. Read the clone root's actual scale so any rig
+    // (not just the paladin) is right.
     const rigScale = (clone.mesh?.scaling?.x > 0) ? clone.mesh.scaling.x
       : (typeof this._paladinScale === 'number' && this._paladinScale > 0)
         ? this._paladinScale : PALADIN_BASE_SCALE;
-    const t = weaponStandInTransform(rigScale);
+    return { handBone, affector, rigScale };
+  }
+
+  /** Finish a weapon mesh: world-group / pickable flags, attach to the hand
+   *  bone, register as a shadow caster, and inherit the standee's current
+   *  fog/enabled state. The mesh is a SCENE-ROOT mesh (attachToBone drives only
+   *  its world transform, not scene-graph parentage), so it does NOT inherit
+   *  the standee plane's setEnabled state — mirror it explicitly here, or
+   *  equipping onto a fog-hidden unit flashes a weapon over an empty fogged hex
+   *  until the next `_applyFogVeil` pass (which keeps it synced thereafter). */
+  _finishWeaponMesh(standee, mesh, handBone, affector) {
+    mesh.isPickable = false;
+    if (typeof mesh.renderingGroupId !== 'undefined') mesh.renderingGroupId = WORLD_GROUP;
+    mesh.alwaysSelectAsActiveMesh = true;
+    if (typeof mesh.attachToBone === 'function') mesh.attachToBone(handBone, affector);
+    this._addShadowCaster(mesh);
+    if (standee.plane?.isEnabled?.() === false && typeof mesh.setEnabled === 'function') {
+      mesh.setEnabled(false);
+    }
+  }
+
+  /** Build the cylinder weapon stand-in (legacy fallback for weapons with no
+   *  GLB analogue, or while a GLB template is still loading). Returns the mesh
+   *  or null on failure. */
+  _buildWeaponCylinder(standee, entity) {
+    const BABYLON = this._babylon;
+    const ctx = this._weaponAttachContext(standee);
+    if (!BABYLON?.MeshBuilder || !ctx) return null;
+    const t = weaponStandInTransform(ctx.rigScale);
     let blade;
     try {
       blade = BABYLON.MeshBuilder.CreateCylinder(
@@ -4851,10 +5293,7 @@ export class Renderer3D {
         { height: t.height, diameter: t.diameter, tessellation: 6 },
         this._scene,
       );
-    } catch { return; }
-    blade.isPickable = false;
-    if (typeof blade.renderingGroupId !== 'undefined') blade.renderingGroupId = WORLD_GROUP;
-    blade.alwaysSelectAsActiveMesh = true;
+    } catch { return null; }
     // Steel-grey stand-in material (freshly created — never a shared material).
     if (BABYLON.StandardMaterial) {
       const mat = new BABYLON.StandardMaterial(`weapon_mat_${entity?.id ?? 'x'}`, this._scene);
@@ -4872,16 +5311,37 @@ export class Renderer3D {
       blade.position = new BABYLON.Vector3(t.offset.x, t.offset.y, t.offset.z);
       blade.rotation = new BABYLON.Vector3(t.rotation.x, t.rotation.y, t.rotation.z);
     }
-    blade.attachToBone(handBone, affector);
-    this._addShadowCaster(blade);
-    standee.weaponMesh = blade;
-    // Inherit the unit's CURRENT fog/enabled state at creation. The blade is a
-    // scene-root mesh (attachToBone drives only its world transform, not
-    // scene-graph parentage), so it does not auto-inherit the standee plane's
-    // setEnabled state. Without this, equipping a weapon onto a fog-hidden unit
-    // would flash a floating sword over an empty fogged hex until the next
-    // `_applyFogVeil` pass. (That pass also keeps it in sync thereafter.)
-    if (standee.plane?.isEnabled?.() === false) blade.setEnabled(false);
+    this._finishWeaponMesh(standee, blade, ctx.handBone, ctx.affector);
+    return blade;
+  }
+
+  /** Build a CLONE of a loaded weapon GLB template, gripped in the hand. The
+   *  clone shares the template's geometry + material (no per-unit material is
+   *  created), so the only added cost is one draw call per held weapon. The
+   *  per-model grip transform (scale / rotation / offset) positions the handle
+   *  at the bone with the long axis up-and-forward out of the fist. Returns the
+   *  clone or null on failure (caller leaves weaponKey null so a later pass
+   *  retries / falls back to the cylinder). */
+  _buildWeaponGlbClone(standee, entity, model, tpl) {
+    const BABYLON = this._babylon;
+    const ctx = this._weaponAttachContext(standee);
+    if (!BABYLON || !ctx || !tpl?.mesh || typeof tpl.mesh.clone !== 'function') return null;
+    const grip = weaponGripLocalTransform(model, tpl.longSpan, ctx.rigScale);
+    if (!grip) return null;
+    let mesh;
+    try {
+      mesh = tpl.mesh.clone(`weapon_${model}_${entity?.id ?? 'x'}`);
+    } catch { return null; }
+    if (!mesh) return null;
+    // The template is hidden (setEnabled(false)); a clone inherits that — re-enable.
+    if (typeof mesh.setEnabled === 'function') mesh.setEnabled(true);
+    if (BABYLON.Vector3) {
+      mesh.scaling  = new BABYLON.Vector3(grip.scale, grip.scale, grip.scale);
+      mesh.position = new BABYLON.Vector3(grip.offset.x, grip.offset.y, grip.offset.z);
+      mesh.rotation = new BABYLON.Vector3(grip.rotation.x, grip.rotation.y, grip.rotation.z);
+    }
+    this._finishWeaponMesh(standee, mesh, ctx.handBone, ctx.affector);
+    return mesh;
   }
 
   _disposeStandeeWeapon(standee) {
@@ -4890,11 +5350,15 @@ export class Renderer3D {
     if (typeof m.detachFromBone === 'function') { try { m.detachFromBone(); } catch { /* ignore */ } }
     this._removeShadowCaster(m);
     if (typeof m.dispose === 'function') m.dispose();
+    // The cylinder stand-in owns a freshly-created material; a GLB clone shares
+    // the template's material (don't dispose it). weaponMat is only set on the
+    // cylinder path, so disposing it here is safe for both.
     if (standee.weaponMat && typeof standee.weaponMat.dispose === 'function') {
       standee.weaponMat.dispose();
     }
     standee.weaponMesh = null;
     standee.weaponMat = null;
+    standee.weaponKey = null;
   }
 
   /** ─── G5: mounted / horse ───────────────────────────────────────────────
@@ -5726,6 +6190,16 @@ export class Renderer3D {
    *  `frameHexes([singleHex])` is supported: `computeMapBounds` falls back to
    *  the single hex's footprint, and `radiusForFit` floors at the camera's
    *  `lowerRadiusLimit` so we never end up with a zero or sub-tile radius.
+   *
+   *  DISTANCE (operator rule): most callers use this to AUTO-focus on a unit /
+   *  cluster (turn focus, plan jump-to-unit, discovery, end-of-round). Once the
+   *  player has set their own zoom, those must PAN ONLY — so by default we
+   *  retarget WITHOUT recomputing the fit radius (the camera keeps its current
+   *  distance). A deliberate FIT (`opts.fit: true` — the whole-map reset, the
+   *  mission intro, the zoom-to-me button) recomputes the radius to frame the
+   *  given hexes AND establishes the user zoom so the next auto-focus preserves
+   *  it. Before the player has touched zoom, an auto-focus also recomputes the
+   *  fit radius so the first framing of a fresh game lands sensibly.
    */
   frameHexes(positions, opts = {}) {
     if (!this._camera || !positions || positions.length === 0) return;
@@ -5738,7 +6212,14 @@ export class Renderer3D {
 
     const BABYLON = this._babylon;
     const newTarget = new BABYLON.Vector3(bounds.centerX, 0, bounds.centerZ);
-    const newRadius = this._radiusForFit(fitWidth, fitDepth);
+    // A deliberate fit (or the very first framing before any user zoom)
+    // recomputes the radius; an auto-focus on an established view keeps the
+    // player's current distance and just retargets.
+    const recompute = opts.fit === true || !this._userZoomEstablished;
+    const newRadius = recompute ? this._radiusForFit(fitWidth, fitDepth) : this._camera.radius;
+    // A deliberate fit is an explicit distance change — establish the user zoom
+    // so subsequent auto-refocus preserves it (pan-only).
+    if (opts.fit === true) this._userZoomEstablished = true;
     // orientNorth: also rotate to map-north-up (alpha = _lockedAlpha) as part of
     // the same move — used for the initial level/mission view so it lands
     // isometric and north-up regardless of any prior camera azimuth.
@@ -5846,6 +6327,8 @@ export class Renderer3D {
     const upper = camera.upperRadiusLimit ?? 80;
     const radius = zoomToRadius(newZoom, lower, upper);
     this.zoomLevel = radiusToZoom(radius);
+    // Explicit zoom — from here on, auto-refocus preserves the player's distance.
+    this._userZoomEstablished = true;
     this._focusCamera(camera.target.clone(), radius, { forceAnimate: true });
   }
 
@@ -5901,7 +6384,14 @@ export class Renderer3D {
     if (!camera || this.viewLocked || !(factor > 0)) return;
     const lower = camera.lowerRadiusLimit ?? CAMERA_MIN_ZOOM_RADIUS;
     const upper = camera.upperRadiusLimit ?? CAMERA_MAX_ZOOM_RADIUS;
-    camera.radius = Math.max(lower, Math.min(upper, camera.radius / factor));
+    const before = camera.radius;
+    camera.radius = Math.max(lower, Math.min(upper, before / factor));
+    // Deliberate zoom (Shift+↑/↓ keyboard zoom) — like wheel/pinch, mark the
+    // user's distance as established so the next auto-refocus pans only and
+    // preserves it. Guard on a real radius change so a clamped no-op at a limit
+    // (mirrors the pinch handler's `if (radiusDelta !== 0)` precedent) doesn't
+    // flip the flag.
+    if (camera.radius !== before) this._userZoomEstablished = true;
   }
 
   /** Set the 3D drag-mode toggle: 'pan' or 'rotate'. UI calls this when the
@@ -5927,6 +6417,9 @@ export class Renderer3D {
     // tuner can preview the full 0..1 range on the slider.
     if (this._splatPlugin) {
       this._splatPlugin.uFogDarken = v;
+    }
+    if (this._waterRipplePlugin) {
+      this._waterRipplePlugin.uFogDarken = v;
     }
     // Terrain fog materials: diffuseColor = (v, v, v) regardless of original.
     for (const [, mat] of this._terrainFogMaterialCache) {
@@ -5970,7 +6463,8 @@ export class Renderer3D {
     if (!this.state?.tiles) return;
     const all = [];
     for (const tile of this.state.tiles.values()) all.push({ col: tile.col, row: tile.row });
-    this.frameHexes(all, { paddingHexes: 1 });
+    // Whole-map refit — a deliberate distance set, not an auto unit-focus.
+    this.frameHexes(all, { paddingHexes: 1, fit: true });
   }
 
   /** Zoom-to-fit (⛶) single-tap action in 3D. Eases the camera all the way out
@@ -5988,6 +6482,9 @@ export class Renderer3D {
     const camera  = this._camera;
     if (!BABYLON || !camera) return Promise.resolve(false);
     const { target, radius } = this._fitToOwnedUnitsTarget();
+    // The ⛶ fit button is an EXPLICIT distance change — establish the user
+    // zoom so subsequent auto-refocus preserves this fit radius (pan-only).
+    this._userZoomEstablished = true;
     // Keep current alpha (no `alpha` opt) — don't change yaw.
     return this._focusCamera(target, radius, { forceAnimate: true }).then(() => true);
   }
@@ -6248,6 +6745,14 @@ export class Renderer3D {
     if (!BABYLON) return;
     this._babylon = BABYLON;
 
+    // Ensure the monochrome icon font (BrimstoneIcons) is loaded before we paint
+    // glyphs into DynamicTextures. Canvas fillText has no CSS unicode-range
+    // fallback, so an unloaded font would paint tofu on the first billboards.
+    // Fire-and-forget; the render loop repaints later frames with the loaded font.
+    if (typeof document !== 'undefined' && document.fonts?.load) {
+      document.fonts.load('48px BrimstoneIcons').catch(() => {});
+    }
+
     const engine = new BABYLON.Engine(this.canvas, true, { preserveDrawingBuffer: true, stencil: true });
     const scene  = new BABYLON.Scene(engine);
     scene.clearColor = new BABYLON.Color4(0.05, 0.04, 0.07, 1.0); // dark gothic
@@ -6423,6 +6928,9 @@ export class Renderer3D {
     // `_upgradeForestToRealTrees` retrofits every forest cluster with real
     // GLB-tree instances. Errors are caught inside `_loadTreePackManifest`.
     this._loadTreePackManifest(this._assetsBasePath || 'assets');
+    // Small rocks scattered along the river banks — loads async, scatters once
+    // the templates resolve (the river + its rim polylines are built below).
+    this._loadRiverRocks(this._assetsBasePath || 'assets');
 
     // Build the map from current state and frame it (instant — no animation
     // on the very first frame, otherwise the camera "slides in" from the
@@ -6431,6 +6939,13 @@ export class Renderer3D {
     // cap that fits THEIR footprint, not the standard 13×13.
     this._buildMap();
     this._recomputeMaxZoomCap();
+    // NOTE: `_frameFullMap` always frames with `fit: true`, so this init framing
+    // sets `_userZoomEstablished = true`. In live play the flag is therefore
+    // already true before the first auto-focus — `frameHexes`'s "fresh game,
+    // flag false → zoom-in fallback" branch is effectively pre-empted here. The
+    // intended initial zoom-in is handled explicitly by `_focusInitialView(…,
+    // fit: true)` in `src/main.js`, not by that fallback (which mainly matters
+    // for headless/test paths that never run this init).
     this._frameFullMap({ instant: true });
     // Initial standee population so the first frame already has units.
     this._syncEntityStandees();
@@ -6525,7 +7040,7 @@ export class Renderer3D {
         // no-op and the warn below makes that explicit to the operator.
         await new Promise((resolve, reject) => {
           const s = document.createElement('script');
-          s.src = '/assets/vendor/babylonjs/babylon.inspector.bundle.js';
+          s.src = 'assets/vendor/babylonjs/babylon.inspector.bundle.js'; // relative — see BABYLON_CORE_LOCAL note
           s.onload = resolve;
           s.onerror = () => reject(new Error('script load failed'));
           document.head.appendChild(s);
@@ -6692,6 +7207,8 @@ export class Renderer3D {
         // we accumulate -radiusDelta into the inertial offset.
         const radiusDelta = pinchDeltaToRadiusDelta(dDist, PINCH_RADIUS_PER_PX);
         camera.inertialRadiusOffset -= radiusDelta;
+        // Explicit zoom — auto-refocus now preserves the player's distance.
+        if (radiusDelta !== 0) this._userZoomEstablished = true;
       } else if (gestureMode === 'rotate' && (lastPinchAngle !== 0 || lastPinchDist > 0)) {
         const dAngle = twistDelta(lastPinchAngle, newAngle);
         // Twist sign convention: twisting fingers one way should rotate the
@@ -6715,6 +7232,7 @@ export class Renderer3D {
     };
 
     this._onCustomPointerDown = (e) => {
+      if (this._cameraFree) return; // debug free-cam: hand input to Babylon's built-in controls
       // We capture the pointer so move/up still fire if the user drags off-
       // canvas; this is important for the buttons row at the bottom edge.
       try { this.canvas.setPointerCapture?.(e.pointerId); } catch { /* ignore */ }
@@ -6771,6 +7289,7 @@ export class Renderer3D {
     };
 
     this._onCustomPointerMove = (e) => {
+      if (this._cameraFree) return; // debug free-cam — see toggleFreeCamera
       const entry = pointers.get(e.pointerId);
       if (!entry) return; // pointer never went down inside the canvas
       entry.prevX = entry.x;
@@ -6821,6 +7340,7 @@ export class Renderer3D {
     };
 
     this._onCustomPointerUp = (e) => {
+      if (this._cameraFree) return; // debug free-cam — see toggleFreeCamera
       pointers.delete(e.pointerId);
       try { this.canvas.releasePointerCapture?.(e.pointerId); } catch { /* ignore */ }
       // Drop two-finger state on transition back to fewer pointers — the next
@@ -6851,7 +7371,7 @@ export class Renderer3D {
     };
 
     this._onCustomWheel = (e) => {
-      if (this.viewLocked) return;
+      if (this.viewLocked || this._cameraFree) return; // free-cam: Babylon wheel-zoom drives radius
       const cam = this._camera;
       if (!cam) return;
       e.preventDefault();
@@ -6864,6 +7384,8 @@ export class Renderer3D {
       );
       cam.radius = newRadius;
       this.zoomLevel = radiusToZoom(newRadius);
+      // Explicit zoom — auto-refocus now preserves the player's distance.
+      this._userZoomEstablished = true;
     };
 
     const optsCap = { capture: true, passive: false };
@@ -6877,6 +7399,56 @@ export class Renderer3D {
     // Stop the touch-action default so scrollback / pull-to-refresh doesn't
     // hijack a vertical pan on iOS Safari.
     if (this.canvas.style) this.canvas.style.touchAction = 'none';
+  }
+
+  /** DEBUG free-camera toggle. Driven by the in-game console command `/freecam`
+   *  (`/freecam off` to relock) — see `COMMANDS.freecam` in keybindings.js.
+   *
+   *  Unlocked, the custom board-game input early-returns on `_cameraFree`,
+   *  handing the camera to Babylon's built-in ArcRotateCamera controls — drag
+   *  orbits (including tilt), wheel zooms, ctrl/right-drag pans. The beta +
+   *  radius limits are lifted and `_onBeforeRender` skips the target-to-ground,
+   *  pan-extent, and tilt-on-zoom clamps so you can fly to any angle/height.
+   *  Relocking restores the saved limits, re-snaps beta into range, and pins the
+   *  target back to Y=0. Visual-only — never touches game state or the loop. */
+  toggleFreeCamera(on = true) {
+    const cam = this._camera;
+    if (!cam || !this._babylon) return false;
+    const want = !!on;
+    if (want === !!this._cameraFree) return want; // idempotent — no double attach/detach
+    if (want) {
+      // Snapshot the locked limits so relock restores them byte-for-byte.
+      this._lockedCamLimits = {
+        lowerBeta: cam.lowerBetaLimit, upperBeta: cam.upperBetaLimit,
+        lowerRadius: cam.lowerRadiusLimit, upperRadius: cam.upperRadiusLimit,
+        panningSensibility: cam.panningSensibility,
+      };
+      this._cameraFree = true; // set FIRST so this frame's clamps already skip
+      cam.lowerBetaLimit   = 0.01;
+      cam.upperBetaLimit   = Math.PI - 0.01;
+      cam.lowerRadiusLimit = 0.25;
+      cam.upperRadiusLimit = 5000;
+      cam.panningSensibility = 80; // a touch faster for roaming
+      try { cam.attachControl(this.canvas, true); } catch { /* headless / no canvas */ }
+      // eslint-disable-next-line no-console
+      console.info('[freeCam] ON — drag = orbit (incl. tilt), wheel = zoom, ctrl/right-drag = pan. Call freeCam(false) to relock.');
+    } else {
+      try { cam.detachControl(); } catch { /* ignore */ }
+      const L = this._lockedCamLimits;
+      if (L) {
+        cam.lowerBetaLimit = L.lowerBeta; cam.upperBetaLimit = L.upperBeta;
+        cam.lowerRadiusLimit = L.lowerRadius; cam.upperRadiusLimit = L.upperRadius;
+        cam.panningSensibility = L.panningSensibility;
+      }
+      this._cameraFree = false;
+      // Snap beta/target back into the locked envelope; _onBeforeRender re-clamps.
+      const lo = cam.lowerBetaLimit ?? 0, hi = cam.upperBetaLimit ?? Math.PI;
+      cam.beta = Math.min(Math.max(cam.beta, lo), hi);
+      if (cam.target) cam.target.y = 0;
+      // eslint-disable-next-line no-console
+      console.info('[freeCam] OFF — camera relocked.');
+    }
+    return want;
   }
 
   // ─── Map construction ────────────────────────────────────────────────────
@@ -7559,9 +8131,9 @@ export class Renderer3D {
 
   // ─── Splat terrain: one merged ground mesh ───────────────────────────────
   //
-  // Build a single mesh whose geometry is the playable-hex fans (7 verts each,
-  // identical layout to `_buildFlatHexMesh`) concatenated into shared buffers,
-  // in WORLD coordinates. Two custom vertex attributes drive the shader:
+  // Build a single mesh whose geometry is the playable-hex fans (13 verts each
+  // — centre + outer corner ring + inner ring; see `_emitSplatHex`) concatenated
+  // into shared buffers, in WORLD coordinates. Two custom vertex attributes drive the shader:
   //   • `aSplat` (vec3, static)  — per-vertex grass/dirt/forest blend weights.
   //   • `aFog`   (float, dynamic) — per-vertex fog veil 0..1, rewritten by
   //                                 `_writeFogWeights` as visibility changes.
@@ -7575,16 +8147,691 @@ export class Renderer3D {
     // them lets the playable ground stay in the OPAQUE pass — keeps the
     // road/river transparent ribbons rendering correctly — while the border
     // mesh can do a real smooth alpha dissolve at its outer rings.
+    // Compute the border-band river continuation FIRST so the border splat can
+    // skip those hexes — otherwise a flat border hex and the river channel mesh
+    // occupy the same spot and z-fight.
+    this._computeBorderRiverPositions();
     const playableMesh = this._buildSplatPlayableMesh(parent);
     this._buildSplatBorderMesh(parent);
+    // Per-tile river meshes — solid cut-channel hexes that replace the old
+    // carved-splat + transparent water ribbon + bank ribbon.
+    this._buildRiverChannelMeshes(parent);
     return playableMesh;
   }
 
+  /** Walk each river EXIT (a water hex with one water neighbour) STRAIGHT
+   *  outward through the border band, recording the off-grid hexes the river
+   *  continues through (with the rotation that orients a straight channel along
+   *  the flow). Cached as `_borderRiverList` (build) + `_borderRiverKeys` (so the
+   *  border splat skips them — no flat-hex/river z-fight). Re-run per map build. */
+  _computeBorderRiverPositions() {
+    this._borderRiverList = [];
+    this._borderRiverKeys = new Set();
+    const tiles = this.state?.tiles;
+    if (!tiles) return;
+    const isWater = (t) => t && (isRiver(t) || isBridge(t));
+    const bandDepth = this._splatBorderBandDepth ? this._splatBorderBandDepth() : 0;
+    if (bandDepth <= 0) return;
+    for (const tile of tiles.values()) {
+      if (!isWater(tile)) continue;
+      const wn = getNeighbors(tile.col, tile.row)
+        .filter((n) => isWater(tiles.get(hexKey(n.col, n.row))));
+      if (wn.length !== 1) continue; // exits only
+      const a = hexToWorld(tile.col, tile.row), b = hexToWorld(wn[0].col, wn[0].row);
+      let inAng = Math.atan2(b.z - a.z, b.x - a.x) * 180 / Math.PI;
+      if (inAng < 0) inAng += 360;
+      const outAng = (inAng + 180) % 360;
+      const rot = ((Math.round(outAng / 60) - 1) % 6 + 6) % 6;
+      let cur = { col: tile.col, row: tile.row };
+      for (let step = 0; step < bandDepth; step++) {
+        const nx = this._neighborInDirection(cur.col, cur.row, outAng);
+        if (!nx) break;
+        cur = nx;
+        const key = hexKey(cur.col, cur.row);
+        if (this._borderRiverKeys.has(key)) continue; // dedup overlapping exits
+        this._borderRiverKeys.add(key);
+        // srcKey/step let the channel-arc continue from the playable endpoint
+        // this chain sprang from, so ripples stay continuous across the seam.
+        this._borderRiverList.push({ col: cur.col, row: cur.row, rot, srcKey: hexKey(tile.col, tile.row), step });
+      }
+    }
+  }
+
+  /** Build ONE solid cut-channel mesh per river/bridge hex — a flat coplanar
+   *  grass top with the channel cut INTO the geometry, skinned with a 3-submesh
+   *  MultiMaterial (grass / bank / river). The baked geometry comes from
+   *  `src/river-channel-mesh.js`; here we classify each tile's water-edges into a
+   *  shape + rotation, orient + place the template, and attach materials. This
+   *  replaces the old splat-carve + transparent water ribbon + bank ribbon.
+   *
+   *  The grass submesh uses the playable splat material with per-vertex
+   *  aSplat/aTint/aEdgeAlpha/aFog (barycentric-interpolated from the tile's
+   *  splat weights) so it blends, tints, and fogs exactly like its neighbours;
+   *  the channel's aFog is rewritten by `_writeRiverChannelFog`. */
+  _buildRiverChannelMeshes(parent) {
+    const BABYLON = this._babylon, scene = this._scene;
+    if (!BABYLON || !scene || !this.state?.tiles) return;
+    const tiles = this.state.tiles;
+    const isWater = (t) => t && (isRiver(t) || isBridge(t));
+    // #3 — one canonical flow direction for the whole river so every tile's
+    // water UVs stream the same world way (templates are rotated to fit, which
+    // otherwise leaves some tiles flowing backwards).
+    const flowRef = canonicalRiverFlowDir(null, riverExitPoints(tiles));
+    // Canonical flow direction (world XZ) drives the ripple scroll so the water
+    // appears to drift downstream.
+    this._riverFlowDir = flowRef ? [flowRef.x, flowRef.z] : [1, 0];
+    // Neighbour direction → water-edge index (0..5). Matches the geometry
+    // module's numbering: edge e faces outward at 60·(e+1)°, the same angles as
+    // a pointy-top world hex's six neighbours.
+    const edgeIndex = (tile, n) => {
+      const a = hexToWorld(tile.col, tile.row), b = hexToWorld(n.col, n.row);
+      let deg = Math.atan2(b.z - a.z, b.x - a.x) * 180 / Math.PI;
+      if (deg < 0) deg += 360;
+      return ((Math.round(deg / 60) - 1) % 6 + 6) % 6;
+    };
+    const channelAt = (col, row) => {
+      const t = tiles.get(hexKey(col, row));
+      return t ? splatChannelForTile(t) : null;
+    };
+    // Grass blends via the SAME splat material as the merged ground; bank/river
+    // are opaque solid surfaces.
+    const grassMat = (this._splatGround && this._splatGround.material)
+      || this._materialFor(TILE_COLOR[TileType.GRASS]);
+    // Bank is now dirt-weighted SPLAT (same material as grass) — no separate
+    // bank material; only the water bed has its own material.
+    const bedMat   = this._buildRiverBedMaterial();
+    const tmpl = new Map();
+    const templateFor = (shape) => {
+      if (!tmpl.has(shape)) {
+        const { entryEdge, exitEdge } = RIVER_SHAPES[shape];
+        tmpl.set(shape, buildRiverChannelGeometry(entryEdge, exitEdge));
+      }
+      return tmpl.get(shape);
+    };
+    this._riverChannelMeshes = [];
+    this._riverChannelFog = [];
+    this._riverRimByKey = new Map(); // tile key → world-space bank-edge polylines (for rocks)
+    const ctx = { grassMat, bedMat, flowRef, templateFor, channelAt };
+
+    // Playable river/bridge tiles — classify the two water-edges into a shape +
+    // rotation.
+    const classified = [];
+    for (const tile of tiles.values()) {
+      if (!isWater(tile)) continue;
+      const edges = getNeighbors(tile.col, tile.row)
+        .filter((n) => isWater(tiles.get(hexKey(n.col, n.row))))
+        .map((n) => edgeIndex(tile, n));
+      let shape = 'straight', rot = 0;
+      if (edges.length >= 2) {
+        const c = classifyRiverEdges(edges[0], edges[1]) || { shape: 'straight', rot: edges[0] };
+        shape = c.shape; rot = c.rot;
+      } else if (edges.length === 1) {
+        shape = 'straight'; rot = edges[0]; // endpoint: run straight to the opposite edge
+      } // 0 neighbours (lone pool) → canonical straight stub
+      classified.push({ tile, shape, rot });
+    }
+    // Cumulative arc DOWN the river (from the upstream endpoint) so the water UV
+    // is continuous tile-to-tile — the ripples flow ALONG the channel AND have
+    // no per-tile seam. Then emit each tile with its arc offset.
+    const arcByKey = this._computeRiverArcOffsets(classified, templateFor, flowRef);
+    for (const { tile, shape, rot } of classified) {
+      const off = arcByKey.get(hexKey(tile.col, tile.row)) || 0;
+      this._emitRiverChannelTile(parent, tile.col, tile.row, shape, rot, ctx, false, off);
+    }
+
+    // Border-forest river continuation (permanently fogged) — continue the arc
+    // from the playable endpoint each chain sprang from so the ripples stay
+    // continuous across the map↔border seam too.
+    // Border tiles fade out toward the wilderness with the SAME ring alpha as
+    // the border ground, and use its alpha-blend material so grass/bank/floor
+    // can actually dissolve (the playable splat is opaque). The water plugin
+    // fades via aEdgeAlpha. So the river dissolves into the border forest.
+    const ext = tilesExtent(this.state.tiles);
+    const bandDepth = this._splatBorderBandDepth ? this._splatBorderBandDepth() : 0;
+    const borderMat = this._splatBorderGround?.material || null;
+    const straightLen = templateFor('straight').flowLen || 0;
+    for (const { col, row, rot, srcKey, step } of (this._borderRiverList || [])) {
+      const base = (srcKey != null ? arcByKey.get(srcKey) : 0) || 0;
+      const ea = borderForestAlphaForTile(col, row, ext, bandDepth);
+      this._emitRiverChannelTile(parent, col, row, 'straight', rot, ctx, true,
+        base + (step + 1) * straightLen, ea, borderMat);
+    }
+
+    // Paint the initial fog state onto the freshly-built channel grass.
+    if (this._fogActiveSet) this._writeRiverChannelFog(this._fogActiveSet);
+  }
+
+  /** Cumulative channel-arc per river tile, walked DOWNSTREAM from the upstream
+   *  endpoint (smallest projection onto the canonical flow). Each tile's offset =
+   *  the summed channel lengths of the tiles upstream of it, so adding it to the
+   *  tile's flow-oriented local arc gives a U that is CONTINUOUS across tile
+   *  boundaries (no ripple seam) while still running along the current. Linear
+   *  rivers are exact; branches accumulate from their junction. */
+  _computeRiverArcOffsets(classified, templateFor, flowRef) {
+    const tiles = this.state.tiles;
+    const isWater = (t) => t && (isRiver(t) || isBridge(t));
+    const wn = (t) => getNeighbors(t.col, t.row).filter((n) => isWater(tiles.get(hexKey(n.col, n.row))));
+    const shapeByKey = new Map();
+    for (const c of classified) shapeByKey.set(hexKey(c.tile.col, c.tile.row), c.shape);
+    const all = classified.map((c) => c.tile);
+    const endpoints = all.filter((t) => wn(t).length === 1);
+    let start = all[0];
+    if (flowRef && endpoints.length) {
+      const proj = (t) => { const w = hexToWorld(t.col, t.row); return w.x * flowRef.x + w.z * flowRef.z; };
+      start = endpoints.reduce((a, b) => (proj(a) <= proj(b) ? a : b));
+    } else if (endpoints.length) {
+      start = endpoints[0];
+    }
+    const arc = new Map();
+    const visited = new Set();
+    const stack = start ? [[start, 0]] : [];
+    while (stack.length) {
+      const [t, off] = stack.pop();
+      const key = hexKey(t.col, t.row);
+      if (visited.has(key)) continue;
+      visited.add(key);
+      arc.set(key, off);
+      const len = templateFor(shapeByKey.get(key) || 'straight').flowLen || 0;
+      for (const n of wn(t)) {
+        const nk = hexKey(n.col, n.row);
+        if (!visited.has(nk)) stack.push([tiles.get(nk), off + len]);
+      }
+    }
+    return arc;
+  }
+
+  /** Emit ONE river-tile cut-channel mesh (grass/bank/river) + its alpha fringe,
+   *  oriented by `rot`, placed at (col,row). `permanent` marks an off-grid
+   *  border-band tile that is always fogged (no real `state.tiles` entry — it
+   *  uses a synthetic grass tile for the splat weights). Shared by the playable
+   *  and border passes in `_buildRiverChannelMeshes`. */
+  _emitRiverChannelTile(parent, col, row, shape, rot, ctx, permanent, arcOffset = 0, edgeAlpha = 1, grassMatOverride = null) {
+    const BABYLON = this._babylon, scene = this._scene;
+    const { grassMat, bedMat, flowRef, templateFor, channelAt } = ctx;
+    const g = templateFor(shape);
+    const phi = rot * Math.PI / 3, cs = Math.cos(phi), sn = Math.sin(phi);
+    const { x: cx, z: cz } = hexToWorld(col, row);
+    // Record the bank-edge polylines in WORLD space so the rock-scatter pass can
+    // line small rocks along the waterline (see `_buildRiverRocks`).
+    if (g.rim && this._riverRimByKey) {
+      // [x, z, nx, nz] → world point + world outward normal (normal rotates only).
+      const toWorld = (e) => [
+        e[0] * cs - e[1] * sn + cx, e[0] * sn + e[1] * cs + cz,
+        e[2] * cs - e[3] * sn,      e[2] * sn + e[3] * cs,
+      ];
+      this._riverRimByKey.set(hexKey(col, row), {
+        left: g.rim.left.map(toWorld), right: g.rim.right.map(toWorld), permanent: !!permanent,
+        bedY: (typeof g.bedY === 'number' ? g.bedY : -0.18),
+      });
+    }
+    const V = g.positions.length / 3;
+    const pos = new Float32Array(g.positions.length);
+    // Splat/tint from the real tile if present; off-grid border tiles use a
+    // synthetic grass tile (they render fully fogged anyway).
+    const stateTile = this.state.tiles.get(hexKey(col, row)) || { col, row, base: TileType.GRASS };
+    const splatW = hexSplatWeights(stateTile, channelAt);
+    const tintW  = hexTintWeights(col, row);
+    const aSplat = new Float32Array(V * 3);
+    const aTint  = new Float32Array(V * 3);
+    const aEdge  = new Float32Array(V).fill(edgeAlpha); // < 1 fades the tile out at the border edge
+    const aFog   = new Float32Array(V); // rewritten by _writeRiverChannelFog (permanent ⇒ 1)
+    const bary   = new Array(V);
+    const BED = g.bedY || -0.18;
+    for (let vi = 0; vi < V; vi++) {
+      const x = g.positions[vi * 3], y = g.positions[vi * 3 + 1], z = g.positions[vi * 3 + 2];
+      pos[vi * 3]     = x * cs - z * sn + cx;
+      pos[vi * 3 + 1] = y;
+      pos[vi * 3 + 2] = x * sn + z * cs + cz;
+      const b = this._hexBary(x * cs - z * sn, x * sn + z * cs); // rotated hex-local
+      bary[vi] = b;
+      const ka = (b.k + 1) * 3, kb = (((b.k + 1) % 6) + 1) * 3;
+      // The bank is the SAME splat material as the grass: blend the splat weight
+      // from the tile's grass mix at the rim (Y=0) toward the terrain DIRT
+      // channel at the water line (Y=BED). The splat shader then blends grass→dirt
+      // down the wall exactly like grass meets dirt anywhere else on the map, so
+      // it lights, fogs, and shadows identically. `df` = how far down the wall.
+      const df = Math.max(0, Math.min(1, BED ? (y / BED) : 0));
+      // Submerged dirt (below the waterline) is much darker/muddier, so the
+      // translucent water reads as deep water rather than washing out over a
+      // bright lit bed.
+      const uw = df > 0.45 ? Math.max(0.28, 1 - (df - 0.45) * 1.5) : 1;
+      for (let c = 0; c < 3; c++) {
+        const grassVal = b.wO * splatW[c] + b.wA * splatW[ka + c] + b.wB * splatW[kb + c];
+        const dirtVal  = (c === SPLAT_DIRT) ? 1 : 0;
+        aSplat[vi * 3 + c] = grassVal * (1 - df) + dirtVal * df;
+        aTint[vi * 3 + c]  = (b.wO * tintW[c] + b.wA * tintW[ka + c] + b.wB * tintW[kb + c]) * uw;
+      }
+    }
+    const surface = g.surface || [];
+    const indices = [...g.grass, ...g.bank, ...g.river, ...surface];
+    const normals = [];
+    BABYLON.VertexData.ComputeNormals(pos, indices, normals);
+    const vd = new BABYLON.VertexData();
+    vd.positions = pos; vd.indices = indices; vd.normals = normals;
+    // Flip U so this tile's water flows the same world direction as the river,
+    // then add the cumulative arc offset so U is CONTINUOUS across tile borders
+    // (V — the cross-channel opacity coordinate — is untouched). The ripple
+    // plugin reads U as down-stream arc, so the chop both flows and is seamless.
+    let flip = false;
+    if (flowRef && g.flowDir) {
+      const wfx = g.flowDir[0] * cs - g.flowDir[1] * sn;
+      const wfz = g.flowDir[0] * sn + g.flowDir[1] * cs;
+      flip = (wfx * flowRef.x + wfz * flowRef.z) < 0;
+    }
+    const uvs = new Float32Array(g.uvs.length);
+    for (let i = 0; i < g.uvs.length; i += 2) {
+      uvs[i] = arcOffset + (flip ? (g.flowLen - g.uvs[i]) : g.uvs[i]);
+      uvs[i + 1] = g.uvs[i + 1];
+    }
+    vd.uvs = uvs;
+    const mesh = new BABYLON.Mesh(`river_tile_${col}_${row}`, scene);
+    vd.applyToMesh(mesh, false);
+    mesh.setVerticesData('aSplat', aSplat, false, 3);
+    mesh.setVerticesData('aTint',  aTint,  false, 3);
+    mesh.setVerticesData('aEdgeAlpha', aEdge, false, 1);
+    mesh.setVerticesData('aFog',   aFog,   true, 1);
+    // Channel-arc UV for the ripple plugin (its own attribute, not the core
+    // `uv` which the opacity texture owns) — U = continuous down-stream arc.
+    mesh.setVerticesData('aRipUV', uvs, false, 2);
+    // Two submeshes: the SPLAT material covers grass + bank + the DIRT BED FLOOR
+    // (the bank/floor are just dirt-weighted splat); the translucent water
+    // surface raised above the floor gets the flowing-water material.
+    const splatCount = g.grass.length + g.bank.length + g.river.length;
+    mesh.subMeshes = [];
+    new BABYLON.SubMesh(0, 0, V, 0,          splatCount,     mesh);
+    new BABYLON.SubMesh(1, 0, V, splatCount, surface.length, mesh);
+    // SHARED water material — the ripple plugin samples by world position +
+    // folds in fog via the mesh's per-vertex aFog, so every tile can use the one
+    // material (no per-tile clone, no seam, fog in lockstep with the banks).
+    const multi = new BABYLON.MultiMaterial(`river_tile_mat_${col}_${row}`, scene);
+    // Border tiles use the ALPHA-BLEND border splat material so their grass/bank
+    // can fade out (aEdgeAlpha) like the surrounding border ground; playable
+    // tiles use the opaque shared splat material.
+    multi.subMaterials = [grassMatOverride || grassMat, bedMat];
+    mesh.material = multi;
+    mesh.parent = parent;
+    mesh.isPickable = false;
+    mesh.metadata = { kind: 'river-tile', col, row };
+    this._setShadowReceiver?.(mesh);
+    this._riverChannelMeshes.push(mesh);
+
+    // Fog: just the per-vertex aFog rewrite (grass+bank via splat, water via the
+    // ripple plugin) — no material darkening needed now.
+    this._riverChannelFog.push({ mesh, col, row, bary, fogBuf: aFog, permanent: !!permanent });
+  }
+
+  /** Neighbour hex at a given WORLD angle (degrees), allowing negative coords
+   *  (border tiles are off-grid). Walks the river straight into the border band.
+   *  Returns null if no neighbour lies close to that direction. */
+  _neighborInDirection(col, row, angDeg) {
+    const DIRS_EVEN = [[-1, 0], [-1, -1], [0, -1], [1, 0], [0, 1], [-1, 1]];
+    const DIRS_ODD  = [[-1, 0], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1]];
+    const dirs = (row & 1) ? DIRS_ODD : DIRS_EVEN;
+    const here = hexToWorld(col, row);
+    let best = null, bestDiff = 999;
+    for (const [dc, dr] of dirs) {
+      const nc = col + dc, nr = row + dr;
+      const there = hexToWorld(nc, nr);
+      let ang = Math.atan2(there.z - here.z, there.x - here.x) * 180 / Math.PI;
+      if (ang < 0) ang += 360;
+      const diff = Math.abs(((ang - angDeg + 540) % 360) - 180);
+      if (diff < bestDiff) { bestDiff = diff; best = { col: nc, row: nr }; }
+    }
+    return bestDiff < 31 ? best : null;
+  }
+
+  /** Sector + barycentric weights for a point (lx,lz) in a unit hex's local XZ
+   *  frame, against the fan triangle (centre O, corner k, corner k+1). Lets a
+   *  river tile's grass interpolate the per-corner splat/tint/fog weights at any
+   *  point so it matches the merged ground's gradient. Pure. */
+  _hexBary(lx, lz) {
+    let deg = Math.atan2(lz, lx) * 180 / Math.PI;
+    if (deg < 0) deg += 360;
+    const k = Math.floor((deg - 30 + 360) / 60) % 6;
+    const ang = (kk) => (30 + 60 * kk) * Math.PI / 180;
+    const ax = Math.cos(ang(k)), az = Math.sin(ang(k));
+    const bx = Math.cos(ang((k + 1) % 6)), bz = Math.sin(ang((k + 1) % 6));
+    const det = ax * bz - bx * az;
+    let wA = 0, wB = 0;
+    if (Math.abs(det) > 1e-9) {
+      wA = (lx * bz - bx * lz) / det;
+      wB = (ax * lz - lx * az) / det;
+    }
+    return { k, wO: 1 - wA - wB, wA, wB };
+  }
+
+  /** Rewrite each river-tile mesh's grass `aFog` from the fogged set. Channel
+   *  meshes live outside the merged ground, so they get their own fog pass that
+   *  mirrors `_writeFogWeights` — per-corner `hexFogWeights`, barycentric-interped
+   *  to each vertex — so a river tile fogs in lockstep with its neighbours. */
+  _writeRiverChannelFog(fogged) {
+    if (!this._riverChannelFog || !this.state?.tiles) return;
+    const PERM = [1, 1, 1, 1, 1, 1, 1]; // off-grid border tile — always fully fogged
+    for (const ch of this._riverChannelFog) {
+      let w;
+      if (ch.permanent) {
+        w = PERM; // border-band continuation matches the always-fogged border ground
+      } else {
+        const key = hexKey(ch.col, ch.row);
+        const neighborKeys = neighborDeltas(ch.row).map(([dc, dr]) => {
+          const nk = hexKey(ch.col + dc, ch.row + dr);
+          return this.state.tiles.has(nk) ? nk : null;
+        });
+        w = hexFogWeights(key, neighborKeys, fogged); // 7: centre + 6 corners
+      }
+      const buf = ch.fogBuf;
+      for (let vi = 0; vi < ch.bary.length; vi++) {
+        const { k, wO, wA, wB } = ch.bary[vi];
+        buf[vi] = wO * w[0] + wA * w[k + 1] + wB * w[((k + 1) % 6) + 1];
+      }
+      // Grass + bank + dirt floor fog via aFog (splat shader); the water surface
+      // verts also carry aFog and the ripple plugin darkens them by it. One
+      // rewrite covers everything — no per-material tinting.
+      if (typeof ch.mesh.updateVerticesData === 'function') ch.mesh.updateVerticesData('aFog', buf);
+    }
+  }
+
+  /** Water-bed material. A flat translucent tint over the dirt bed; the surface
+   *  life comes from the WaterRipplePlugin — two world-sampled ripple-normal
+   *  layers (different scale + scroll speed) that override `normalW`, so the
+   *  StandardMaterial's specular/fresnel ripple. World sampling makes the ripple
+   *  field continuous across tiles (no per-tile UV seam); the plugin also folds
+   *  in the fog veil, so no per-tile material clones are needed. */
+  _buildRiverBedMaterial() {
+    if (this._riverBedMat) return this._riverBedMat;
+    const BABYLON = this._babylon;
+    const mat = this._buildRibbonMaterial('river', TILE_COLOR[TileType.RIVER]);
+    mat.useAlphaFromDiffuseTexture = false;
+    // Drop the painted swirl — a busy opaque colour texture both tiles tight AND
+    // hides the bed. Clear water = a flat translucent tint; the ripple detail is
+    // the plugin's world-sampled normals, and the muddy bed shows through.
+    mat.diffuseTexture = null;
+    mat.diffuseColor = new BABYLON.Color3(0.04, 0.12, 0.17); // dark deep water
+    // Two-layer world-sampled ripple normals (continuous across tiles, no seam).
+    const PluginClass = makeWaterRipplePlugin(BABYLON);
+    if (PluginClass && BABYLON?.Texture) {
+      const nrm = new BABYLON.Texture('assets/water-normal.png', this._scene);
+      const wrap = BABYLON.Texture.WRAP_ADDRESSMODE ?? 1;
+      nrm.wrapU = wrap; nrm.wrapV = wrap;
+      const plugin = new PluginClass(mat);
+      plugin.rippleNrm = nrm;
+      // Initialise the fog darken to the CURRENT phase value — otherwise it
+      // stays at the 1.0 default (no darken) until the next phase change, so the
+      // water never darkens in fog.
+      plugin.uFogDarken = this._fogTileDarken ?? 1.0;
+      plugin.isEnabled = true;
+      this._waterRipplePlugin = plugin;
+    }
+    // Sun glints off the rippled normals — bright but fairly tight so they read
+    // as moving ripples on the dark water rather than a broad wash.
+    mat.specularColor = new BABYLON.Color3(0.62, 0.66, 0.72);
+    mat.specularPower = 72;
+    // Fake sky reflection: a SUBTLE cool tint only at steep grazing angles
+    // (high power), nothing head-on — otherwise it washes the water pale.
+    if (BABYLON?.FresnelParameters) {
+      const fp = new BABYLON.FresnelParameters();
+      fp.isEnabled = true;
+      fp.power = 4.0;
+      fp.leftColor  = new BABYLON.Color3(0.26, 0.38, 0.50); // grazing → faint sky tint
+      fp.rightColor = new BABYLON.Color3(0.0, 0.0, 0.0);     // head-on → none
+      mat.emissiveColor = new BABYLON.Color3(1, 1, 1);
+      mat.emissiveFresnelParameters = fp;
+    }
+    // Soft waterline — an opacity gradient (V-band) ramps the alpha to 0 at the
+    // banks, so the water dissolves into the shore instead of a hard edge.
+    if (BABYLON?.Texture) {
+      const edge = new BABYLON.Texture('assets/water-edge.png', this._scene);
+      edge.getAlphaFromRGB = true;
+      const clamp = BABYLON.Texture.CLAMP_ADDRESSMODE ?? 0;
+      edge.wrapU = clamp; edge.wrapV = clamp;
+      mat.opacityTexture = edge;
+    }
+    // Tier 2 — translucent so the muddy dirt bed shows through the surface
+    // (depth). The surface is raised above an opaque dirt floor, so it blends
+    // over solid geometry (no see-through-to-void).
+    mat.alpha = 0.46;
+    if (BABYLON?.Material) mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+    this._riverBedMat = mat;
+    return mat;
+  }
+
+  /** Lazy-load a handful of SMALL rock GLBs (the `rock` group of the tree pack)
+   *  as hidden templates, then scatter them along the river banks. Fire-and-
+   *  forget from init; `_buildRiverRocks` runs once the templates resolve (the
+   *  river meshes + rim polylines already exist from `_buildMap`). */
+  async _loadRiverRocks(basePath = 'assets') {
+    if (this._rockLoadPromise) return this._rockLoadPromise;
+    const BABYLON = this._babylon;
+    if (!BABYLON || !this._scene) return null;
+    this._rockLoadPromise = (async () => {
+      await this._ensureBabylonLoaders();
+      if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') return null;
+      this._rockTemplates = [];    // small low-poly pebbles
+      this._bigRockTemplates = []; // chunkier higher-poly boulders (feature rocks)
+      const dir = `${basePath}/${TREE_PACK_DIR}rock/`;
+      const loadInto = async (pool, files) => {
+        for (const f of files) {
+          try {
+            const res = await BABYLON.SceneLoader.ImportMeshAsync(null, dir, f, this._scene);
+            const meshes = (res?.meshes || []).filter((m) => m && typeof m.getTotalVertices === 'function' && m.getTotalVertices() > 0);
+            if (meshes.length === 0) continue;
+            let src = meshes[0];
+            if (meshes.length > 1 && typeof BABYLON.Mesh?.MergeMeshes === 'function') {
+              const merged = BABYLON.Mesh.MergeMeshes(meshes, true, true, undefined, false, true);
+              if (merged) src = merged;
+            }
+            _bakeOriginToBottom(src, BABYLON);
+            if (typeof src.refreshBoundingInfo === 'function') src.refreshBoundingInfo();
+            let size = 1, height = 1; // XZ FOOTPRINT (drives width) + Y extent (drives height) — kept
+            try {                     // separate so width and height scale independently per-tier
+              const bb = src.getBoundingInfo().boundingBox;
+              size   = Math.max(1e-3, bb.maximum.x - bb.minimum.x, bb.maximum.z - bb.minimum.z);
+              height = Math.max(1e-3, bb.maximum.y - bb.minimum.y);
+            } catch { /* keep 1 */ }
+            src.setEnabled(false);
+            src.isPickable = false;
+            if (src.renderingGroupId !== undefined) src.renderingGroupId = WORLD_GROUP;
+            this._setShadowReceiver?.(src);
+            pool.push({ mesh: src, size, height });
+          } catch (err) { /* skip one bad GLB */ }
+        }
+      };
+      await loadInto(this._rockTemplates, ['rock-002.glb', 'rock-003.glb', 'rock-006.glb',
+        'rock-008.glb', 'rock-013.glb', 'rock-014.glb', 'rock-022.glb', 'rock-037.glb']);
+      // NOTE: the "high-poly" rocks (039/042/044/045) are degenerate — stray
+      // geometry / 48×0.71 flat slabs — so normalising by their bbox shrank the
+      // actual rock to a pebble. The small pool has TIGHT bboxes (renders at true
+      // size), so big boulders are just those scaled up (correct 1m+ size).
+      this._bigRockTemplates = this._rockTemplates;
+      // The GLB rock materials carry no diffuse colour (they render white), so
+      // give every template one shared grey-brown stone material.
+      if (typeof BABYLON.StandardMaterial === 'function') {
+        const sm = new BABYLON.StandardMaterial('river_rock_mat', this._scene);
+        sm.diffuseColor = new BABYLON.Color3(0.22, 0.21, 0.19); // muted wet-stone grey-brown
+        sm.specularColor = new BABYLON.Color3(0.05, 0.05, 0.05);
+        this._rockMat = sm;
+        for (const t of this._rockTemplates) t.mesh.material = sm;
+      }
+      this._buildRiverRocks();
+      return this._rockTemplates;
+    })();
+    return this._rockLoadPromise;
+  }
+
+  /** Scatter rocks around the river in three tiers, using the rim polylines +
+   *  outward normals recorded per tile in `_buildRiverChannelMeshes`:
+   *    • BIG feature boulders straddling the rim (half on the grass, half dipping
+   *      into the water) — the dominant shapes that bridge bank↔grass;
+   *    • small rocks OUTWARD on the bank/grass;
+   *    • small rocks INWARD in the river (on the bed, poking through the water).
+   *  Deterministic per (tile, point). Playable tiles only; registered into
+   *  `_tilePropsByKey` so fog-of-war hides them with the tile. */
+  _buildRiverRocks() {
+    const BABYLON = this._babylon;
+    const small = this._rockTemplates || [], big = this._bigRockTemplates || [];
+    if (!BABYLON || !this._riverRimByKey || (small.length === 0 && big.length === 0)) return;
+    if (this._riverRockMeshes) { for (const m of this._riverRockMeshes) { try { m.dispose(); } catch { /* */ } } }
+    this._riverRockMeshes = [];
+    const parent = this._mapRoot || null;
+    const hash = (a, b) => {
+      let h = ((a | 0) * 73856093) ^ ((b | 0) * 19349663);
+      h = Math.imul(h ^ (h >>> 13), 1274126177);
+      return ((h ^ (h >>> 16)) >>> 0) / 0x100000000;
+    };
+    let rockOrdinal = 0;
+    const place = (pool, wx, wy, wz, target, hFrac, submerge = false) => {
+      if (!pool.length) return null;
+      // Model + rotation keyed on a running ORDINAL (which jumps between
+      // consecutive rocks), not the rim-point index — otherwise adjacent rocks
+      // pick correlated hashes and repeat the same model/orientation in a row.
+      const rn = rockOrdinal++;
+      const t = pool[Math.floor(hash(rn, 7) * pool.length) % pool.length];
+      // CLONE the template (shares its geometry) so the rock can be positioned;
+      // the caller then bakes all of a hex's clones into ONE mesh via MergeMeshes
+      // — one draw call per river tile, with a per-tile material that fog-darkens
+      // exactly like a GLB building (`_applyBuildingFogDarkenTo`).
+      const mesh = t.mesh.clone(`river_rock_${rn}`);
+      if (!mesh) return null;
+      if (typeof mesh.setEnabled === 'function') mesh.setEnabled(true); // clone inherits the template's disabled state
+      // Width from the XZ footprint, height set DIRECTLY to hFrac·target — the
+      // source rocks vary wildly in aspect (flat slabs to tall spikes), so this
+      // makes every rock a consistent chunky boulder that rises hFrac·target up.
+      const sc = target / t.size;
+      const scy = (target * hFrac) / t.height;
+      mesh.position.set(wx, wy, wz);
+      mesh.scaling.set(sc, scy, sc);
+      mesh.rotation.y = hash(rn, 23) * Math.PI * 2;
+      if (parent) mesh.parent = parent;
+      // Snap the rock's BOTTOM to wy. The merged-GLB pivot is near the model's
+      // CENTRE (the bake-to-bottom is unreliable for them), so without this the
+      // rock sinks half its height underground. Measure the actual world bottom
+      // and lift so the base rests at wy and the whole rock rises above it.
+      mesh.computeWorldMatrix(true);
+      const wb = mesh.getHierarchyBoundingVectors(true);
+      if (Number.isFinite(wb.min.y)) {
+        let yb = wy; // desired world-Y of the rock's base
+        if (submerge) {
+          // Boulder: its base is sunk below the waterline (caller passes a
+          // sub-surface wy), but keep at least 0.3 m (~0.13 world; 1 world ≈
+          // 2.3 m) of rock proud of the ground plane (y=0) — lift a stubby
+          // boulder just enough that it still reads above the bank.
+          const H = wb.max.y - wb.min.y;
+          if (yb + H < 0.13) yb = 0.13 - H;
+        }
+        mesh.position.y += (yb - wb.min.y);
+      }
+      mesh.isPickable = false;
+      return mesh;
+    };
+    for (const [key, rim] of this._riverRimByKey) {
+      if (rim.permanent) continue; // skip the fogged border band (v1)
+      // No rocks on bridge crossings — they'd clutter/clip the deck + railings.
+      const rimTile = this.state?.tiles?.get(key);
+      if (rimTile && isBridge(rimTile)) continue;
+      const [kc, kr] = key.split(',').map(Number);
+      const seed = (kc | 0) * 911 + (kr | 0) * 131;
+      const bedY = typeof rim.bedY === 'number' ? rim.bedY : -0.18;
+      const surfY = bedY * 0.62; // water surface Y (matches SURF_Y in river-channel-mesh.js)
+      const tileRocks = []; // this hex's rock clones — baked into one mesh below
+      for (let s = 0; s < 2; s++) {
+        const side = s === 0 ? rim.left : rim.right;
+        const ss = seed + s * 701;
+        for (let i = 1; i < side.length - 1; i++) { // skip endpoints (avoid seam doubling)
+          // Rocks gather in CLUSTERS at spots (not an even line) — pick cluster
+          // centres along the rim; bare stretches between them.
+          if (hash(ss, i * 811) > 0.10) continue;
+          const e = side[i];
+          const px = e[0], pz = e[1], nx = e[2], nz = e[3]; // point + outward normal
+          const tx = -nz, tz = nx;                          // tangent along the rim
+          // Most clusters get a BIG boulder at their heart — straddling the rim,
+          // dipping into the water. Genuinely large: most ~1.1–1.5m, occasional
+          // ~2m ones (u² → the huge ones rare). Chunky + barely settled.
+          if (big.length && hash(ss, i * 811 + 1) < 0.8) {
+            const tj = (hash(ss, i * 811 + 2) - 0.5) * 0.1;
+            const u = hash(ss, i * 811 + 3);
+            const target = 0.65 + u * u * 0.55; // 0.65–1.20 world (≈1.5–2.8m boulders)
+            // Sink the boulder's base ~0.06 world below the waterline so it reads
+            // as embedded in the riverbed (not perched on the bank); `submerge`
+            // keeps its top ≥0.3 m above the ground plane. Centred on the rim so
+            // it still straddles bank↔water.
+            const inst = place(big, px + tx * tj, surfY - 0.06, pz + tz * tj,
+              target, 0.7, true);
+            if (inst) tileRocks.push(inst);
+          }
+          // A tight GROUP of small rocks around the cluster — spread inward into
+          // the water (poke through) and outward onto the bank, sitting on the
+          // surface (chunky so their tops clear ground level).
+          if (small.length) {
+            const n = 3 + Math.floor(hash(ss, i * 811 + 5) * 4); // 3–6 stones
+            for (let k = 0; k < n; k++) {
+              const b = i * 811 + 20 + k * 5;
+              const uo = (hash(ss, b) - 0.42) * 0.46;      // −0.19..+0.27 (water ← rim → bank)
+              const to = (hash(ss, b + 1) - 0.5) * 0.34;   // tangential spread
+              const target = 0.10 + hash(ss, b + 2) * 0.12; // 0.10–0.22
+              const inWater = uo < -0.02;
+              const wy = inWater ? bedY + 0.05 : -0.02;     // bank rocks on the ground; water rocks lifted off the bed
+              const inst = place(small, px + nx * uo + tx * to, wy, pz + nz * uo + tz * to,
+                target, 0.55);
+              if (inst) tileRocks.push(inst);
+            }
+          }
+        }
+      }
+      if (!tileRocks.length) continue;
+      // Bake this hex's rocks into ONE mesh — one draw call per river tile instead
+      // of ~6. MergeMeshes bakes each clone's world transform (the map root is
+      // identity, so world == map space) and disposes the source clones.
+      let merged = null;
+      if (tileRocks.length === 1) {
+        merged = tileRocks[0];
+      } else if (typeof BABYLON.Mesh?.MergeMeshes === 'function') {
+        merged = BABYLON.Mesh.MergeMeshes(tileRocks, true, true, undefined, false, false);
+      }
+      if (!merged) {
+        // Merge unavailable/failed — keep the first clone, drop the rest.
+        for (let j = 1; j < tileRocks.length; j++) { try { tileRocks[j].dispose(); } catch { /* */ } }
+        merged = tileRocks[0];
+      }
+      merged.name = `river_rocks_${key}`;
+      if (parent) merged.parent = parent;
+      // Own material clone per tile so fog darkens this hex's rocks independently,
+      // the exact mechanism a GLB building uses (`_applyBuildingFogDarkenTo`).
+      if (this._rockMat && typeof this._rockMat.clone === 'function') {
+        merged.material = this._rockMat.clone(`river_rock_mat_${key}`);
+      } else if (this._rockMat) {
+        merged.material = this._rockMat;
+      }
+      merged.isPickable = false;
+      if (merged.renderingGroupId !== undefined) merged.renderingGroupId = WORLD_GROUP;
+      // respectsFog:false → the per-prop veil loop leaves it alone; fog darkening
+      // runs through the building pass, keyed on fogHexKey = this river tile.
+      merged.metadata = { respectsFog: false, kind: 'river-rock', fogHexKey: key };
+      this._addShadowCaster?.(merged);
+      this._riverRockMeshes.push(merged);
+      this._applyBuildingFogDarkenTo(merged); // seed the current fog state
+      const arr = this._tilePropsByKey.get(key) || [];
+      arr.push(merged);
+      this._tilePropsByKey.set(key, arr);
+    }
+  }
+
   /** Per-vertex hex fan emit shared between playable + border splat builds.
-   *  Writes one hex's 7 verts into the supplied buffers at `baseV`. */
+   *  Writes one hex's 13 verts into the supplied buffers at `baseV`.
+   *
+   *  Vertex layout (chosen so the centre+corner block stays byte-identical to
+   *  the legacy 7-vert fan — `aSplat` / corner-Y consumers read it unchanged):
+   *    baseV + 0       = centre
+   *    baseV + 1..6    = OUTER corners (radius R,      angle π/6 + j·π/3)
+   *    baseV + 7..12   = INNER ring    (radius R·FRAC, same angles)
+   *
+   *  The inner ring's splat/tint are linearly interpolated centre→corner at the
+   *  ring fraction, reproducing the exact gradient the old single fan drew — so
+   *  flat (non-river) tiles render pixel-identically. The river channel-sink
+   *  pass lowers the inner ring on water hexes to carve the flat trench floor. */
   _emitSplatHex(buffers, ti, col, row, splatWeights, edgeAlpha) {
     const R = HEX_RADIUS_WORLD;
-    const VPT = 7;
+    const VPT = SPLAT_VERTS_PER_TILE;
+    const FRAC = SPLAT_INNER_RING_FRAC;
     const { x, z } = hexToWorld(col, row, R);
     const baseV = ti * VPT;
     buffers.range.set(hexKey(col, row), baseV);
@@ -7592,28 +8839,53 @@ export class Renderer3D {
     buffers.positions[baseV * 3 + 2] = z;
     for (let j = 0; j < 6; j++) {
       const a = Math.PI / 6 + j * Math.PI / 3;
-      const vi = baseV + 1 + j;
-      buffers.positions[vi * 3]     = x + R * Math.cos(a);
-      buffers.positions[vi * 3 + 2] = z + R * Math.sin(a);
+      const cosA = Math.cos(a), sinA = Math.sin(a);
+      const outV = baseV + 1 + j;
+      buffers.positions[outV * 3]     = x + R * cosA;
+      buffers.positions[outV * 3 + 2] = z + R * sinA;
+      const inV = baseV + 7 + j;
+      buffers.positions[inV * 3]      = x + R * FRAC * cosA;
+      buffers.positions[inV * 3 + 2]  = z + R * FRAC * sinA;
     }
     for (let v = 0; v < VPT; v++) {
       buffers.normals[(baseV + v) * 3 + 1] = 1;
       buffers.edgeA[baseV + v] = edgeAlpha;
     }
+    // Centre + 6 corners copied straight from the 21-float inputs (verts 0..6).
     buffers.splat.set(splatWeights, baseV * 3);
     // Per-vertex tint — hashed purely by world XZ so coincident corners on
     // adjacent hexes get identical tints (no boundary seam).
-    buffers.tint.set(hexTintWeights(col, row, { radius: R }), baseV * 3);
-    const baseI = ti * 6 * 3;
+    const tint = hexTintWeights(col, row, { radius: R });
+    buffers.tint.set(tint, baseV * 3);
+    // Inner ring (verts 7..12): lerp centre→corner at FRAC for splat + tint so
+    // the cross-hex gradient matches the legacy flat fan exactly.
     for (let j = 0; j < 6; j++) {
-      buffers.indices[baseI + j * 3]     = baseV;
-      buffers.indices[baseI + j * 3 + 1] = baseV + 1 + j;
-      buffers.indices[baseI + j * 3 + 2] = baseV + 1 + ((j + 1) % 6);
+      const inBase = (baseV + 7 + j) * 3;
+      for (let c = 0; c < 3; c++) {
+        const ctrS = splatWeights[c], corS = splatWeights[(j + 1) * 3 + c];
+        buffers.splat[inBase + c] = ctrS + (corS - ctrS) * FRAC;
+        const ctrT = tint[c], corT = tint[(j + 1) * 3 + c];
+        buffers.tint[inBase + c] = ctrT + (corT - ctrT) * FRAC;
+      }
+    }
+    // 18 triangles: 6 inner-fan + 12 outer-band (two per sector). All wound to
+    // match the legacy fan's front-facing orientation (verified by area sign).
+    let o = ti * 18 * 3;
+    for (let j = 0; j < 6; j++) {
+      const j1 = (j + 1) % 6;
+      const c    = baseV;
+      const out  = baseV + 1 + j,  out1 = baseV + 1 + j1;
+      const inn  = baseV + 7 + j,  inn1 = baseV + 7 + j1;
+      // inner fan
+      buffers.indices[o++] = c;   buffers.indices[o++] = inn;  buffers.indices[o++] = inn1;
+      // outer band (inner ring → outer corners)
+      buffers.indices[o++] = inn; buffers.indices[o++] = out;  buffers.indices[o++] = out1;
+      buffers.indices[o++] = inn; buffers.indices[o++] = out1; buffers.indices[o++] = inn1;
     }
   }
 
   _allocateSplatBuffers(tileCount) {
-    const VPT = 7;
+    const VPT = SPLAT_VERTS_PER_TILE;
     return {
       positions: new Float32Array(tileCount * VPT * 3),
       normals:   new Float32Array(tileCount * VPT * 3),
@@ -7621,7 +8893,7 @@ export class Renderer3D {
       fog:       new Float32Array(tileCount * VPT),
       edgeA:     new Float32Array(tileCount * VPT),
       tint:      new Float32Array(tileCount * VPT * 3),
-      indices:   new Uint32Array(tileCount * 6 * 3),
+      indices:   new Uint32Array(tileCount * 18 * 3),
       range:     new Map(),
     };
   }
@@ -7631,7 +8903,12 @@ export class Renderer3D {
   _buildSplatPlayableMesh(parent) {
     const BABYLON = this._babylon;
     const scene   = this._scene;
-    const playable = [...this.state.tiles.values()];
+    // River/bridge hexes are NOT part of the merged ground any more — each is a
+    // standalone solid cut-channel mesh (see `_buildRiverChannelMeshes`), so the
+    // merged splat leaves a hex-shaped gap there that the channel mesh's flat
+    // grass top fills (coplanar at Y=0). No more channel carving here.
+    const playable = [...this.state.tiles.values()]
+      .filter((t) => !(isRiver(t) || isBridge(t)));
     const channelAt = (col, row) => {
       const t = this.state.tiles.get(hexKey(col, row));
       return t ? splatChannelForTile(t) : null;
@@ -7641,64 +8918,6 @@ export class Renderer3D {
       const tile = playable[ti];
       this._emitSplatHex(buffers, ti, tile.col, tile.row,
         hexSplatWeights(tile, channelAt), 1.0);
-    }
-    // R5 — sink the splat ground into a real channel under each river/bridge
-    // hex so the water ribbon at `RIVER_BED_Y` is actually visible instead of
-    // occluded by a flat Y=0 plane.
-    //
-    // Per river/bridge tile:
-    //   • CENTRE vertex drops to `RIVER_BED_Y - SPLAT_RIVER_CENTRE_EPS` —
-    //     1 cm BELOW the water ribbon. Without this extra epsilon the splat
-    //     centre is coplanar with the water at `RIVER_BED_Y` and z-fights
-    //     against it; the opaque splat (sampling grass for the surrounding
-    //     hex) wins the depth test and hides the animated water entirely.
-    //
-    // Per corner (ALL tiles, river OR not — symmetric):
-    //   • Each corner of `tile` is touched by THREE tiles total: `tile` plus
-    //     its two corner-adjacent neighbours (`CORNER_DIRS[j]` indexes into
-    //     the row-parity-aware neighbour DIRS, same algebra as
-    //     `hexSplatWeights`). Count how many of those THREE are water and
-    //     map the count through `riverCornerY()` to a Y. All three tiles
-    //     touching the same physical corner compute the SAME waterCount, so
-    //     all three emit the corner at the SAME Y → no seam gap.
-    //
-    // The vertex layout from `_emitSplatHex`:
-    //   baseV + 0       = centre
-    //   baseV + 1..6    = perimeter corners (j=0..5, angle π/6 + j·π/3)
-    {
-      const isWater = (col, row) => {
-        const t = this.state.tiles.get(hexKey(col, row));
-        return t && (isRiver(t) || isBridge(t));
-      };
-      const range = buffers.range;
-      // Local copies of the splat-builder's neighbour DIRS + corner→edge map
-      // (private to terrain-splat.js). Same algebra as `hexSplatWeights` so
-      // the corner-incident neighbours match exactly.
-      const HEX_DIRS_EVEN = [[-1, 0], [-1, -1], [0, -1], [1, 0], [0, 1], [-1, 1]];
-      const HEX_DIRS_ODD  = [[-1, 0], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1]];
-      const CORNER_DIRS   = [[3, 4], [4, 5], [5, 0], [0, 1], [1, 2], [2, 3]];
-      for (const tile of playable) {
-        const baseV = range.get(hexKey(tile.col, tile.row));
-        if (baseV == null) continue;
-        const tileIsWater = isWater(tile.col, tile.row);
-        // Centre — only river/bridge hexes get their centre pushed below the
-        // water ribbon. Non-water hexes keep their centre at Y=0.
-        if (tileIsWater) {
-          buffers.positions[baseV * 3 + 1] = RIVER_BED_Y - SPLAT_RIVER_CENTRE_EPS;
-        }
-        const dirs = (tile.row & 1) ? HEX_DIRS_ODD : HEX_DIRS_EVEN;
-        for (let j = 0; j < 6; j++) {
-          const [da, db] = CORNER_DIRS[j];
-          const naCol = tile.col + dirs[da][0], naRow = tile.row + dirs[da][1];
-          const nbCol = tile.col + dirs[db][0], nbRow = tile.row + dirs[db][1];
-          const waterCount =
-            (tileIsWater ? 1 : 0)
-            + (isWater(naCol, naRow) ? 1 : 0)
-            + (isWater(nbCol, nbRow) ? 1 : 0);
-          if (waterCount === 0) continue; // pure-ground corner — leave at Y=0
-          buffers.positions[(baseV + 1 + j) * 3 + 1] = riverCornerY(waterCount);
-        }
-      }
     }
     const mesh = new BABYLON.Mesh('splatGround', scene);
     const vd = new BABYLON.VertexData();
@@ -7729,7 +8948,11 @@ export class Renderer3D {
     const scene   = this._scene;
     const bandDepth = this._splatBorderBandDepth();
     const ext = tilesExtent(this.state.tiles);
-    const borderPositions = borderTilePositions(this.state.tiles, bandDepth);
+    // Skip hexes the border-band river runs through — those get a solid
+    // cut-channel mesh instead (else a flat border hex z-fights the river).
+    const riverKeys = this._borderRiverKeys || new Set();
+    const borderPositions = borderTilePositions(this.state.tiles, bandDepth)
+      .filter((p) => !riverKeys.has(hexKey(p.col, p.row)));
     if (borderPositions.length === 0) { this._splatBorderGround = null; return null; }
     const FOREST_ONLY = new Float32Array([
       0, 0, 1,  0, 0, 1,  0, 0, 1,  0, 0, 1,
@@ -7740,9 +8963,12 @@ export class Renderer3D {
       const pos = borderPositions[bi];
       const a   = borderForestAlphaForTile(pos.col, pos.row, ext, bandDepth);
       this._emitSplatHex(buffers, bi, pos.col, pos.row, FOREST_ONLY, a);
-      const baseV = bi * 7;
-      for (let v = 0; v < 7; v++) buffers.fog[baseV + v] = 1.0;
+      const baseV = bi * SPLAT_VERTS_PER_TILE;
+      for (let v = 0; v < SPLAT_VERTS_PER_TILE; v++) buffers.fog[baseV + v] = 1.0;
     }
+    // Border ground stays flat (Y=0) — river/bridge hexes are standalone
+    // cut-channel meshes now (see `_buildRiverChannelMeshes`), so there's no
+    // carve to match; the channel grass meets this flat ground coplanar.
     const mesh = new BABYLON.Mesh('splatBorderGround', scene);
     const vd = new BABYLON.VertexData();
     vd.positions = buffers.positions;
@@ -7903,16 +9129,21 @@ export class Renderer3D {
       }
       mat.disableDepthWrite = true;
     } else {
-      // R5 polish 3 — the playable splat carries a sunken hex centre + tilted
-      // corner displacement on river hexes (riverCornerY → -0.06..-0.18). At
-      // RIVER_BED_Y=-0.18 the water ribbon depth-fails against the splat cone
-      // everywhere except a tiny circle at each tile centre — producing the
-      // "~3 isolated arrow patches in a wide dirt channel" bug. Mirror the
-      // border splat: render the splat colours normally but skip the depth
-      // write so the water ribbon at -0.18 wins everywhere along the channel.
-      // Trees, buildings, and other props still write depth normally and
-      // continue to occlude the river where they sit on top.
-      mat.disableDepthWrite = true;
+      // Z-buffer refit — the playable splat WRITES DEPTH normally (Babylon
+      // default), so it is a true depth occluder: bridge decks, props, and the
+      // playable/border seam all sort against it correctly via the z-buffer
+      // instead of the fragile transparent-pass alphaIndex stacking the old
+      // `disableDepthWrite` workaround forced.
+      //
+      // The river ribbon stays visible because the channel-sink pass now carves
+      // a FLAT trench floor — centre + inner ring (radius SPLAT_INNER_RING_FRAC·R,
+      // wider than the max water half-width) dropped to RIVER_BED_Y minus the
+      // centre epsilon — so the water at RIVER_BED_Y clears the splat across its
+      // whole footprint, not just a pinhole at the tile centre (the old
+      // single-fan failure that motivated disabling depth write). Trees +
+      // buildings (which also write depth) keep occluding the water where they
+      // sit on top.
+      mat.disableDepthWrite = false;
     }
     mat.backFaceCulling = true;
     const PluginClass = makeTerrainSplatPlugin(BABYLON);
@@ -8103,6 +9334,7 @@ export class Renderer3D {
       // them should drop shadows onto the deck, not have those shadows fall
       // through to the river surface below.
       this._setShadowReceiver(plank);
+      plank.metadata = { respectsFog: false }; // structure — stay visible in fog, don't vanish
       trackProp(plank);
     }
 
@@ -8137,6 +9369,7 @@ export class Renderer3D {
       deck.position.x = x; deck.position.y = deckBottomY + deckH / 2; deck.position.z = z;
       this._addShadowCaster(deck);
       this._setShadowReceiver(deck);
+      deck.metadata = { respectsFog: false };
       trackProp(deck);
 
       // A railing down each side of the road: a top rail spanning the deck plus
@@ -8163,6 +9396,7 @@ export class Renderer3D {
         rail.isPickable = false;
         rail.position.x = cx; rail.position.y = railTopY; rail.position.z = cz;
         this._addShadowCaster(rail);
+        rail.metadata = { respectsFog: false };
         trackProp(rail);
         for (let i = 0; i < NPOSTS; i++) {
           const t = (i / (NPOSTS - 1) - 0.5) * railLen; // -railLen/2 .. +railLen/2 along road
@@ -8177,6 +9411,7 @@ export class Renderer3D {
           post.position.y = postBaseY + postH / 2;
           post.position.z = cz + az * t;
           this._addShadowCaster(post);
+          post.metadata = { respectsFog: false };
           trackProp(post);
         }
       }
@@ -8540,15 +9775,12 @@ export class Renderer3D {
     const scene   = this._scene;
     if (!BABYLON || !scene || !this.state?.tiles) return;
 
-    const riverStrokes = buildRiverNetworkStrokes(this.state.tiles);
     const roadStrokes  = buildRoadNetworkStrokes(this.state.tiles);
 
-    if (riverStrokes.length > 0) {
-      this._riverNetworkMesh = this._buildNetworkMesh(
-        'river', riverStrokes, RIVER_RIBBON_WIDTH, RIVER_RIBBON_Y,
-        TILE_COLOR[TileType.RIVER],
-      );
-    }
+    // River is now drawn per-tile as solid cut-channel meshes
+    // (`_buildRiverChannelMeshes`); the old transparent water ribbon + bank
+    // ribbon + border extension are retired. Roads still use the ribbon path.
+    this._riverNetworkMesh = null;
     if (roadStrokes.length > 0) {
       this._roadNetworkMesh = this._buildNetworkMesh(
         'road', roadStrokes, ROAD_RIBBON_WIDTH, ROAD_RIBBON_Y,
@@ -8887,12 +10119,14 @@ export class Renderer3D {
       // terrain reads wavy/dirt-path rather than two clean parallel lines.
       // River keeps its tight straight banks (a river edge IS sharp).
       if (networkName === 'road') attachRoadEdgeToMaterial(BABYLON, mat);
-      // R5 polish 3 — water renders with the NORMAL depth test now that the
-      // playable splat material runs `disableDepthWrite = true` (see
-      // `_buildSplatMaterial`). Trees + buildings continue to write depth and
-      // correctly occlude the water where they sit on top, instead of the
-      // previous `depthFunction = ALWAYS` workaround that let the river paint
-      // over everything in the scene.
+      // Water renders with the NORMAL depth test. The playable splat now writes
+      // depth (see `_buildSplatMaterial`) but the channel-sink pass carves a
+      // flat trench floor below RIVER_BED_Y across the inner ring, so the water
+      // ribbon clears the splat everywhere along the channel. Trees + buildings
+      // write depth and correctly occlude the water where they sit on top —
+      // no `depthFunction = ALWAYS` override (which let the river paint over the
+      // whole scene) and no terrain `disableDepthWrite` (which forced the
+      // fragile transparent-sort stacking).
       merged.material        = mat;
       // Register this tile clone's diffuse texture for per-frame flow scroll.
       // (Babylon's StandardMaterial.clone() deep-clones textures, so each tile
@@ -9129,15 +10363,13 @@ export class Renderer3D {
     if (this._riverBankBaseMat) return this._riverBankBaseMat;
     const mat = new BABYLON.StandardMaterial('river_bank_base_mat', scene);
     mat.diffuseColor    = new BABYLON.Color3(0.62, 0.50, 0.38); // warm dirt tint
-    // The bank ribbon's cross-section is a U-trench, so the slope walls face
-    // mostly sideways/downward. At 45° camera tilt under the directional sun
-    // the slope normals catch almost no diffuse and the dirt reads near-black.
-    // A modest warm emissive gives the dirt a baseline colour regardless of
-    // lighting angle, lifting the slope faces into the readable brown range
-    // without making the well-lit top faces glow. Fog parity: `baseEmissive`
-    // is snapshotted in `_buildRiverBankMeshes` so `_setTilePropsFogged` darkens
-    // the emissive alongside the diffuse when the tile is fogged.
-    mat.emissiveColor   = new BABYLON.Color3(0.25, 0.20, 0.15);
+    // No emissive: the bank is real solid cut-channel geometry now (computed
+    // normals catch the sun + hemispheric light), so the old emissive hack —
+    // added when the bank was a flat ribbon whose sideways normals read black —
+    // is gone. It was SELF-LIT, which ignored shadows and left the bank/fringe a
+    // bright grey band where the surrounding grass was shadowed. A tiny ambient
+    // floor keeps the deep-trench faces from going pure black.
+    mat.emissiveColor   = new BABYLON.Color3(0.04, 0.035, 0.025);
     mat.specularColor   = new BABYLON.Color3(0.04, 0.04, 0.04);
     mat.backFaceCulling = false;
     mat.disableLighting = false;
@@ -9955,7 +11187,8 @@ export class Renderer3D {
     if (!this.state?.tiles || this.state.tiles.size === 0) return;
     const all = [];
     for (const tile of this.state.tiles.values()) all.push({ col: tile.col, row: tile.row });
-    this.frameHexes(all, { paddingHexes: 1, instant: opts.instant === true });
+    // Whole-map fit — a deliberate distance set, not an auto unit-focus.
+    this.frameHexes(all, { paddingHexes: 1, instant: opts.instant === true, fit: true });
   }
 
   /** Recompute the camera's zoom limits from the current aspect/FOV.
@@ -9973,6 +11206,7 @@ export class Renderer3D {
    *  No-op when the engine or camera hasn't initialised yet. */
   _recomputeMaxZoomCap() {
     if (!this._camera) return;
+    if (this._cameraFree) return; // leave limits lifted while the debug free-cam is active
     // Operator-fixed bounds — same range across every map size, no map-fit
     // derivation. Clamp the current radius if a previous map's limits left it
     // outside the new (tighter) window.
@@ -10331,9 +11565,15 @@ export class Renderer3D {
         if (o.kind === 'tree') { if (typeof o.slot === 'number') treeSlots.push(o.slot); }
         else staticOcc.push(o);
       }
-      // Single IDLE standee on an otherwise-empty hex → it already sits at the
-      // hex centre from _positionStandee's default path; nothing to re-slot.
+      // Single IDLE standee on an otherwise-empty hex that lives in the CENTRE
+      // slot → it already sits at the hex centre from _positionStandee's default
+      // path; nothing to re-slot. A lone standee with an authoritative NON-centre
+      // slot must NOT take this shortcut — it would snap to the bare centre and
+      // pop away from the slot it ended the previous round in (the visible
+      // round-boundary slot jump). Such a standee falls through to the general
+      // positioning path below, which honors entity.slot.
       if (standeeOccs.length === 1 && !standeeOccs[0].animating
+          && (standeeOccs[0].slot ?? 0) === CENTRE_SLOT_INDEX
           && staticOcc.length === 0 && treeSlots.length === 0) {
         this._syncOverflowBadge(k, 0);
         continue;
@@ -10576,7 +11816,7 @@ export class Renderer3D {
     ctx.lineWidth = 4;
     ctx.beginPath(); ctx.arc(32, 32, 26, 0, Math.PI * 2); ctx.stroke();
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 30px sans-serif';
+    ctx.font = 'bold 30px BrimstoneIcons, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(`+${overflow}`, 32, 34);
@@ -10860,11 +12100,17 @@ export class Renderer3D {
         // skip the no-op-shift early-out that `_focusCamera` applies for
         // generic shifts, otherwise tiny target deltas (or the camera already
         // sitting on the unit because of an earlier pan) leave the player
-        // wondering whether the click registered. Also zoom in toward the
-        // unit when the camera is currently parked far away.
-        const targetRadius = Math.min(
+        // wondering whether the click registered.
+        //
+        // Distance: PAN-only once the player has set their own zoom — selecting
+        // another unit must not yank the distance back. Before that (fresh game
+        // at the map-fit) we still zoom IN toward the unit so the first
+        // selection frames it sensibly. See `resolveFocusRadius`.
+        const targetRadius = resolveFocusRadius(
           this._camera.radius,
-          Math.max(this._camera.lowerRadiusLimit ?? 4, SELECTION_FOCUS_RADIUS),
+          this._userZoomEstablished,
+          SELECTION_FOCUS_RADIUS,
+          this._camera.lowerRadiusLimit ?? 4,
         );
         this._focusCamera(newTarget, targetRadius, { forceAnimate: true });
       }
@@ -10983,6 +12229,12 @@ export class Renderer3D {
     }
     return null;
   }
+
+  /** Public accessor for an entity's current world anchor `{ x, z }` (the live
+   *  standee slot position, falling back to the hex centre). Used by the combat
+   *  arm to aim the attacker's lunge at the defender's actual sub-hex slot.
+   *  Render-only — never mutates state. */
+  entityWorldPos(id) { return this._entityWorldPos(id); }
 
   /** Average world anchor of a set of entity ids (skips ids with no resolvable
    *  position). Returns null when none resolve. Used to point a speaker at the
@@ -11513,9 +12765,11 @@ export class Renderer3D {
 
     if (shouldFrame && this._camera) {
       const midTarget = new BABYLON.Vector3((startX + edgeX) * 0.5, 0, (startZ + edgeZ) * 0.5);
-      const combatRadius = Math.min(
+      const combatRadius = resolveFocusRadius(
         this._camera.radius,
-        Math.max(this._camera.lowerRadiusLimit ?? 4, COMBAT_FOCUS_RADIUS),
+        this._userZoomEstablished,
+        COMBAT_FOCUS_RADIUS,
+        this._camera.lowerRadiusLimit ?? 4,
       );
       this._focusCamera(midTarget, combatRadius);
     }
@@ -11597,13 +12851,21 @@ export class Renderer3D {
    *  strike). The slide is ALSO the standalone fallback for cone-token units
    *  (no `paladinClone`) and for the window before punch.glb has lazily
    *  loaded — in both cases the pure slide plays with no clip and no crash. */
-  addLungeAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title, _fromSlot = 0, stopAtBoundary = false) {
+  addLungeAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title, _fromSlot = 0, stopAtBoundary = false, targetWorld = null) {
     if (!this._scene || !this._babylon) return;
     const standee = this._entityStandees.get(entityId);
     if (!standee) return;
     const BABYLON = this._babylon;
     const { x: fromX, z: fromZ } = hexToWorld(fromCol, fromRow);
-    const { x: toX,   z: toZ   } = hexToWorld(toCol,   toRow);
+    // The lunge aims at the defender's ACTUAL slot position when the caller
+    // resolves it (`targetWorld`) — the defender holds its sub-hex slot for the
+    // strike instead of snapping to the hex centre. Falls back to the hex centre
+    // for callers (bumps, legacy) that don't pass a slot-resolved point.
+    const hexCentre = hexToWorld(toCol, toRow);
+    const hasTargetWorld = !!targetWorld
+      && Number.isFinite(targetWorld.x) && Number.isFinite(targetWorld.z);
+    const toX = hasTargetWorld ? targetWorld.x : hexCentre.x;
+    const toZ = hasTargetWorld ? targetWorld.z : hexCentre.z;
 
     // Frame the combat: only when this is the first lunge of the step (the
     // active-lunge set is still empty), so simultaneous lunges don't re-issue
@@ -11633,9 +12895,11 @@ export class Renderer3D {
 
     if (shouldFrameCombat && this._camera) {
       const midTarget = new BABYLON.Vector3((fromX + toX) * 0.5, 0, (fromZ + toZ) * 0.5);
-      const combatRadius = Math.min(
+      const combatRadius = resolveFocusRadius(
         this._camera.radius,
-        Math.max(this._camera.lowerRadiusLimit ?? 4, COMBAT_FOCUS_RADIUS),
+        this._userZoomEstablished,
+        COMBAT_FOCUS_RADIUS,
+        this._camera.lowerRadiusLimit ?? 4,
       );
       this._focusCamera(midTarget, combatRadius);
     }
@@ -11757,7 +13021,9 @@ export class Renderer3D {
   /** G2 combat positioning — place every visible participant of a battle into
    *  a clean cluster around the defender's hex before the readout/strike
    *  resolves. Spec (operator):
-   *    • Defender slides to its hex centre (no-op if already centred).
+   *    • Defender HOLDS its current sub-hex slot — it does NOT re-centre. The
+   *      attacker's lunge (fired by the caller) targets that slot, so the two
+   *      meet where the defender actually stands.
    *    • The first ADVANTAGE_CAP=3 allies per side slide to the midpoint of
    *      the edge shared with the defender's hex (= midpoint between their
    *      hex centre and the defender's hex centre on a hex grid).
@@ -11779,7 +13045,11 @@ export class Renderer3D {
   applyCombatPositioning({ defender, attacker = null, attackAllies = [], defenseAllies = [] } = {}, opts = {}) {
     if (!this._scene || !this._babylon || !defender) return;
     const durMs = Number.isFinite(opts.durMs) ? opts.durMs : LUNGE_ANIM_MS;
-    const plan = planCombatPositions({ defender, attacker, attackAllies, defenseAllies });
+    // The defender holds its current slot: pass its live standee position as the
+    // plan target so the `_animateStandeeTo` below is a no-op (target ≈ current)
+    // — never a re-centre. Render-only; the slot lives in game state untouched.
+    const defenderWorld = this._entityWorldPos(defender.id);
+    const plan = planCombatPositions({ defender, defenderWorld, attacker, attackAllies, defenseAllies });
     this._animateStandeeTo(defender.id, plan.defender.x, plan.defender.z, durMs);
     for (const a of plan.attackerAllies) {
       if (a.moves) this._animateStandeeTo(a.id, a.toX, a.toZ, durMs);
@@ -11792,9 +13062,9 @@ export class Renderer3D {
     if (typeof this.faceEntityTowardEntity !== 'function') return;
     if (attacker?.id != null) {
       // Defender faces the attacker so the strike reads as eye-contact, not
-      // a stab in the back. `_animateStandeeTo` skips the slide+instant-yaw
-      // when the defender is already at its hex centre, so this tween is the
-      // ONLY source of facing for the common "defender already centred" path.
+      // a stab in the back. The defender no longer slides (it holds its slot,
+      // so `_animateStandeeTo` is a no-op), making this tween the ONLY source
+      // of the defender's facing.
       this.faceEntityTowardEntity(defender.id, attacker.id);
     }
     for (const a of plan.attackerAllies) {
@@ -12507,6 +13777,7 @@ export class Renderer3D {
         hp:    live?.hp ?? 0,
         maxHp: live?.maxHp ?? 1,
         ownerColor: unitIconOwnerColor(live ?? entity, this.state?.entities ?? null),
+        level: (live ?? entity)?.level ?? 1,
       });
     };
     const repaintIcon = (value, color) => {
@@ -12723,7 +13994,7 @@ export class Renderer3D {
 
     const isAtk = side === 'attacker' || side === 'atk';
     const sideColor = isAtk ? COMBAT_CARD_ATK_COLOR : COMBAT_CARD_DEF_COLOR;
-    const sideIcon  = isAtk ? '⚔' : '🛡';
+    const sideIcon  = isAtk ? '\uE000' : '\uE042';
 
     const entity = (this.state?.entities ?? []).find(e => e && e.id === allyId) ?? null;
     const portraitSource = (entity && this._tilemapImg && this._spriteRects)
@@ -13315,12 +14586,14 @@ export class Renderer3D {
       // identical). Mid-game leader joins/deaths flip the predicate and the
       // signature change forces a repaint.
       const ownerColor = unitIconOwnerColor(e, this.state.entities);
+      const level = e.level ?? 1;
       if (entry.lastHp === e.hp
           && entry.lastMax === e.maxHp
           && entry.lastAssetId === assetId
           && entry.lastHadPortrait === portraitSource.hasPortrait
           && entry.lastInfoSig === infoSig
-          && entry.lastOwnerColor === ownerColor) {
+          && entry.lastOwnerColor === ownerColor
+          && entry.lastLevel === level) {
         continue;
       }
       this._repaintUnitIconBadge(entry, e, portraitSource, info, ownerColor);
@@ -13330,6 +14603,7 @@ export class Renderer3D {
       entry.lastHadPortrait  = portraitSource.hasPortrait;
       entry.lastInfoSig      = infoSig;
       entry.lastOwnerColor   = ownerColor;
+      entry.lastLevel        = level;
     }
     // Dispose badges for entities that no longer exist or just died.
     // G1 v2: skip entities mid-combat-readout — the readout drives the icon
@@ -13413,6 +14687,9 @@ export class Renderer3D {
       // assetId) tuple is unchanged so the diff would otherwise skip the
       // repaint and the badge would stay gray forever.
       lastHadPortrait: false,
+      // Last veterancy level painted. -1 forces the first paint and any
+      // level-up repaints the pill (the signature diff above gates on it).
+      lastLevel: -1,
       leader: standee.leader,
     };
     this._unitIconBadges.set(entity.id, entry);
@@ -13430,6 +14707,7 @@ export class Renderer3D {
       maxHp: entity.maxHp,
       info,
       ownerColor,
+      level: entity.level ?? 1,
     });
     entry.tex.update();
   }
@@ -14164,7 +15442,7 @@ export class Renderer3D {
         ctx.lineWidth = 4;
         ctx.beginPath(); ctx.arc(32, 32, 26, 0, Math.PI * 2); ctx.stroke();
         ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 36px sans-serif';
+        ctx.font = 'bold 36px BrimstoneIcons, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(badgeLabel, 32, 34);
@@ -15337,11 +16615,22 @@ export class Renderer3D {
    *  moves. No-op until the async texture load resolves (no diffuseTexture). */
   _pumpRiverFlow(now) {
     const off = riverFlowOffset(now);
-    // The playable river is built as one merged mesh PER TILE, each carrying
-    // its own `baseMat.clone()` (per-tile fog darkening) — so there is no
-    // single river material to scroll. `_riverFlowTextures` collects every
-    // per-tile clone's diffuse texture at build time; advance them all in
-    // lockstep so the whole river flows as one continuous current.
+    // Drift the two ripple-normal layers downstream at different speeds (and the
+    // second slightly across) so the chop animates with non-repeating variation.
+    // World-sampled, so one shared plugin scrolls the whole river in lockstep.
+    const p = this._waterRipplePlugin;
+    if (p) {
+      // U is arc DOWN the channel, so scroll along U to flow downstream; the two
+      // layers move at different speeds (+ a touch of cross drift on B) for
+      // variation. Each component is its OWN 0..1 sawtooth (riverFlowOffset)
+      // rather than `off * k` — a scaled sawtooth jumps by a non-integer when it
+      // wraps (the visible "UV reset"); a fresh fractional wraps seamlessly
+      // because the ripple texture tiles at 1.0.
+      p.uRippleOffA = [off, 0];
+      p.uRippleOffB = [riverFlowOffset(now, RIVER_FLOW_SPEED * 0.55),
+                       riverFlowOffset(now, RIVER_FLOW_SPEED * 0.18)];
+    }
+    // Legacy ribbon textures (border extension), if any.
     const list = this._riverFlowTextures;
     if (list) {
       for (let i = 0; i < list.length; i++) {
@@ -15349,7 +16638,6 @@ export class Renderer3D {
         if (tex) tex.uOffset = off;
       }
     }
-    // Border river-extension ribbons share one material across all exits.
     const extTex = this._riverExtensionMat?.diffuseTexture;
     if (extTex) extTex.uOffset = off;
   }
@@ -15371,7 +16659,7 @@ export class Renderer3D {
     // position is target + radius offset, that drift propagates into camera
     // Y. Clamping target.y here keeps the camera at a fixed height (radius
     // offset above the ground) no matter how the operator pans.
-    if (this._camera && this._camera.target && this._camera.target.y !== 0) {
+    if (!this._cameraFree && this._camera && this._camera.target && this._camera.target.y !== 0) {
       this._camera.target.y = 0;
     }
     // Pan extent clamp — runs every frame so inertial overshoot past the map
@@ -15379,7 +16667,7 @@ export class Renderer3D {
     // `panBoundsForPlayableExtent`, which keeps the camera target inside the
     // playable bbox plus a half-hex fudge so even at max zoom-out + max pan
     // the playable map stays clearly the visible subject.
-    if (this._camera && (this._panClampBounds || this._mapPanBounds)) {
+    if (!this._cameraFree && this._camera && (this._panClampBounds || this._mapPanBounds)) {
       const t = this._camera.target;
       const bounds = this._panClampBounds
         || panBoundsForPlayableExtent(this._mapPanBounds);
@@ -15400,7 +16688,7 @@ export class Renderer3D {
     // radius and assign it directly; the relaxed [LOCKED, TOPDOWN] beta limits
     // (see _initBabylon) keep Babylon from clamping it back. No user tilt input
     // feeds this — radius is the sole driver.
-    if (this._camera) {
+    if (!this._cameraFree && this._camera) {
       const cam = this._camera;
       cam.beta = betaForRadius(
         cam.radius,
@@ -15943,6 +17231,9 @@ export class Renderer3D {
       // One vertex-buffer rewrite covers the whole ground's soft veil; props
       // (standees/discs/labels) still flip per-hex via _setTilePropsFogged.
       this._writeFogWeights(fogged);
+      // River tiles are standalone meshes outside the merged ground — fog their
+      // grass on the same schedule so they darken in lockstep with neighbours.
+      this._writeRiverChannelFog(fogged);
       for (const k of allKeys) {
         const shouldBeFogged = fogged.has(k);
         const isFogged = this._fogActiveSet.has(k);
@@ -15969,7 +17260,17 @@ export class Renderer3D {
     if (target) {
       for (const [id, standee] of this._entityStandees) {
         const k = hexKey(standee.plane.metadata.col, standee.plane.metadata.row);
-        const visible = shouldRenderEntityAt(target, k);
+        // A unit mid-move/lunge stays visible for the WHOLE animation. The
+        // replay gate (isEventVisible) only queues an animation when the move's
+        // origin OR destination is in sight, so the slide is already "worth
+        // showing". Without this, a unit walking INTO fog vanished the instant
+        // its animation began: during the slide the standee's metadata hex is
+        // its DESTINATION (kept in sync for the 2+-hex case), so a fogged
+        // destination tested here flipped it to setEnabled(false) before it
+        // ever left the visible origin. Once the animation ends the id clears
+        // from these sets and the next veil pass hides it at rest if fogged.
+        const animating = this._activeMoveIds.has(id) || this._activeLungeIds.has(id);
+        const visible = animating || shouldRenderEntityAt(target, k);
         // Use setEnabled (not isVisible) so the standee's child portrait
         // sticker meshes inherit visibility. isVisible only hides the mesh
         // itself, not its parented children — switching to setEnabled
@@ -16014,10 +17315,11 @@ export class Renderer3D {
       }
     }
 
-    // Push the fogged building-tile centres into the building shader plugins so
-    // GLB buildings on fogged hexes darken (global uniform, not per-instance —
-    // see `_updateBuildingFogUniform` / src/fog-darken-plugin.js).
-    this._updateBuildingFogUniform();
+    // Darken GLB buildings standing on fogged hexes (per-building material tint,
+    // driver-independent — see `_applyBuildingFogDarken`).
+    this._applyBuildingFogDarken();
+    // River rocks darken the same way (cloned GLBs with per-tile materials).
+    this._applyRiverRockFogDarken();
   }
 
   /** Rewrite the merged ground's `aFog` vertex attribute from the fogged-hex
@@ -16039,8 +17341,14 @@ export class Renderer3D {
         // the veil edge doesn't average against non-existent tiles.
         return tiles && tiles.has(nk) ? nk : null;
       });
-      const w = hexFogWeights(key, neighborKeys, fogged);
-      buf.set(w, baseV);
+      const w = hexFogWeights(key, neighborKeys, fogged); // 7: centre + 6 corners
+      buf[baseV] = w[0];
+      for (let j = 0; j < 6; j++) {
+        buf[baseV + 1 + j] = w[1 + j];
+        // Inner ring (verts 7..12): lerp centre→corner at the ring fraction,
+        // matching the splat/tint interpolation so the veil stays continuous.
+        buf[baseV + 7 + j] = w[0] + (w[1 + j] - w[0]) * SPLAT_INNER_RING_FRAC;
+      }
     }
     ground.updateVerticesData('aFog', buf);
   }
@@ -16057,8 +17365,8 @@ export class Renderer3D {
       //   • undefined / true     → hide on fog (standees, HP bars, node discs)
       //   • false                → ignore this loop (permanent geometry like
       //                            trees; also GLB buildings, which darken via
-      //                            the global FogDarkenPlugin uniform instead —
-      //                            see `_updateBuildingFogUniform`)
+      //                            their own per-building material tint instead —
+      //                            see `_applyBuildingFogDarken`)
       //   • 'darken'             → tint dimmer (roads, rivers) — per-tile material
       const policy = p.metadata?.respectsFog;
       if (policy === false) continue;
@@ -16560,49 +17868,6 @@ export const CENTRE_SLOT_INDEX = 0;
 /** Index of the slot a building always occupies. */
 export const BUILDING_SLOT_INDEX = 1;
 
-/** Pure helper: the world XZ centres of every fogged building tile, used to feed
- *  the FogDarkenPlugin uniform. Returns `[{x, z}, ...]` for buildings whose
- *  render hex is fogged. No DOM/Babylon dependency.
- *
- *  The building's render position depends on whether the building is a
- *  modern footprint-bearing entrance or a legacy 1-hex orphan:
- *  - footprint-bearing: the GLB sits at `buildingNudgedPosition(footprintWorld,
- *    entranceWorld, BUILDING_ENTRANCE_NUDGE)` — the footprint hex centre
- *    nudged ~15% toward the entrance (P4/P4a). The fog hex is the FOOTPRINT
- *    (the visible building's hex), not the entrance — a building "reads as
- *    in fog" when its visible geometry sits on a fogged hex.
- *  - orphan (empty `footprintHexes`): the GLB sits at `entrance + slot`
- *    (legacy NE-slot position) and the fog hex is the entrance. Matches the
- *    pre-P4 behavior that shipped in prod.
- */
-export function buildFoggedBuildingTileList(state, fogActiveSet) {
-  const out = [];
-  if (!state?.tiles || !fogActiveSet || fogActiveSet.size === 0) return out;
-  const slot = TILE_SLOTS[BUILDING_SLOT_INDEX];
-  for (const tile of state.tiles.values()) {
-    if (!hasBuilding(tile)) continue;
-    const fpKey = Array.isArray(tile.footprintHexes) && tile.footprintHexes.length > 0
-      ? tile.footprintHexes[0] : null;
-    if (fpKey) {
-      // Modern compound building: fog test against the footprint hex, render
-      // position is the nudged footprint→entrance midpoint.
-      if (!fogActiveSet.has(fpKey)) continue;
-      const [fcStr, frStr] = fpKey.split(',');
-      const fc = +fcStr, fr = +frStr;
-      const fW = hexToWorld(fc, fr);
-      const eW = hexToWorld(tile.col, tile.row);
-      const p = buildingNudgedPosition(fW, eW, BUILDING_ENTRANCE_NUDGE);
-      out.push({ x: p.x, z: p.z });
-    } else {
-      // Legacy orphan: building still at entrance + slot offset.
-      if (!fogActiveSet.has(hexKey(tile.col, tile.row))) continue;
-      const { x, z } = hexToWorld(tile.col, tile.row);
-      out.push({ x: x + slot.x, z: z + slot.z });
-    }
-  }
-  return out;
-}
-
 /**
  * Pure slot assignment for a hex's occupants.
  *
@@ -16849,6 +18114,25 @@ export const RIVER_BED_Y         = -0.18;
  *  buffer at the default near plane to consistently resolve "water above
  *  bed". Operator-tunable. */
 export const SPLAT_RIVER_CENTRE_EPS = 0.01;
+/** Z-buffer refit — the splat ground fan is subdivided from a flat 7-vertex
+ *  fan (centre + 6 corners) into a 13-vertex two-ring fan (centre + an INNER
+ *  ring of 6 + the 6 outer corners). The extra inner ring lets a river hex
+ *  carry a FLAT sunken channel floor out to `SPLAT_INNER_RING_FRAC·R` while the
+ *  outer corners still rise to the banks — so the water ribbon at `RIVER_BED_Y`
+ *  clears the terrain across its whole footprint, not just a pinhole at the
+ *  tile centre. That, in turn, lets the playable splat write depth normally
+ *  (props/bridges/seams sort correctly) instead of the old `disableDepthWrite`
+ *  workaround. On NON-river tiles the subdivision is a visual no-op: the inner
+ *  ring's splat/tint/fog are linearly interpolated centre→corner at the ring
+ *  fraction, exactly reproducing the gradient the GPU drew across the old flat
+ *  triangle. */
+export const SPLAT_VERTS_PER_TILE = 13;
+/** Z-buffer refit — inner-ring radius as a fraction of `HEX_RADIUS_WORLD`. Must
+ *  exceed `RIVER_HALF_WIDTH_MAX` (0.45) so the flat channel floor fully covers
+ *  the widest water cross-section, and stay below the hex apothem (√3/2 ≈ 0.866)
+ *  so the ring stays interior (its verts are NOT shared with neighbours → no
+ *  seam-continuity constraint, the inner attributes can be derived locally). */
+export const SPLAT_INNER_RING_FRAC = 0.66;
 /** R5 follow-up — pure helper computing the Y a splat-ground CORNER vertex
  *  should sit at, given how many of the THREE tiles touching that corner
  *  (`tile + 2 corner-neighbours`) are water (river or bridge). Symmetric:
@@ -16857,18 +18141,26 @@ export const SPLAT_RIVER_CENTRE_EPS = 0.01;
  *  river-only corner-drop loop used to produce.
  *
  *  Mapping:
- *    0 → 0           (no drop — normal ground)
- *    1 → -0.06       (shallow, bank slope start)
- *    2 → -0.12       (mid bank)
- *    3 → RIVER_BED_Y (full bed — corner is interior to the channel)
+ *    0 → 0              (no drop — normal ground)
+ *    1 → RIVER_BED_Y/2  (shallow — dry OUTER bank, water doesn't reach it)
+ *    2 → RIVER_BED_Y    (full bed — the water FLOWS over this corner)
+ *    3 → RIVER_BED_Y    (full bed — corner is interior to the channel)
  *
- *  Linear in `waterCount` against `RIVER_BED_Y` so changing the bed depth
- *  rescales the slope automatically. */
+ *  Z-buffer refit — the step at `waterCount === 2` is load-bearing. Now that the
+ *  playable splat WRITES depth, the terrain occludes the water ribbon anywhere
+ *  it pokes above `RIVER_BED_Y`. A corner touched by ≥2 water tiles is a corner
+ *  the water flows ACROSS (e.g. the shared boundary between two consecutive
+ *  river tiles on a straight reach); it must sit at full bed depth or the river
+ *  reads as disconnected blue patches with dry gaps at every tile seam. A
+ *  `waterCount === 1` corner is the dry OUTER bank — the water's perpendicular
+ *  half-width (≤0.45) never reaches it (corner is ~0.5 off the centreline), so
+ *  it stays a shallow bank slope. */
 export function riverCornerY(waterCount) {
   const c = Math.max(0, Math.min(3, waterCount | 0));
+  if (c >= 2) return RIVER_BED_Y;
   // `|| 0` collapses the JS `-0` you'd otherwise get from `RIVER_BED_Y * 0`
   // when waterCount is 0 — callers compare against `0` strictly.
-  return RIVER_BED_Y * (c / 3) || 0;
+  return RIVER_BED_Y * (c / 2) || 0;
 }
 /** R5 — bank top Y. Sits a hair ABOVE the ground (Y=0) so the dirt-textured
  *  bank deck wins the depth fight against the underlying terrain disc at the
@@ -18872,8 +20164,8 @@ export const DISCOVERY_CARD_BG_ALPHA     = 0.72;
 /** Side glyphs keyed by entity type — mirrors the GLYPHS map the 2D Encounter
  *  Dialog uses (src/ui.js `_showEncounterDialog`) so 3D and 2D agree. */
 export const DISCOVERY_GLYPHS = Object.freeze({
-  hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟',
-  zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙',
+  hero: ICON.hero, witch: ICON.witch, survivor: ICON.survivor, soldier: ICON.soldier,
+  zombie: ICON.zombie, minion: ICON.minion, wood_golem: ICON.woodGolem, iron_golem: ICON.ironGolem,
 });
 
 /** Compute the local-space XZ offset for a combat card so attacker and
@@ -19148,7 +20440,7 @@ export function countAttacksPerTarget(steps) {
  * path: a single attack uses the ⚔ glyph; ≥2 collapse into `×N`.
  */
 export function attackBadgeLabel(count) {
-  return count > 1 ? `×${count}` : '⚔';
+  return count > 1 ? `×${count}` : '\uE000';
 }
 
 /**
@@ -19626,7 +20918,7 @@ export function paintFloaterText(ctx, opts) {
 
   // Font: heavy weight + large pixel size so the label reads at zoom-out.
   const fontPx = Math.round(96 * fontScale);
-  ctx.font = `900 ${fontPx}px sans-serif`;
+  ctx.font = `900 ${fontPx}px BrimstoneIcons, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
@@ -19644,8 +20936,30 @@ export function paintFloaterText(ctx, opts) {
   ctx.strokeStyle = '#000';
   ctx.strokeText(text, cx, cy);
 
-  ctx.fillStyle = fillColor;
-  ctx.fillText(text, cx, cy);
+  // Per-resource glyph tint: a loot floater like "+ Wood" carries a resource
+  // glyph that should read in its type color (wood brown, herbs green, …),
+  // matching the HTML UI where only the glyph is tinted and the label stays on
+  // the ambient color. Split into colored runs and paint each; the common case
+  // (no resource glyph → one ambient segment) collapses to a single fillText.
+  const segments = splitColoredFloaterSegments(text);
+  const tinted   = segments.some((s) => s.color);
+  if (!tinted) {
+    ctx.fillStyle = fillColor;
+    ctx.fillText(text, cx, cy);
+    return;
+  }
+  // Center the whole run, then draw segments left→right advancing by measured
+  // width. Left-align temporarily so per-segment x is the segment's left edge.
+  const total = ctx.measureText(text).width;
+  const prevAlign = ctx.textAlign;
+  ctx.textAlign = 'left';
+  let x = cx - total / 2;
+  for (const seg of segments) {
+    ctx.fillStyle = seg.color ?? fillColor;
+    ctx.fillText(seg.text, x, cy);
+    x += ctx.measureText(seg.text).width;
+  }
+  ctx.textAlign = prevAlign;
 }
 
 // ─── Speech-bubble paint (conversation dialog billboards) ────────────────────
@@ -19699,12 +21013,12 @@ export function paintSpeechBubble(ctx, opts) {
   ctx.textBaseline = 'top';
   let ty = SPEECH_BUBBLE_PAD_PX;
   if (name) {
-    ctx.font = `700 ${SPEECH_BUBBLE_NAME_PX - 8}px Georgia, serif`;
+    ctx.font = `700 ${SPEECH_BUBBLE_NAME_PX - 8}px BrimstoneIcons, Georgia, serif`;
     ctx.fillStyle = '#e8c558';
     ctx.fillText(name, SPEECH_BUBBLE_PAD_PX, ty);
     ty += SPEECH_BUBBLE_NAME_PX;
   }
-  ctx.font = `400 ${SPEECH_BUBBLE_LINE_PX - 8}px Georgia, serif`;
+  ctx.font = `400 ${SPEECH_BUBBLE_LINE_PX - 8}px BrimstoneIcons, Georgia, serif`;
   ctx.fillStyle = '#f2e8d8';
   for (const line of lines) {
     ctx.fillText(line, SPEECH_BUBBLE_PAD_PX, ty);
@@ -19779,7 +21093,7 @@ export function combatReadoutModel(result, side) {
   const won = isAtk ? !!result?.hit : !result?.hit;
   const sideKey = isAtk ? 'atk' : 'def';
   const sideColor = isAtk ? COMBAT_CARD_ATK_COLOR : COMBAT_CARD_DEF_COLOR;
-  const sideIcon  = isAtk ? '⚔' : '🛡';
+  const sideIcon  = isAtk ? '\uE000' : '\uE042';
 
   // Per-ally dice from the side's gang-up pool. The first die in atkPool /
   // defPool is the combatant's own; subsequent dice belong to allies in the
@@ -19818,14 +21132,14 @@ export function paintReadoutNumber(ctx, opts) {
   // comfortably inside its plane (≈15-20% padding all round) and never
   // clips at the texture edge for wide combinations like "⚔ 12".
   let fontPx = Math.round(height * 0.40);
-  ctx.font = `900 ${fontPx}px sans-serif`;
+  ctx.font = `900 ${fontPx}px BrimstoneIcons, sans-serif`;
   // Defensive width fit — emoji + 2-digit values can still overflow on
   // narrow canvases, so shrink to fit within 82% of texture width.
   const maxTextWidth = width * 0.82;
   const measured = ctx.measureText ? ctx.measureText(text).width : 0;
   if (measured > maxTextWidth && measured > 0) {
     fontPx = Math.max(1, Math.floor(fontPx * (maxTextWidth / measured)));
-    ctx.font = `900 ${fontPx}px sans-serif`;
+    ctx.font = `900 ${fontPx}px BrimstoneIcons, sans-serif`;
   }
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -19848,14 +21162,14 @@ export function paintReadoutFloater(ctx, opts) {
   ctx.clearRect(0, 0, width, height);
   // ~60% of canvas height keeps floaters legible against busy terrain.
   let fontPx = Math.round(height * 0.60);
-  ctx.font = `800 ${fontPx}px sans-serif`;
+  ctx.font = `800 ${fontPx}px BrimstoneIcons, sans-serif`;
   // Defensive width fit — long labels ("+2 ⚔ allies") shouldn't clip the
   // wide floater canvas either.
   const maxTextWidth = width * 0.90;
   let measured = ctx.measureText ? ctx.measureText(label).width : 0;
   if (measured > maxTextWidth && measured > 0) {
     fontPx = Math.max(1, Math.floor(fontPx * (maxTextWidth / measured)));
-    ctx.font = `800 ${fontPx}px sans-serif`;
+    ctx.font = `800 ${fontPx}px BrimstoneIcons, sans-serif`;
     measured = ctx.measureText ? ctx.measureText(label).width : measured;
   }
 
@@ -19936,12 +21250,12 @@ export function paintIconCombatReadout(ctx, opts) {
   const text = String(value);
   void icon;
   let fontPx = Math.round(size * COMBAT_READOUT_ICON_NUMBER_FONT_FRAC);
-  ctx.font = `900 ${fontPx}px sans-serif`;
+  ctx.font = `900 ${fontPx}px BrimstoneIcons, sans-serif`;
   const maxTextWidth = size * 0.82;
   const measured = ctx.measureText ? ctx.measureText(text).width : 0;
   if (measured > maxTextWidth && measured > 0) {
     fontPx = Math.max(1, Math.floor(fontPx * (maxTextWidth / measured)));
-    ctx.font = `900 ${fontPx}px sans-serif`;
+    ctx.font = `900 ${fontPx}px BrimstoneIcons, sans-serif`;
   }
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -20056,6 +21370,10 @@ export function paintUnitIconBadge(ctx, opts) {
     //   attackCount — planned attacks targeting this unit; draws the ⚔/×N
     //     marker in the right margin.
     info = null,
+    // Veterancy level. When > 1, a small rounded pill carrying the number is
+    // painted at the bottom of the portrait disc — the over-unit visual that
+    // replaced the old "Name L2" string suffix. Level 1 (or null) draws nothing.
+    level = 1,
   } = opts;
   const W = width;
   const H = size;
@@ -20132,6 +21450,15 @@ export function paintUnitIconBadge(ctx, opts) {
   }
   ctx.restore();
 
+  // ── Veterancy level pill ───────────────────────────────────────────────
+  // Replaces the old "Name L2" string suffix. A small rounded badge with the
+  // level number, anchored at the bottom of the portrait disc so it reads as
+  // the unit's over-head rank marker. Only drawn for level > 1 (level 1 is the
+  // default, intentionally bare).
+  if ((level ?? 1) > 1) {
+    paintLevelPill(ctx, cx, cy + innerR * 0.62, innerR, level);
+  }
+
   // ── Unit info card margins ─────────────────────────────────────────────
   if (!info || W <= H) return;
   const marginW = cx - outerR;  // pixels available either side of the disc
@@ -20152,9 +21479,9 @@ export function paintUnitIconBadge(ctx, opts) {
       let f = fontPx;
       const widthOf = (fpx) => {
         if (!ctx.measureText) return 0;
-        ctx.font = `900 ${fpx}px sans-serif`;
+        ctx.font = `900 ${fpx}px BrimstoneIcons, sans-serif`;
         const numW = ctx.measureText(numText).width;
-        ctx.font = `900 ${Math.round(fpx * UNIT_INFO_PCT_SUFFIX_FRAC)}px sans-serif`;
+        ctx.font = `900 ${Math.round(fpx * UNIT_INFO_PCT_SUFFIX_FRAC)}px BrimstoneIcons, sans-serif`;
         return numW + ctx.measureText('%').width;
       };
       const total = widthOf(f);
@@ -20162,11 +21489,11 @@ export function paintUnitIconBadge(ctx, opts) {
         f = Math.max(1, Math.floor(f * ((marginW - 4) / total)));
       }
       const suffixF = Math.round(f * UNIT_INFO_PCT_SUFFIX_FRAC);
-      ctx.font = `900 ${suffixF}px sans-serif`;
+      ctx.font = `900 ${suffixF}px BrimstoneIcons, sans-serif`;
       const suffixW = ctx.measureText ? ctx.measureText('%').width : 0;
 
       const paintGlyph = (text, fpx, x) => {
-        ctx.font = `900 ${fpx}px sans-serif`;
+        ctx.font = `900 ${fpx}px BrimstoneIcons, sans-serif`;
         ctx.strokeStyle = '#000000';
         ctx.lineWidth = Math.max(4, Math.round(fpx * 0.18));
         ctx.strokeText(text, x, y);
@@ -20196,6 +21523,54 @@ export function paintUnitIconBadge(ctx, opts) {
   }
 }
 
+/** Gold-on-dark colours for the veterancy level pill — matches the XP/gold
+ *  accent used elsewhere for veterancy so it reads as "rank" not "damage". */
+export const LEVEL_PILL_BG    = 'rgba(28,22,12,0.92)';
+export const LEVEL_PILL_BORDER = '#d8b14a';
+export const LEVEL_PILL_TEXT   = '#f2d98a';
+
+/**
+ * Paint the veterancy level pill: a small gold-bordered rounded badge carrying
+ * the level number, centred at (cx, cy) and sized relative to `discR` (the
+ * portrait disc inner radius). Pure canvas — drawn with explicit arc/line paths
+ * (no `roundRect`) so it works under the test recording-context mock, and with
+ * `BrimstoneIcons` in the font stack per the canvas icon-font convention.
+ * Caller gates on level > 1; this draws unconditionally.
+ */
+export function paintLevelPill(ctx, cx, cy, discR, level) {
+  const label = String(level);
+  const h = Math.max(10, Math.round(discR * 0.52));   // pill height
+  const r = h / 2;                                     // fully-rounded ends
+  const fontPx = Math.round(h * 0.66);
+  ctx.font = `900 ${fontPx}px BrimstoneIcons, sans-serif`;
+  const textW = ctx.measureText ? ctx.measureText(label).width : label.length * fontPx * 0.6;
+  const padX = Math.round(h * 0.34);
+  const w = Math.max(h, textW + padX * 2);             // never narrower than tall
+  const x = cx - w / 2;
+  const y = cy - h / 2;
+
+  // Rounded-rect path (two arc caps + connecting top/bottom edges).
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.arc(x + w - r, y + r, r, -Math.PI / 2, Math.PI / 2);
+  ctx.lineTo(x + r, y + h);
+  ctx.arc(x + r, y + r, r, Math.PI / 2, -Math.PI / 2);
+  ctx.closePath();
+
+  ctx.fillStyle = LEVEL_PILL_BG;
+  ctx.fill();
+  ctx.lineWidth = Math.max(1.5, Math.round(h * 0.12));
+  ctx.strokeStyle = LEVEL_PILL_BORDER;
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = LEVEL_PILL_TEXT;
+  // Nudge baseline down a hair — middle baseline sits slightly high for digits.
+  ctx.fillText(label, cx, cy + h * 0.04);
+}
+
 /** Odds text colours on the unit info card — red hit %, deep-red crush %. */
 export const UNIT_INFO_HIT_COLOR   = '#ff5346';
 export const UNIT_INFO_CRUSH_COLOR = '#c81f1f';
@@ -20214,7 +21589,7 @@ export function paintAttackCountMarker(ctx, cx, cy, r, count) {
   ctx.lineWidth = Math.max(2, Math.round(r * 0.1));
   ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
   ctx.fillStyle = '#ffffff';
-  ctx.font = `bold ${Math.round(r * (count > 1 ? 1.0 : 1.16))}px sans-serif`;
+  ctx.font = `bold ${Math.round(r * (count > 1 ? 1.0 : 1.16))}px BrimstoneIcons, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(attackBadgeLabel(count), cx, cy + r * 0.08);
@@ -20328,7 +21703,7 @@ export function paintDiscoveryCard(ctx, opts) {
     ctx.fillStyle = accentColor;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = `${Math.round(discR * 1.3)}px sans-serif`;
+    ctx.font = `${Math.round(discR * 1.3)}px BrimstoneIcons, sans-serif`;
     ctx.fillText(glyph ?? '?', discCx, discCy + discR * 0.05);
   }
   ctx.restore();
@@ -20345,35 +21720,35 @@ export function paintDiscoveryCard(ctx, opts) {
 
   // Name (glyph + name), accent-tinted.
   ctx.fillStyle = accentColor;
-  ctx.font = `bold ${Math.round(H * 0.075)}px sans-serif`;
+  ctx.font = `bold ${Math.round(H * 0.075)}px BrimstoneIcons, sans-serif`;
   ctx.fillText(`${glyph} ${name}`.trim(), W / 2, y);
   y += Math.round(H * 0.06);
 
   // Title (italic, muted).
   if (title) {
     ctx.fillStyle = '#9a8a7a';
-    ctx.font = `italic ${Math.round(H * 0.048)}px sans-serif`;
+    ctx.font = `italic ${Math.round(H * 0.048)}px BrimstoneIcons, sans-serif`;
     ctx.fillText(title, W / 2, y);
     y += Math.round(H * 0.055);
   }
 
   // Stat line.
   ctx.fillStyle = '#c8b89a';
-  ctx.font = `${Math.round(H * 0.052)}px sans-serif`;
+  ctx.font = `${Math.round(H * 0.052)}px BrimstoneIcons, sans-serif`;
   ctx.fillText(statLine, W / 2, y);
   y += Math.round(H * 0.06);
 
   // Ability label (cyan), if any.
   if (abilityLabel) {
     ctx.fillStyle = '#88eeff';
-    ctx.font = `${Math.round(H * 0.045)}px sans-serif`;
-    ctx.fillText(`✦ ${abilityLabel}`, W / 2, y);
+    ctx.font = `${Math.round(H * 0.045)}px BrimstoneIcons, sans-serif`;
+    ctx.fillText(`\uE062 ${abilityLabel}`, W / 2, y);
     y += Math.round(H * 0.055);
   }
 
   // Discovery sentence — wrapped, muted parchment colour.
   ctx.fillStyle = '#b8a88a';
-  ctx.font = `${Math.round(H * 0.05)}px sans-serif`;
+  ctx.font = `${Math.round(H * 0.05)}px BrimstoneIcons, sans-serif`;
   const lines = wrapDiscoveryText(ctx, text, W - pad * 2);
   const lineH = Math.round(H * 0.062);
   y += Math.round(H * 0.02);

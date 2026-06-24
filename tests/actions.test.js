@@ -828,17 +828,27 @@ describe('executeBattle', () => {
 
   test('a miss STILL chips the fort, scaled by closeness to hitting', () => {
     // New rule: every attack erodes the fort. A miss drains a closeness-scaled
-    // chip. Force a near-miss by giving the minion a modest defense edge.
+    // chip. Force a deterministic CLOSE miss with scripted dice — a modest
+    // defense edge alone leaves a ~2.8% chance the live roll actually HITS,
+    // which spuriously failed `!r.hit` in CI. resolveCombat consumes the
+    // attacker's pool die first, then the defender's (both 1-die pools here:
+    // net advantage 0 on each side). With atkFlat=4 / defFlat=8 (minion
+    // defenseBonus 8), dice (6, 3) give attackRoll 10 vs defenseRoll 11 — a
+    // miss by exactly 1 (gap 1, the second-closest miss; no counter since
+    // 11 < 2×10), exercising the closeness-scaled chip deterministically.
     const state = freshState();
     const minion = createMinion(state.hero.col, state.hero.row);
     state.entities.push(minion);
     const minionTile = state.tiles.get(hexKey(minion.col, minion.row));
     minionTile.fortifyLevel = 2; // 40 HP
     minion.defenseBonus = 8;     // small edge → a CLOSE miss, not a wild one
+    state.setForcedDice(6, 3);   // attacker die 6, defender die 3 → close miss
     const hpBefore = minionTile.fortifyHP;
     const r = executeBattle(state, state.hero, minion);
 
     assert.ok(!r.hit, 'should be a miss');
+    assert.equal(r.attackRoll, 10, 'forced attacker roll (die 6 + flat 4)');
+    assert.equal(r.defenseRoll, 11, 'forced defender roll (die 3 + flat 8)');
     const want = expectedMissChip(r.attackRoll, r.defenseRoll);
     assert.ok(want > 0, 'a close miss chips a positive amount');
     assert.equal(r.fortHpDamage, want, 'miss chip matches the closeness formula');
@@ -1298,6 +1308,85 @@ describe('executeBattle — splash damage', () => {
         assert.deepStrictEqual(r.splashHits, [], 'splashHits should be empty on normal hit');
       }
     }
+  });
+});
+
+// ── Vanilla splash is a flat 2d6 chip (no margin scaling) ─────────────────────
+// Regression guard for the "punch-down" exploit: crushing a weak 0-defence unit
+// used to inflate the margin → a 14/21 blast that bypassed the defence of the
+// strong units stacked with it. Vanilla splash is now a flat 2d6 (2–12), so it
+// can never one-shot anything (the smallest unit has 14 HP) and never scales
+// with the margin. The brute keeps its margin-scaled blast (brute-faction.test).
+describe('executeBattle — vanilla splash is flat 2d6', () => {
+  test('a huge-margin crush still splashes at most 12 (no margin scaling)', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.attackBonus = 100; // enormous margin — would be a 21 blast under the old rule
+    const target = createMinion(hero.col, hero.row);
+    target.hp = 1; target.maxHp = 1; // dies to the direct hit
+    state.entities.push(target);
+    // Strong unit stacked on the same hex — the would-be exploit victim.
+    const golem = createMinion(hero.col, hero.row);
+    golem.hp = 99; golem.maxHp = 99;
+    state.entities.push(golem);
+
+    const r = executeBattle(state, hero, target);
+    assert.ok(r.killed, 'weak target dies to the direct hit');
+    const dmg = 99 - golem.hp;
+    assert.ok(dmg >= 2 && dmg <= 12,
+      `vanilla splash should be 2d6 (2–12), not margin-scaled; got ${dmg}`);
+  });
+
+  test('vanilla splash never one-shots a 14-HP unit in a single blast', () => {
+    for (let i = 0; i < 40; i++) {
+      const state = freshState();
+      const hero = state.hero;
+      hero.attackBonus = 100;
+      const target = createMinion(hero.col, hero.row);
+      target.hp = 1; target.maxHp = 1;
+      state.entities.push(target);
+      const bystander = createMinion(hero.col, hero.row);
+      bystander.hp = 14; bystander.maxHp = 14; // smallest unit in the game
+      state.entities.push(bystander);
+
+      executeBattle(state, hero, target);
+      assert.ok(bystander.alive && bystander.hp >= 2,
+        `14-HP unit should survive one 2d6 splash (max 12); hp=${bystander.hp}`);
+    }
+  });
+
+  test('vanilla splash damage varies with 2d6', () => {
+    const seen = new Set();
+    for (let i = 0; i < 60; i++) {
+      const state = freshState();
+      const hero = state.hero;
+      hero.attackBonus = 100;
+      const target = createMinion(hero.col, hero.row);
+      target.hp = 1; target.maxHp = 1;
+      state.entities.push(target);
+      const bystander = createMinion(hero.col, hero.row);
+      bystander.hp = 99; bystander.maxHp = 99;
+      state.entities.push(bystander);
+
+      executeBattle(state, hero, target);
+      seen.add(99 - bystander.hp);
+    }
+    assert.ok(seen.size > 1, 'splash damage should vary (2d6), not be a fixed value');
+    for (const d of seen) assert.ok(d >= 2 && d <= 12, `each splash within 2..12; got ${d}`);
+  });
+
+  test('a vanilla crush with no same-hex bystander still resolves (no victims)', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.attackBonus = 100;
+    const target = createMinion(hero.col, hero.row);
+    target.hp = 1; target.maxHp = 1;
+    state.entities.push(target);
+
+    const r = executeBattle(state, hero, target);
+    assert.ok(r.killed, 'target dies');
+    assert.deepStrictEqual(r.splashHits, [], 'no bystander → no splash hits');
+    assert.deepStrictEqual(r.splashKills, [], 'no bystander → no splash kills');
   });
 });
 

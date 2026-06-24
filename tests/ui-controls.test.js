@@ -6,6 +6,31 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { headerTitleState } from '../src/ui.js';
+
+// ── Header title: exactly three canonical states ────────────────────────────
+
+describe('headerTitleState — the top bar shows one of three titles', () => {
+  test('building a plan → PLANNING', () => {
+    assert.equal(headerTitleState({ planMode: true, planSubmitted: false }), 'PLANNING');
+  });
+
+  test('plan locked, awaiting opponents → WAITING', () => {
+    assert.equal(headerTitleState({ planMode: true, planSubmitted: true }), 'WAITING');
+  });
+
+  test('not planning (resolving / replay / summary) → RESOLUTION', () => {
+    assert.equal(headerTitleState({ planMode: false, planSubmitted: false }), 'RESOLUTION');
+    // planSubmitted is stale-sticky across rounds; without planMode it's still RESOLUTION.
+    assert.equal(headerTitleState({ planMode: false, planSubmitted: true }), 'RESOLUTION');
+  });
+
+  test('defaults to RESOLUTION with no args', () => {
+    assert.equal(headerTitleState(), 'RESOLUTION');
+    assert.equal(headerTitleState({}), 'RESOLUTION');
+  });
+});
+
 // ── Chronicle default mode based on screen width ────────────────────────────
 
 function defaultChronicleMode(screenWidth) {

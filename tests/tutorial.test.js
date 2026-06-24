@@ -299,7 +299,7 @@ describe('TUTORIAL_STEPS', () => {
     const step = TUTORIAL_STEPS.find(s => s.id === 'action_budget');
     assert.ok(step, 'action_budget step exists');
     assert.equal(step.spotlight?.type, 'element');
-    assert.ok(step.spotlight.selector.includes('plan-budget-badge'), 'spotlights #plan-budget-badge');
+    assert.ok(step.spotlight.selector.includes('turn-info'), 'spotlights the top-bar action budget (#turn-info)');
     assert.ok(step.body.toLowerCase().includes('budget'), 'body explains the budget');
   });
 
@@ -309,7 +309,7 @@ describe('TUTORIAL_STEPS', () => {
     assert.equal(step.trigger?.type, 'action_queued');
     assert.equal(step.trigger?.actionType, PlanActionType.MOVE);
     assert.equal(step.trigger?.entityType, EntityType.SURVIVOR);
-    assert.ok(step.spotlight.selector.includes('plan-budget-badge'), 'spotlights the budget badge');
+    assert.ok(step.spotlight.selector.includes('turn-info'), 'spotlights the top-bar action budget (#turn-info)');
   });
 
   test('smithy_intro gates on the HERO queuing a MOVE', () => {

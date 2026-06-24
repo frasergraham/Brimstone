@@ -5,7 +5,7 @@
   "title": "Dark Ritual",
   "chapter": 1,
   "briefing": "Deep in the forest the trees themselves hum with dark energy. Two Power Nodes pulse in clearings ahead; her thralls stand thick around them. Drive every last one of her forces off both nodes before dawn — or the ritual tips past recovery.",
-  "victoryText": "Dawn breaks. The nodes dim and the forest exhales. Her ritual dies in the dark between the trees.",
+  "victoryText": "Dawn breaks. The nodes dim and the forest exhales. Her ritual dies in the dark between the trees — but its roots run wider than one grove. The same dark pulse beats in the outlying villages, and while they burn she only grows stronger. Break her hold on the hamlets before you can hope to break her here.",
   "defeatText": "Dawn breaks on a grove still choked with shadow. The ritual holds; her power only grows.",
   "mapSize": "standard",
   "hasWitch": true,
@@ -114,7 +114,7 @@
             "row": 3
           }
         ],
-        "color": "#22c55e",
+        "color": "#d946ef",
         "seenByHero": true,
         "seenByWitch": true,
         "prevCtrl": "neutral"
@@ -1981,7 +1981,7 @@
                 "col": 11,
                 "row": 6
               },
-              "spawnLog": "🗿 A wood golem crashes out of the thicket to cover her escape!"
+              "spawnLog": "\uE098 A wood golem crashes out of the thicket to cover her escape!"
             },
             {
               "type": "wood_golem",
@@ -1989,7 +1989,7 @@
                 "col": 9,
                 "row": 8
               },
-              "spawnLog": "🗿 Another golem lurches between you and the altar!"
+              "spawnLog": "\uE098 Another golem lurches between you and the altar!"
             },
             {
               "type": "wood_golem",
@@ -1997,7 +1997,7 @@
                 "col": 10,
                 "row": 4
               },
-              "spawnLog": "🗿 A third golem blocks the path she took into the shadows!"
+              "spawnLog": "\uE098 A third golem blocks the path she took into the shadows!"
             }
           ]
         },
@@ -2056,10 +2056,7 @@
       },
       {
         "id": "n15",
-        "type": "onRoundStart",
-        "params": {
-          "round": "any"
-        },
+        "type": "onCycleEnd",
         "x": 40,
         "y": 590
       },
@@ -2080,10 +2077,7 @@
       },
       {
         "id": "n17",
-        "type": "onRoundStart",
-        "params": {
-          "round": "any"
-        },
+        "type": "onCycleEnd",
         "x": 40,
         "y": 700
       },
@@ -2101,6 +2095,33 @@
         },
         "x": 280,
         "y": 700
+      },
+      {
+        "id": "objStart0",
+        "type": "onMissionStart",
+        "params": {},
+        "x": 40,
+        "y": 900
+      },
+      {
+        "id": "set_clear_nodes",
+        "type": "setObjective",
+        "params": {
+          "id": "clear_nodes",
+          "label": "Drive the witch off both grove nodes"
+        },
+        "x": 300,
+        "y": 900
+      },
+      {
+        "id": "set_dawn_ritual",
+        "type": "setObjective",
+        "params": {
+          "id": "dawn_ritual",
+          "label": "Hold both nodes free at dawn"
+        },
+        "x": 300,
+        "y": 980
       }
     ],
     "edges": [
@@ -2254,6 +2275,28 @@
         },
         "to": {
           "node": "n18",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "objStart0",
+          "pin": "out"
+        },
+        "to": {
+          "node": "set_clear_nodes",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "objStart0",
+          "pin": "out"
+        },
+        "to": {
+          "node": "set_dawn_ritual",
           "pin": "in"
         },
         "kind": "exec"

@@ -5,6 +5,7 @@
 // To add a new effect, call registerPostRoundEffect(id, fn) at module scope.
 
 import { Phase } from './game.js';
+import { ICON } from './icons.js';
 import { EntityType } from './entities.js';
 import { hasBuilding } from './tiles.js';
 import { hexKey } from './hex.js';
@@ -106,7 +107,7 @@ function nightAttritionEffect(state) {
       col: e.col, row: e.row,
       amount: 0,
       killed: false,
-      text: `🏠 ${e.displayName} is sheltered in the ${bName}.`,
+      text: `${ICON.shelter} ${e.displayName} is sheltered in the ${bName}.`,
       flash: null,
     });
   }
@@ -123,7 +124,7 @@ function nightAttritionEffect(state) {
           col: e.col, row: e.row,
           amount: 0,
           killed: false,
-          text: `🏰 ${e.displayName} is sheltered by the fort! (level ${t.fortifyLevel})`,
+          text: `${ICON.fort} ${e.displayName} is sheltered by the fort! (level ${t.fortifyLevel})`,
           flash: null,
         });
         continue;
@@ -137,8 +138,8 @@ function nightAttritionEffect(state) {
       const incoming = e.applyIncomingDamage(dmg, (sd) => state.nextDie(sd));
       const killed = e.takeDamage(incoming);
       const text = killed
-        ? `💀 ${e.displayName} is consumed by the night!`
-        : `🌙 ${e.displayName} suffers in the open! (-${incoming} HP, ${e.hp}/${e.maxHp} remaining)`;
+        ? `${ICON.defeat} ${e.displayName} is consumed by the night!`
+        : `${ICON.night} ${e.displayName} suffers in the open! (-${incoming} HP, ${e.hp}/${e.maxHp} remaining)`;
 
       events.push({
         type:       killed ? PostRoundEventType.KILL : PostRoundEventType.DAMAGE,
@@ -171,7 +172,7 @@ function nightAttritionEffect(state) {
       col: null, row: null,
       amount: 0,
       killed: false,
-      text: `🌙 Night falls. Survivors are safe for now.`,
+      text: `${ICON.night} Night falls. Survivors are safe for now.`,
       flash: null,
     });
   }
@@ -240,7 +241,7 @@ function statusEffectsTick(state) {
         color:     'rgba(160,40,80,0.5)',
         textColor: 'rgba(255,180,200,1)',
         label:     ev.killed
-          ? `-${ev.amount} ${def?.icon ?? ''} 💀`.replace(/\s+/g, ' ').trim()
+          ? `-${ev.amount} ${def?.icon ?? ''} ${ICON.defeat}`.replace(/\s+/g, ' ').trim()
           : `-${ev.amount} ${def?.icon ?? ''}`.trim(),
         duration:  ev.killed ? 2200 : 1800,
         fontScale: ev.killed ? 1.4 : 1.2,
@@ -287,7 +288,7 @@ export function collectWrapUpAttrition(postRoundEvents, myId = null) {
     } else if (ev.type === PostRoundEventType.SHELTER) {
       rows.push({
         kind: 'shelter', name: ev.entityName,
-        shelter: ev.text?.startsWith('🏠') ? 'building' : 'fort',
+        shelter: ev.text?.startsWith('\uE03C') ? 'building' : 'fort',
       });
     }
   }

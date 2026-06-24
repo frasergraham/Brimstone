@@ -16,6 +16,7 @@
 //  - computeCombatCardAxisOffset (still used for positioning)
 
 import { describe, test } from 'node:test';
+import { ICON } from '../src/icons.js';
 import assert from 'node:assert/strict';
 
 import {
@@ -74,7 +75,7 @@ describe('G1 — combatReadoutModel', () => {
     assert.equal(m.total, 11);
     assert.equal(m.side, 'atk');
     assert.equal(m.sideColor, COMBAT_CARD_ATK_COLOR);
-    assert.equal(m.sideIcon, '⚔');
+    assert.equal(m.sideIcon, ICON.hero);
     assert.equal(m.won, true);
     // 4 attacker bonuses (atk, phase, allies, fort) → 4 steps. staff is NOT
     // a step (advantage-die, not flat).
@@ -100,7 +101,7 @@ describe('G1 — combatReadoutModel', () => {
     assert.equal(m.total, 9);
     assert.equal(m.side, 'def');
     assert.equal(m.sideColor, COMBAT_CARD_DEF_COLOR);
-    assert.equal(m.sideIcon, '🛡');
+    assert.equal(m.sideIcon, ICON.shield);
     assert.equal(m.won, true, 'defender wins on a miss');
     assert.deepEqual(m.steps.map(s => s.label), ['fort', 'guard', 'cover', 'tired']);
     // fatigue → negative delta.

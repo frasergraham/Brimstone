@@ -1,9 +1,11 @@
 // Stage B — the merged splat ground mesh.
 //
-// With the flag ON, `_buildMap` builds exactly ONE ground mesh with 7 verts
-// per tile, plus `aSplat` (3 floats/vert) and `aFog` (1 float/vert) custom
-// attributes whose values match `terrain-splat.js`. The flag-OFF path (default)
-// is exercised by every other renderer-3d test, which must stay green.
+// With the flag ON, `_buildMap` builds exactly ONE ground mesh with 13 verts
+// per tile (centre + outer corner ring + inner ring — see `_emitSplatHex`),
+// plus `aSplat` (3 floats/vert) and `aFog` (1 float/vert) custom attributes
+// whose values match `terrain-splat.js` for the centre+corner block. The
+// flag-OFF path (default) is exercised by every other renderer-3d test, which
+// must stay green.
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -93,7 +95,7 @@ describe('Renderer3D splat ground — geometry', () => {
     assert.equal(r._splatGround, null);
   });
 
-  test('flag ON → one merged ground mesh, 7 verts per tile', () => {
+  test('flag ON → one merged ground mesh, 13 verts per tile', () => {
     const r = makeRenderer();
     r._useSplatTerrain = true;
     const cols = 4, rows = 3;
@@ -105,8 +107,8 @@ describe('Renderer3D splat ground — geometry', () => {
     assert.equal(mesh.metadata.kind, 'splatGround');
 
     const tileCount = cols * rows;
-    assert.equal(mesh._vdata.positions.length, tileCount * 7 * 3, 'positions = 7 verts/tile × 3');
-    assert.equal(mesh._vdata.indices.length, tileCount * 6 * 3, '6 fan triangles/tile × 3');
+    assert.equal(mesh._vdata.positions.length, tileCount * 13 * 3, 'positions = 13 verts/tile × 3');
+    assert.equal(mesh._vdata.indices.length, tileCount * 18 * 3, '18 fan triangles/tile × 3');
   });
 
   test('aSplat + aFog custom attributes present with correct strides', () => {
@@ -125,8 +127,8 @@ describe('Renderer3D splat ground — geometry', () => {
     assert.equal(fog.updatable, true, 'aFog must be updatable for fog rewrites');
 
     const tiles = 9;
-    assert.equal(splat.data.length, tiles * 7 * 3);
-    assert.equal(fog.data.length, tiles * 7);
+    assert.equal(splat.data.length, tiles * 13 * 3);
+    assert.equal(fog.data.length, tiles * 13);
     // fog initialises to all-unfogged
     assert.ok([...fog.data].every((v) => v === 0));
   });
@@ -150,6 +152,8 @@ describe('Renderer3D splat ground — geometry', () => {
     for (const [key, baseV] of r._hexVertexRange) {
       const tile = r.state.tiles.get(key);
       const expected = hexSplatWeights(tile, channelAt);
+      // Centre + 6 corners (first 21 floats) stay byte-identical to the legacy
+      // fan; the inner ring (verts 7..12) is the lerp'd extension, not checked.
       for (let i = 0; i < 7 * 3; i++) {
         assert.ok(
           Math.abs(splat[baseV * 3 + i] - expected[i]) < 1e-6,
@@ -159,14 +163,14 @@ describe('Renderer3D splat ground — geometry', () => {
     }
   });
 
-  test('_hexVertexRange maps every tile to a distinct 7-vertex block', () => {
+  test('_hexVertexRange maps every tile to a distinct 13-vertex block', () => {
     const r = makeRenderer();
     r._useSplatTerrain = true;
     r.state = rectState(5, 4);
     r._buildSplatGround({ name: 'mapRoot' });
     assert.equal(r._hexVertexRange.size, 20);
     const bases = [...r._hexVertexRange.values()].sort((a, b) => a - b);
-    for (let i = 0; i < bases.length; i++) assert.equal(bases[i], i * 7);
+    for (let i = 0; i < bases.length; i++) assert.equal(bases[i], i * 13);
   });
 
   test('_buildMap (flag on) builds the ground via the splat path', () => {
@@ -209,17 +213,17 @@ describe('Renderer3D splat ground — border-forest extension', () => {
     assert.ok(playable, 'playable mesh built');
     assert.ok(border,   'border mesh built (separate)');
 
-    // Playable mesh = 4×7 verts, alpha=1 everywhere (opaque path).
+    // Playable mesh = 4×13 verts, alpha=1 everywhere (opaque path).
     const playableVerts = playable._vdata.positions.length / 3;
-    assert.equal(playableVerts, 4 * 7, 'playable has exactly 7 verts × 4 tiles');
+    assert.equal(playableVerts, 4 * 13, 'playable has exactly 13 verts × 4 tiles');
     const playableEdge = playable._custom.aEdgeAlpha.data;
     for (let v = 0; v < playableVerts; v++) {
       assert.equal(playableEdge[v], 1.0, `playable vert ${v} opaque`);
     }
 
-    // Border mesh = some N×7 verts, all forest channel, at least one alpha<1.
+    // Border mesh = some N×13 verts, all forest channel, at least one alpha<1.
     const borderVerts = border._vdata.positions.length / 3;
-    assert.ok(borderVerts > 0 && borderVerts % 7 === 0, 'border has whole hex fans');
+    assert.ok(borderVerts > 0 && borderVerts % 13 === 0, 'border has whole hex fans');
     const borderEdge = border._custom.aEdgeAlpha.data;
     let foundFade = false;
     for (let v = 0; v < borderVerts; v++) {

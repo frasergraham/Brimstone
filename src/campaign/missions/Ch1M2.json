@@ -28,7 +28,7 @@
   "disableScoring": true,
   "aiPersonality": "balanced",
   "aiBudgetBonus": 1,
-  "maxSurvivorsFromRoster": 0,
+  "maxSurvivorsFromRoster": 3,
   "missionSurvivors": 0,
   "maxDiscoverableSurvivors": 4,
   "startingResources": {},
@@ -224,10 +224,7 @@
       },
       {
         "id": "n16",
-        "type": "onRoundStart",
-        "params": {
-          "round": "any"
-        },
+        "type": "onCycleEnd",
         "x": 40,
         "y": 700
       },
@@ -372,6 +369,130 @@
         },
         "x": 1706.6560765822994,
         "y": 480
+      },
+      {
+        "id": "n29",
+        "type": "onCycleEnd",
+        "x": 20,
+        "y": 670
+      },
+      {
+        "id": "objStart0",
+        "type": "onMissionStart",
+        "params": {},
+        "x": 40,
+        "y": 900
+      },
+      {
+        "id": "set_gather",
+        "type": "setObjective",
+        "params": {
+          "id": "gather",
+          "label": "Find at least 2 survivors"
+        },
+        "x": 300,
+        "y": 900
+      },
+      {
+        "id": "set_thin",
+        "type": "setObjective",
+        "params": {
+          "id": "thin",
+          "label": "Slay the dead",
+          "target": 4
+        },
+        "x": 300,
+        "y": 980
+      },
+      {
+        "id": "set_dusk",
+        "type": "setObjective",
+        "params": {
+          "id": "dusk",
+          "label": "Hold out until dusk"
+        },
+        "x": 300,
+        "y": 1060
+      },
+      {
+        "id": "objKill_thin_1",
+        "type": "onKillCount",
+        "params": {
+          "faction": "hero",
+          "count": 1
+        },
+        "x": 40,
+        "y": 1160
+      },
+      {
+        "id": "objUpd_thin_1",
+        "type": "updateObjective",
+        "params": {
+          "id": "thin",
+          "set": 1
+        },
+        "x": 300,
+        "y": 1160
+      },
+      {
+        "id": "objKill_thin_2",
+        "type": "onKillCount",
+        "params": {
+          "faction": "hero",
+          "count": 2
+        },
+        "x": 40,
+        "y": 1240
+      },
+      {
+        "id": "objUpd_thin_2",
+        "type": "updateObjective",
+        "params": {
+          "id": "thin",
+          "set": 2
+        },
+        "x": 300,
+        "y": 1240
+      },
+      {
+        "id": "objKill_thin_3",
+        "type": "onKillCount",
+        "params": {
+          "faction": "hero",
+          "count": 3
+        },
+        "x": 40,
+        "y": 1320
+      },
+      {
+        "id": "objUpd_thin_3",
+        "type": "updateObjective",
+        "params": {
+          "id": "thin",
+          "set": 3
+        },
+        "x": 300,
+        "y": 1320
+      },
+      {
+        "id": "objKill_thin_4",
+        "type": "onKillCount",
+        "params": {
+          "faction": "hero",
+          "count": 4
+        },
+        "x": 40,
+        "y": 1400
+      },
+      {
+        "id": "objUpd_thin_4",
+        "type": "updateObjective",
+        "params": {
+          "id": "thin",
+          "set": 4
+        },
+        "x": 300,
+        "y": 1400
       }
     ],
     "edges": [
@@ -583,6 +704,94 @@
           "pin": "survivor"
         },
         "kind": "data"
+      },
+      {
+        "from": {
+          "node": "n29",
+          "pin": "out"
+        },
+        "to": {
+          "node": "n15",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "objStart0",
+          "pin": "out"
+        },
+        "to": {
+          "node": "set_gather",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "objStart0",
+          "pin": "out"
+        },
+        "to": {
+          "node": "set_thin",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "objStart0",
+          "pin": "out"
+        },
+        "to": {
+          "node": "set_dusk",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "objKill_thin_1",
+          "pin": "out"
+        },
+        "to": {
+          "node": "objUpd_thin_1",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "objKill_thin_2",
+          "pin": "out"
+        },
+        "to": {
+          "node": "objUpd_thin_2",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "objKill_thin_3",
+          "pin": "out"
+        },
+        "to": {
+          "node": "objUpd_thin_3",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "objKill_thin_4",
+          "pin": "out"
+        },
+        "to": {
+          "node": "objUpd_thin_4",
+          "pin": "in"
+        },
+        "kind": "exec"
       }
     ]
   },

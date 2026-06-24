@@ -5,7 +5,7 @@
   "title": "Blackfen",
   "chapter": 1,
   "briefing": "Blackfen sprawls across the drowned moor, the largest of the outlying settlements and the deepest in her shadow. Four nodes burn across the fen and her power runs strong. Hold them long enough and Blackfen is saved.",
-  "victoryText": "Blackfen rises from the mire. The largest of the outlands stands free of her.",
+  "victoryText": "Blackfen rises from the mire. The largest of the outlands stands free of her — and with the villages out of her grasp, her ritual has nowhere left to feed but Caleb's Hollow itself. It is time to return home and hold the long watch.",
   "defeatText": "The fen drowns Blackfen whole. Her shadow stretches unbroken now.",
   "mapSize": "standard",
   "hasWitch": true,
@@ -13,17 +13,94 @@
   "nodeScoreThreshold": 5,
   "disableScoring": false,
   "healBonus": 25,
-  "requires": ["dark_ritual"],
-  "rewards": { "food": 3, "wood": 2, "herbs": 2 },
-  "map": { "mode": "procedural", "seed": 31200, "mapSize": "standard", "nodeCount": 4 },
+  "requires": [
+    "dark_ritual"
+  ],
+  "rewards": {
+    "food": 3,
+    "wood": 2,
+    "herbs": 2
+  },
+  "map": {
+    "mode": "procedural",
+    "seed": 31200,
+    "mapSize": "standard",
+    "nodeCount": 4
+  },
   "objectives": {
     "win": [
-      { "type": "slay_witch" },
-      { "type": "control_nodes" }
+      {
+        "type": "slay_witch"
+      },
+      {
+        "type": "control_nodes"
+      }
     ],
     "lose": [
-      { "type": "hero_killed" },
-      { "type": "witch_score_threshold", "points": 5 }
+      {
+        "type": "hero_killed"
+      },
+      {
+        "type": "witch_score_threshold",
+        "points": 5
+      }
+    ]
+  },
+  "logic": {
+    "version": 1,
+    "variables": [],
+    "nodes": [
+      {
+        "id": "objStart0",
+        "type": "onMissionStart",
+        "params": {},
+        "x": 40,
+        "y": 900
+      },
+      {
+        "id": "set_hold_nodes",
+        "type": "setObjective",
+        "params": {
+          "id": "hold_nodes",
+          "label": "Take and hold the village's 4 Power Nodes"
+        },
+        "x": 300,
+        "y": 900
+      },
+      {
+        "id": "set_break_witch",
+        "type": "setObjective",
+        "params": {
+          "id": "break_witch",
+          "label": "Break the witch's hold (slay her, or win on nodes)"
+        },
+        "x": 300,
+        "y": 980
+      }
+    ],
+    "edges": [
+      {
+        "from": {
+          "node": "objStart0",
+          "pin": "out"
+        },
+        "to": {
+          "node": "set_hold_nodes",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "objStart0",
+          "pin": "out"
+        },
+        "to": {
+          "node": "set_break_witch",
+          "pin": "in"
+        },
+        "kind": "exec"
+      }
     ]
   }
 }

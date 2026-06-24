@@ -2,11 +2,14 @@
 // Extracted from main.js to reduce its size and colocate campaign logic.
 
 import { Renderer } from '../renderer.js';
-import { ENTITY_COLOR, EntityType, getEquippedWeaponIdOf } from '../entities.js';
+import { ICON, coloredResourceIcon } from '../icons.js';
+import { ENTITY_COLOR, EntityType, getEquippedWeaponIdOf, defaultDisplayName, isLeaderType } from '../entities.js';
 import { xpForLevel } from '../balance.js';
 import { ITEMS } from '../items.js';
 import { WEAPON_LABEL } from '../tiles.js';
 import { ABILITIES } from '../abilities.js';
+import { getFaction } from '../factions.js';
+import { VERSION, SAVE_VERSION } from '../version.js';
 
 // ── Campaign mid-mission save/resume ────────────────────────────────────────
 // Mid-mission saves are slot-aware so a mission-in-progress in one save slot
@@ -22,12 +25,50 @@ function legacyCampaignMissionSaveKey(campaignId, missionId) {
   return `brimstone_campaign_mission_${campaignId}_${missionId}`;
 }
 
+// Version compatibility for a mid-mission save. The payload is a serializeState()
+// GameState snapshot, so the same rule as in-progress online game saves applies
+// (mirrors server/saves.js isVersionCompatible — kept inline because that module
+// pulls in the server DB layer and can't be imported into the client):
+//   - Both SAVE_VERSION integers present → require exact equality (the state-sync
+//     schema is the source of truth for snapshot shape; a different int means the
+//     deserializer can't be trusted to hydrate the blob).
+//   - Otherwise (a legacy save written before saveVersion was stamped) → fall back
+//     to the semver major.minor of the snapshot's stamped `version`. An older save
+//     from the SAME build line stays loadable; a genuinely-different build is
+//     discarded. Conservative: only genuinely-incompatible saves are dropped.
+function _missionSaveCompatible(save) {
+  const savedSaveVersion = save?.saveVersion;
+  if (savedSaveVersion != null) {
+    return savedSaveVersion === SAVE_VERSION;
+  }
+  // Legacy save (no stamped saveVersion): compare the snapshot's semver line.
+  const savedVersion = save?.state?.version;
+  if (!savedVersion || !VERSION) return false;
+  const [sMaj, sMin] = String(savedVersion).split('.');
+  const [cMaj, cMin] = String(VERSION).split('.');
+  return sMaj === cMaj && sMin === cMin;
+}
+
+// Load a mid-mission save, version-gated. A genuinely-incompatible save (one the
+// current build's deserializer can't safely hydrate) is discarded — deleted from
+// localStorage and returned as null — so the mission falls back to a fresh start
+// instead of resuming into a desynced GameState. Unlike Campaign.load() there is
+// no migration path for these snapshots, so an incompatible one is dropped rather
+// than upgraded.
 export function loadCampaignMissionSave(campaignId, missionId, slotIndex = 1) {
   let raw = localStorage.getItem(campaignMissionSaveKey(campaignId, missionId, slotIndex));
   if (raw == null && slotIndex === 1) {
     raw = localStorage.getItem(legacyCampaignMissionSaveKey(campaignId, missionId));
   }
-  return raw ? JSON.parse(raw) : null;
+  if (!raw) return null;
+  let save;
+  try { save = JSON.parse(raw); } catch { save = null; }
+  if (!save) return null;
+  if (!_missionSaveCompatible(save)) {
+    deleteCampaignMissionSave(campaignId, missionId, slotIndex);
+    return null;
+  }
+  return save;
 }
 
 export function deleteCampaignMissionSave(campaignId, missionId, slotIndex = 1) {
@@ -40,7 +81,7 @@ export function deleteCampaignMissionSave(campaignId, missionId, slotIndex = 1) 
 // ── Resource display ────────────────────────────────────────────────────────
 
 export const RESOURCE_ICONS = {
-  wood: '🪵', metal: '⚙', herbs: '🌿', food: '🍞', silver: '⚔', scripture: '📜',
+  wood: '\uE010', metal: '\uE011', herbs: '\uE015', food: '\uE012', silver: '\uE013', scripture: '\uE014',
 };
 
 // ── HP color helper ─────────────────────────────────────────────────────────
@@ -94,7 +135,7 @@ export function campaignCardHTML(name, title, assetId, color, hp, maxHp, attack,
   const portrait = getCampaignPortrait(assetId, 48);
   const iconHtml = portrait
     ? `<img class="cp-portrait" src="${portrait}" style="border-color:${color}" alt="">`
-    : `<span class="cp-glyph" style="background:${color}">${isHero ? '⚔' : '☺'}</span>`;
+    : `<span class="cp-glyph" style="background:${color}">${isHero ? '\uE000' : '\uE002'}</span>`;
   return `<div class="${cls}">
     ${iconHtml}
     <div class="cp-info">
@@ -180,7 +221,7 @@ export function fallenSectionHTML(fallen, missionTitleResolver = (id) => id) {
     const level = f.level ? `<span class="fallen-level">Lv ${f.level}</span>` : '';
     const where = _esc(missionTitleResolver(f.diedInMission));
     return `<div class="fallen-card" data-name="${name}">
-      <span class="fallen-glyph">⚰</span>
+      <span class="fallen-glyph">${ICON.coffin}</span>
       <div class="fallen-info">
         <div class="fallen-name">${name}${title}</div>
         <div class="fallen-where">fell in ${where}</div>
@@ -189,7 +230,7 @@ export function fallenSectionHTML(fallen, missionTitleResolver = (id) => id) {
     </div>`;
   }).join('');
   return `<div class="fallen-section">
-    <h3 class="fallen-heading">⚰ Fallen</h3>
+    <h3 class="fallen-heading">${ICON.coffin} Fallen</h3>
     <div class="fallen-list">${cards}</div>
   </div>`;
 }
@@ -201,7 +242,7 @@ export function fallenSectionHTML(fallen, missionTitleResolver = (id) => id) {
  *     roster/party use, so the reward card matches the roster cards exactly
  *     (icon + ATK/DEF/HP + ability label). A small NEW badge flags the fresh
  *     ally. The granted objects ARE roster snapshots (see grantRewardSurvivors).
- *   • Resource gains: a single line of "✦ +N <resource>" chips for the positive
+ *   • Resource gains: a single line of "\uE001 +N <resource>" chips for the positive
  *     deltas the mission's `rewards.*` numeric keys applied.
  * Returns '' when there is nothing to show — a loss grants nothing, and the
  * caller already gates on the WIN, so the section simply vanishes when empty.
@@ -227,12 +268,12 @@ export function rewardsSectionHTML(rewards) {
   }
   if (resEntries.length) {
     const chips = resEntries.map(([k, v]) =>
-      `<span class="reward-resource"><span class="reward-res-icon">${RESOURCE_ICONS[k] || '🎒'}</span>+${v} ${k}</span>`
+      `<span class="reward-resource"><span class="reward-res-icon res-icon res-icon--${k}">${RESOURCE_ICONS[k] || '\uE016'}</span>+${v} ${k}</span>`
     ).join('');
-    body += `<div class="reward-resources">✦ ${chips}</div>`;
+    body += `<div class="reward-resources">\uE09F ${chips}</div>`;
   }
   return `<div class="reward-section">
-    <h3 class="reward-heading">✦ Rewards</h3>
+    <h3 class="reward-heading">\uE09F Rewards</h3>
     ${body}
   </div>`;
 }
@@ -262,7 +303,7 @@ export function xpProgress(level, xp) {
 function itemGlyph(id) {
   const label = ITEMS[id]?.label || WEAPON_LABEL[id] || '';
   const first = String(label).trim().split(/\s+/)[0];
-  return first || '🎒';
+  return first || '\uE016';
 }
 
 /** True when an id names a weapon in the ITEMS registry. */
@@ -310,7 +351,7 @@ function resourceGridHTML(resources) {
   for (const [k, v] of Object.entries(resources || {})) {
     if (!(v > 0)) continue;
     slots.push(`<div class="cprog-slot is-resource" title="${k}">`
-      + `<span class="cprog-slot-glyph">${RESOURCE_ICONS[k] || '🎒'}</span>`
+      + `<span class="cprog-slot-glyph res-icon res-icon--${k}">${RESOURCE_ICONS[k] || '\uE016'}</span>`
       + `<span class="cprog-slot-n">×${v}</span>`
       + `<span class="cprog-slot-name">${k}</span></div>`);
   }
@@ -377,7 +418,7 @@ function weaponSlotsHTML(unit, idx) {
         + `<span class="cprog-wslot-glyph">${itemGlyph(id)}</span>`
         + `<span class="cprog-wslot-info">`
         + `<span class="cprog-wslot-name">${weaponName(id)}${count > 1 ? ` ×${count}` : ''}`
-        + (eq ? ' <span class="cprog-wslot-eq" title="Equipped">✓</span>' : '') + `</span>`
+        + (eq ? ' <span class="cprog-wslot-eq" title="Equipped">\uE071</span>' : '') + `</span>`
         + (stat ? `<span class="cprog-wslot-stats">${stat}</span>` : '')
         + `</span></div>`);
     } else {
@@ -408,12 +449,12 @@ function unitStatsHTML(unit) {
   const abilities = (unit.abilities || []).map((id) => ABILITIES[id]).filter(Boolean);
   if (abilities.length) {
     html += `<div class="cprog-uabilities">${abilities.map((a) =>
-      `<span class="cprog-uability" data-tip="${String(a.description || '').replace(/"/g, '&quot;')}">✦ ${a.label}</span>`).join('')}</div>`;
+      `<span class="cprog-uability" data-tip="${String(a.description || '').replace(/"/g, '&quot;')}">\uE062 ${a.label}</span>`).join('')}</div>`;
   }
   return html;
 }
 
-/** Row for a unit's carried non-weapon items — icon + name (e.g. "📯 Horn"). */
+/** Row for a unit's carried non-weapon items — icon + name (e.g. "Horn"). */
 function itemRowHTML(items) {
   const rows = [];
   for (const [id, entry] of Object.entries(items || {})) {
@@ -448,13 +489,13 @@ export function progressUnitCardHTML(unit, opts = {}) {
   const portrait = getCampaignPortrait(unit.assetId, 56);
   const iconHtml = portrait
     ? `<img class="cprog-portrait" src="${portrait}" style="border-color:${unit.color}" alt="">`
-    : `<span class="cprog-glyph" style="background:${unit.color}">${isHero ? '⚔' : '☺'}</span>`;
+    : `<span class="cprog-glyph" style="background:${unit.color}">${isHero ? '\uE000' : '\uE002'}</span>`;
 
   const controlHtml = control
     ? `<button class="cprog-ctrl ${control.cls}" data-idx="${idx}" title="${control.title}">${control.label}</button>`
     : '';
   const healHtml = canHeal
-    ? `<button class="cprog-heal-btn" data-idx="${idx}">🌿 Use 1 herb</button>`
+    ? `<button class="cprog-heal-btn" data-idx="${idx}">${coloredResourceIcon('herbs')} Use 1 herb</button>`
     : '';
 
   return `<div class="${cls.join(' ')}" data-idx="${idx}" data-drop="unit">
@@ -597,6 +638,85 @@ export function heroStatsToUnit(heroStats) {
   };
 }
 
+/**
+ * Lightweight "who actually deploys this mission" preview list for the Begin
+ * Mission screen — the fixed campaign hero (Paladin) first, then one entry per
+ * roster survivor at the given deploy indices, in deploy order.
+ *
+ * THE CONTRACT: `deployIndices` MUST be the output of
+ * {@link resolveDeployIndices} (the same call the launch/deploy loop makes), so
+ * the previewed party can never drift from what actually deploys — "what you see
+ * is what deploys". This helper only MAPS those indices into a display shape; it
+ * does no selection of its own. Pure: reads only its arguments + the roster.
+ *
+ * @param {object} heroStats        Campaign.heroStats ({ hp, maxHp, level, ... }).
+ * @param {object[]} roster         Campaign.roster (snapshotSurvivor entries).
+ * @param {number[]} deployIndices  resolveDeployIndices() output (validated indices).
+ * @returns {{name,title,assetId,hp,maxHp,level,isHero}[]}
+ */
+export function buildDeployPartyPreview(heroStats, roster, deployIndices) {
+  const hero = heroStatsToUnit(heroStats || {});
+  const out = [{
+    name: hero.name, title: hero.title, assetId: hero.assetId,
+    hp: hero.hp, maxHp: hero.maxHp, level: hero.level ?? 1, isHero: true,
+  }];
+  const list = Array.isArray(roster) ? roster : [];
+  for (const i of (Array.isArray(deployIndices) ? deployIndices : [])) {
+    const s = list[i];
+    if (!s) continue;                          // index out of range — skip defensively
+    const u = survivorToUnit(s);
+    out.push({
+      name: u.name, title: u.title, assetId: u.assetId,
+      hp: u.hp, maxHp: u.maxHp, level: u.level ?? 1, isHero: false,
+    });
+  }
+  return out;
+}
+
+// The player faction id in campaign (single-player, hero-only). Resolved through
+// the Faction registry rather than a bare string literal so it tracks the
+// faction abstraction (docs/design/refactor.md), and so the player-unit filter
+// below reads "units owned by the player faction" not "=== a magic string".
+const _PLAYER_FACTION_ID = getFaction('hero').id;
+
+/**
+ * "Who is actually on the board" preview list built from a RESUMED mission's
+ * saved snapshot, rather than from the fresh deploy set. On a resume the live
+ * party comes from the serialized GameState (the player may have edited their
+ * squad or a survivor leveled since the save), so the briefing strip must reflect
+ * the saved units — not what resolveDeployIndices would freshly pick.
+ *
+ * Maps each surviving player-faction (non-NPC, hp > 0) entity in the snapshot
+ * into the same display shape as {@link buildDeployPartyPreview}. The leader
+ * (isLeaderType) is emitted first as the hero, followers after, in snapshot order.
+ * assetId follows the renderer convention: a survivor maps title → sprite id, any
+ * other type value IS its asset id directly. Pure: reads only its argument.
+ *
+ * @param {object} savedState  serializeState() snapshot (save.state) — { entities }.
+ * @returns {{name,title,assetId,hp,maxHp,level,isHero}[]}
+ */
+export function buildSavedPartyPreview(savedState) {
+  const entities = Array.isArray(savedState?.entities) ? savedState.entities : [];
+  const party = entities.filter(e =>
+    e && e.owner === _PLAYER_FACTION_ID && !e.isNpc && (e.hp ?? 0) > 0);
+  // Leader (the hero) first, then roster followers — both in snapshot order otherwise.
+  party.sort((a, b) => (isLeaderType(b.type) ? 1 : 0) - (isLeaderType(a.type) ? 1 : 0));
+  return party.map(e => {
+    const isHero = isLeaderType(e.type);
+    const assetId = e.type === EntityType.SURVIVOR
+      ? (Renderer.survivorAssetId(e.title) || 'survivor_innkeeper')
+      : e.type;   // non-survivor type values match asset ids directly
+    return {
+      name: e.name || defaultDisplayName(e.type),
+      title: e.title ?? null,
+      assetId,
+      hp: e.hp, maxHp: e.maxHp,
+      level: e.level ?? 1,
+      isHero,
+    };
+  });
+}
+
 // ── Debrief party + rewards (party-management card UX) ──────────────────────
 //
 // The post-mission debrief renders its surviving roster and its reward survivors
@@ -624,10 +744,10 @@ export function debriefPartyHTML(heroStats, survivors) {
 }
 
 /**
- * The debrief's ✦ Rewards section, rendered with the party-management card UX.
+ * The debrief's Rewards section, rendered with the party-management card UX.
  * Granted survivors use progressUnitCardHTML (same rich card as the surviving
  * roster + the party screen), each wrapped so a NEW badge hangs over the corner.
- * Resource gains keep the "✦ +N <resource>" chip line. Returns '' when there is
+ * Resource gains keep the "+N <resource>" chip line. Returns '' when there is
  * nothing granted (a loss, or a win that granted nothing).
  *
  * @param {{survivors?:object[], resources?:Object<string,number>}} rewards
@@ -651,12 +771,12 @@ export function debriefRewardsSectionHTML(rewards) {
   }
   if (resEntries.length) {
     const chips = resEntries.map(([k, v]) =>
-      `<span class="reward-resource"><span class="reward-res-icon">${RESOURCE_ICONS[k] || '🎒'}</span>+${v} ${k}</span>`
+      `<span class="reward-resource"><span class="reward-res-icon res-icon res-icon--${k}">${RESOURCE_ICONS[k] || '\uE016'}</span>+${v} ${k}</span>`
     ).join('');
-    body += `<div class="reward-resources">✦ ${chips}</div>`;
+    body += `<div class="reward-resources">\uE09F ${chips}</div>`;
   }
   return `<div class="reward-section">
-    <h3 class="reward-heading">✦ Rewards</h3>
+    <h3 class="reward-heading">\uE09F Rewards</h3>
     ${body}
   </div>`;
 }
@@ -667,6 +787,10 @@ export function debriefRewardsSectionHTML(rewards) {
  * admin bypass) is set, in which case every mission is shown and treated as
  * launchable. Each row carries a status and, for locked rows, a hint naming the
  * blocking mission.
+ *
+ * Disabled missions (shelved via `disabled:true`) never reach here — getMissionList
+ * drops them entirely. A LOCKED row (prerequisites unmet) is the only non-launchable
+ * status; it stays listed so the player can see what's coming.
  * @returns {{id, title, briefing, status:'completed'|'available'|'locked', lockedHint?}[]}
  */
 export function missionRows(campaign, unlockAll = false) {
@@ -674,7 +798,8 @@ export function missionRows(campaign, unlockAll = false) {
     .filter(m => unlockAll || m.visible)
     .map(m => {
       const unlocked = unlockAll || m.available;
-      const status = m.completed ? 'completed' : unlocked ? 'available' : 'locked';
+      const status = m.completed ? 'completed'
+        : unlocked ? 'available' : 'locked';
       const def = campaign.getMissionDef(m.id);
       let lockedHint;
       if (status === 'locked') {
@@ -696,6 +821,7 @@ export function missionRows(campaign, unlockAll = false) {
  * The mission-list pane.
  * @param {string} chapterTitle  campaign.def.title
  * @param {object[]} rows  [{ id, title, briefing?, status:'completed'|'available'|'locked', lockedHint? }]
+ *   (disabled missions are dropped upstream by getMissionList, so no 'disabled' status here)
  */
 export function missionListPaneHTML(chapterTitle, rows) {
   let html = `<div class="cprog-chapter-title">${chapterTitle}</div>`;
@@ -704,7 +830,7 @@ export function missionListPaneHTML(chapterTitle, rows) {
     html += '<div class="cprog-empty">No missions available.</div>';
   }
   for (const r of rows) {
-    const icon = r.status === 'completed' ? '✓' : r.status === 'available' ? '→' : '🔒';
+    const icon = r.status === 'completed' ? ICON.check : r.status === 'available' ? '→' : ICON.lock;
     const desc = r.status === 'locked'
       ? (r.lockedHint || 'Locked')
       : (r.briefing || '');

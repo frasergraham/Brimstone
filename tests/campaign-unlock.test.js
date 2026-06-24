@@ -354,3 +354,121 @@ describe('getMissionList — available + visible flags', () => {
     assert.ok(!rc.available && !rc.visible, 'two distinct blockers → hidden');
   });
 });
+
+describe('disabled missions — ignored by game logic, listed greyed by the viewer', () => {
+  function makeCampaign(missions, { completed = [], firstMission } = {}) {
+    const c = new Campaign({ id: 'test', missions, mapBuilders: {}, firstMission }, 1);
+    c.completedMissions = new Set(completed);
+    c.storyFlags = {};
+    c.heroStats = { hp: 1, maxHp: 1, attack: 1, defense: 1, items: {} };
+    c.resources = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0 };
+    return c;
+  }
+
+  test('a disabled mission is never the next mission (happy path)', () => {
+    // The tutorial-shaped case: a disabled first mission must NOT be returned by
+    // getNextMission — the campaign opens on the first PLAYABLE mission instead.
+    const missions = [
+      { id: 'tutorial', title: 'Tutorial', disabled: true },
+      { id: 'prologue', title: 'Prologue' },
+    ];
+    const c = makeCampaign(missions);
+    assert.equal(c.getNextMission(), 'prologue', 'skips the disabled tutorial');
+    assert.equal(c.isMissionUnlocked(missions[0]), false, 'disabled mission is never launchable');
+    assert.equal(c._canPlayMission(missions[0]), false);
+  });
+
+  test('a disabled prerequisite (requires) is treated as satisfied — no soft-lock', () => {
+    // Edge case from the DoD: a mission whose `requires` names the disabled
+    // tutorial must still unlock, exactly as if the tutorial were completed.
+    const missions = [
+      { id: 'tutorial', title: 'Tutorial', disabled: true },
+      { id: 'prologue', title: 'Prologue', requires: ['tutorial'] },
+    ];
+    const c = makeCampaign(missions);
+    assert.equal(c.isMissionUnlocked(missions[1]), true,
+      'prologue unlocks despite requiring the (disabled) tutorial');
+    assert.equal(c.getNextMission(), 'prologue');
+  });
+
+  test('a disabled mission referenced by an `unlock` (missionDone) counts as done', () => {
+    const missions = [
+      { id: 'tutorial', title: 'Tutorial', disabled: true },
+      { id: 'next', title: 'Next', unlock: { missionDone: 'tutorial' } },
+    ];
+    const c = makeCampaign(missions);
+    assert.equal(c.buildUnlockContext().isCompleted('tutorial'), true,
+      'disabled mission reads as completed in the unlock context');
+    assert.equal(c.isMissionUnlocked(missions[1]), true);
+  });
+
+  test('a disabled mission inside an anyOf threshold counts toward the count', () => {
+    const FIVE = ['mA', 'mB', 'mC', 'mD', 'mE'];
+    const missions = [
+      { id: 'mA', title: 'A', disabled: true },
+      { id: 'mB', title: 'B' },
+      { id: 'mC', title: 'C' },
+      { id: 'mD', title: 'D' },
+      { id: 'mE', title: 'E' },
+      { id: 'boss', title: 'Boss', unlock: { anyOf: { count: 3, of: FIVE } } },
+    ];
+    // mA disabled (=1 satisfied) + complete mB, mC → 3 of 5 → boss unlocks.
+    const c = makeCampaign(missions, { completed: ['mB', 'mC'] });
+    assert.equal(c.isMissionUnlocked(missions[5]), true, 'disabled mA + 2 done = 3 of 5');
+  });
+
+  test('getMissionList DROPS the disabled mission entirely (distinct from locked)', () => {
+    const missions = [
+      { id: 'tutorial', title: 'Tutorial', disabled: true },
+      { id: 'prologue', title: 'Prologue' },
+    ];
+    const list = makeCampaign(missions).getMissionList();
+    assert.equal(list.length, 1, 'disabled row vanishes — as if it were not in the campaign');
+    assert.ok(!list.some(m => m.id === 'tutorial'), 'disabled mission is gone');
+    assert.equal(list[0].id, 'prologue', 'only the real (non-disabled) mission remains');
+  });
+
+  test('a completedMissions entry for a disabled mission never inflates progress', () => {
+    // alsoCompletes / the v3→v4 migration may add `tutorial` to completedMissions;
+    // a shelved mission must never count toward completion or appear in the list.
+    const missions = [
+      { id: 'tutorial', title: 'Tutorial', disabled: true },
+      { id: 'prologue', title: 'Prologue' },
+    ];
+    const c = makeCampaign(missions, { completed: ['tutorial'] });
+    assert.ok(!c.getMissionList().some(m => m.id === 'tutorial'), 'disabled mission not listed');
+    assert.equal(c.getCompletedCount(), 0, 'a disabled mission never counts as completed');
+  });
+
+  test('progression totals exclude disabled missions', () => {
+    const missions = [
+      { id: 'tutorial', title: 'Tutorial', disabled: true },
+      { id: 'm1', title: 'M1' },
+      { id: 'm2', title: 'M2' },
+    ];
+    const c = makeCampaign(missions, { completed: ['m1', 'm2'] });
+    assert.equal(c.getMissionCount(), 2, 'denominator excludes the disabled mission');
+    assert.equal(c.getCompletedCount(), 2);
+    assert.equal(c.isComplete(), true, 'all PLAYABLE missions done ⇒ complete');
+    assert.equal(c.getStatus(), 'completed');
+  });
+
+  test('playableMissions() excludes disabled missions', () => {
+    const missions = [
+      { id: 'tutorial', title: 'Tutorial', disabled: true },
+      { id: 'm1', title: 'M1' },
+    ];
+    const ids = makeCampaign(missions).playableMissions().map(m => m.id);
+    assert.deepEqual(ids, ['m1']);
+  });
+
+  test('a disabled firstMission falls through to the first playable mission', () => {
+    const missions = [
+      { id: 'tutorial', title: 'Tutorial', disabled: true },
+      { id: 'prologue', title: 'Prologue' },
+    ];
+    const c = makeCampaign(missions, { firstMission: 'tutorial' });
+    assert.equal(c.currentMission, 'prologue',
+      'a fresh campaign opens on the first playable mission, not the shelved one');
+  });
+});

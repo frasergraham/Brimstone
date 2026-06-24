@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import {
   describePlanAction,
   buildPlanStepsHtml,
+  buildUnitPlanBlocksHtml,
   buildPlayerStatusHtml,
   buildObjectivesHtml,
   buildMissionLogHtml,
@@ -13,6 +14,7 @@ import {
   buildNodeBadgeHtml,
   buildUnitDetailHtml,
   buildCycleInfoHtml,
+  buildCycleDeadlineHtml,
 } from '../../src/ui-render.js';
 import { PlanActionType } from '../../src/planner.js';
 import { EntityType } from '../../src/entities.js';
@@ -183,6 +185,48 @@ describe('buildPlanStepsHtml', () => {
     // Check both step numbers appear
     assert.ok(html.includes('>1<'), `expected step 1 badge in: ${html.substring(0, 200)}`);
     assert.ok(html.includes('>2<'), `expected step 2 badge in: ${html.substring(0, 200)}`);
+  });
+});
+
+// ── buildUnitPlanBlocksHtml — per-unit plan blocks (incl. veterancy level pill) ─
+
+describe('buildUnitPlanBlocksHtml', () => {
+  // Two units differing only by level so the pill is the sole variable.
+  const lvl1 = { id: 'u1', displayName: 'Greenhorn', type: EntityType.SURVIVOR, level: 1 };
+  const lvl3 = { id: 'u3', displayName: 'Veteran',  type: EntityType.SURVIVOR, level: 3 };
+
+  // Render a single-unit block: a controllable list of [entity] with one queued move.
+  const renderOne = (entity) => {
+    const unitPlans = new Map([
+      [entity.id, [{ type: PlanActionType.MOVE, entityId: entity.id, toCol: 4, toRow: 2 }]],
+    ]);
+    return buildUnitPlanBlocksHtml(
+      unitPlans, 3, 0, false, [entity], null,
+      [entity], null, null, false,
+    );
+  };
+
+  test('level > 1 unit renders a .level-pill carrying the number, beside its name', () => {
+    const html = renderOne(lvl3);
+    assert.ok(html.includes('plan-unit-name'), 'block carries the unit name span');
+    assert.ok(html.includes('Veteran'), 'block shows the unit name');
+    assert.match(html, /class="level-pill"/, 'level-3 unit gets a level pill');
+    assert.match(html, />3<\/span>/, 'pill carries the bare level number');
+  });
+
+  test('level 1 unit renders NO level pill (bare default)', () => {
+    const html = renderOne(lvl1);
+    assert.ok(html.includes('Greenhorn'), 'block shows the unit name');
+    assert.ok(!html.includes('level-pill'), 'level-1 unit shows no pill');
+  });
+
+  test('the pill sits between the unit name and the action count', () => {
+    const html = renderOne(lvl3);
+    const nameIdx  = html.indexOf('plan-unit-name');
+    const pillIdx  = html.indexOf('level-pill');
+    const countIdx = html.indexOf('plan-unit-count');
+    assert.ok(nameIdx >= 0 && pillIdx >= 0 && countIdx >= 0, 'all three markers present');
+    assert.ok(nameIdx < pillIdx && pillIdx < countIdx, 'order is name → pill → count');
   });
 });
 
@@ -382,7 +426,7 @@ describe('buildNodeBadgeHtml', () => {
 describe('buildUnitDetailHtml', () => {
   test('renders HP, equipped weapon, and ATK/DEF/RNG from fallback fields', () => {
     const e = { hp: 14, maxHp: 14, attack: 4, defense: 2, range: 1, items: { sword: { count: 1, equipped: true } } };
-    const html = buildUnitDetailHtml(e, e.items);
+    const html = buildUnitDetailHtml(e, e.items, true);
     assert.ok(html.includes('14/14'), 'shows HP');
     assert.ok(html.includes('Sword'), 'shows equipped weapon label');
     assert.ok(html.includes('<span class="usb-stat-val">4</span>'), 'ATK 4');
@@ -395,7 +439,7 @@ describe('buildUnitDetailHtml', () => {
       hp: 10, maxHp: 10, items: {},
       getAttack: () => 9, getDefense: () => 5, getRange: () => 3,
     };
-    const html = buildUnitDetailHtml(e, e.items);
+    const html = buildUnitDetailHtml(e, e.items, true);
     assert.ok(html.includes('<span class="usb-stat-val">9</span>'), 'effective ATK 9');
     assert.ok(html.includes('<span class="usb-stat-val">5</span>'), 'effective DEF 5');
     assert.ok(html.includes('<span class="usb-stat-val">3</span>'), 'effective RNG 3');
@@ -404,7 +448,7 @@ describe('buildUnitDetailHtml', () => {
   test('lists carried pack items with counts (weapons and consumables)', () => {
     const e = { hp: 10, maxHp: 10, attack: 3, defense: 1, range: 3,
                 items: { bow: { count: 1, equipped: true }, dagger: { count: 1 }, herbs: { count: 2 } } };
-    const html = buildUnitDetailHtml(e, e.items);
+    const html = buildUnitDetailHtml(e, e.items, true);
     assert.ok(html.includes('Dagger'), 'weapon item labelled via WEAPON_LABEL');
     assert.ok(html.includes('Herbs'),  'consumable labelled via RESOURCE_LABEL');
     assert.ok(html.includes('×1'), 'dagger count');
@@ -415,7 +459,7 @@ describe('buildUnitDetailHtml', () => {
   test('falls back to entity.items when items arg omitted', () => {
     const e = { hp: 10, maxHp: 10, attack: 3, defense: 1, range: 1,
                 items: { sword: { count: 1 } } };
-    const html = buildUnitDetailHtml(e);
+    const html = buildUnitDetailHtml(e, undefined, true);
     assert.ok(html.includes('Sword'), 'reads entity.items');
     assert.ok(html.includes('×1'));
   });
@@ -424,14 +468,14 @@ describe('buildUnitDetailHtml', () => {
     // The equipped sword lives in the vitals weapon line, not the pack — the
     // pack lists only spare/unequipped items.
     const e = { hp: 10, maxHp: 10, attack: 3, defense: 1, range: 1, items: { sword: { count: 1, equipped: true } } };
-    const html = buildUnitDetailHtml(e, {});
+    const html = buildUnitDetailHtml(e, {}, true);
     assert.ok(html.includes('No spare items'), 'pack empty state');
     assert.ok(html.includes('Sword'), 'equipped weapon still shown in vitals');
   });
 
   test('shows Unarmed when no weapon is equipped', () => {
     const e = { hp: 10, maxHp: 10, attack: 1, defense: 1, range: 1, items: {} };
-    assert.ok(buildUnitDetailHtml(e, {}).includes('👊 Unarmed'));
+    assert.ok(buildUnitDetailHtml(e, {}).includes('Unarmed'));
   });
 
   test('a spare copy of the EQUIPPED weapon still shows in the pack with its count', () => {
@@ -441,7 +485,7 @@ describe('buildUnitDetailHtml', () => {
     // vanished and the panel read "No spare items".
     const e = { hp: 10, maxHp: 10, attack: 3, defense: 1, range: 1,
                 items: { sword: { count: 2, equipped: true } } };
-    const html = buildUnitDetailHtml(e, e.items);
+    const html = buildUnitDetailHtml(e, e.items, true);
     assert.ok(!html.includes('No spare items'), 'the spare sword must surface, not read empty');
     assert.ok(html.includes('Sword'), 'spare weapon labelled');
     assert.ok(html.includes('×1'), 'one spare copy beyond the equipped one');
@@ -539,6 +583,55 @@ describe('buildCycleInfoHtml', () => {
   });
 });
 
+// ── buildCycleDeadlineHtml (fixed-end mission countdown track) ─────────────────
+
+describe('buildCycleDeadlineHtml', () => {
+  // First Night-shaped cycle: dusk + 5 nights + dawn (loop:false), ends at dawn.
+  const firstNight = { phases: ['dusk', 'night', 'night', 'night', 'night', 'night', 'dawn'], loop: false };
+
+  test('returns null for normal (no cycleConfig) games — bar unchanged', () => {
+    assert.equal(buildCycleDeadlineHtml({ round: 3, cycleConfig: null }), null);
+  });
+
+  test('returns null for looping cycles — bar unchanged', () => {
+    const cd = buildCycleDeadlineHtml({ round: 3, cycleConfig: { phases: ['dawn', 'day', 'day', 'day'], loop: true } });
+    assert.equal(cd, null);
+  });
+
+  test('exposes total / current / remaining / deadline phase for a non-looping cycle', () => {
+    const cd = buildCycleDeadlineHtml({ round: 3, cycleConfig: firstNight });
+    assert.ok(cd);
+    assert.equal(cd.total, 7);
+    assert.equal(cd.current, 3);
+    assert.equal(cd.remaining, 4);              // 4 full rounds AFTER this one
+    assert.equal(cd.deadlinePhase, 'dawn');
+    // The countdown names the DEADLINE phase, not the round — the cycle-bump
+    // label already states "Round N of N", so restating it here was duplicated.
+    assert.ok(cd.countLabel.includes('Ends Dawn'), 'count label names the deadline phase');
+    assert.ok(!/Round/.test(cd.countLabel), 'count label must not restate "Round N of N"');
+  });
+
+  test('track has one segment per round, exactly one active, with the deadline marked', () => {
+    const cd = buildCycleDeadlineHtml({ round: 3, cycleConfig: firstNight });
+    assert.equal((cd.trackHtml.match(/cd-seg/g) || []).length, 7, 'one segment per round');
+    assert.equal((cd.trackHtml.match(/cd-seg[^"]*\bactive/g) || []).length, 1, 'exactly one active');
+    assert.equal((cd.trackHtml.match(/cd-seg[^"]*\bpast/g) || []).length, 2, 'two past segments (rounds 1-2)');
+    assert.equal((cd.trackHtml.match(/cd-seg[^"]*\bdeadline/g) || []).length, 1, 'final segment marked deadline');
+  });
+
+  test('clamps a round past the end to the deadline round (matches phaseForRound clamp)', () => {
+    // Round 9 on a 7-phase cycle still reads as the final (deadline) round.
+    const cd = buildCycleDeadlineHtml({ round: 9, cycleConfig: firstNight });
+    assert.equal(cd.current, 7);
+    assert.equal(cd.remaining, 0);
+    // The last segment is both active and the deadline once we are on it.
+    assert.equal((cd.trackHtml.match(/cd-seg[^"]*\bactive/g) || []).length, 1);
+    const segs = cd.trackHtml.match(/<span class="[^"]*"><\/span>/g);
+    assert.ok(segs[segs.length - 1].includes('active') && segs[segs.length - 1].includes('deadline'),
+      'the final segment is the active deadline on the last round');
+  });
+});
+
 // ── Effect letter badges + selected-unit panel parity ─────────────────────────
 
 describe('buildEffectsHtml — letter-in-circle badges', () => {
@@ -575,7 +668,7 @@ describe('buildUnitDetailHtml — plan panel mirrors the Unit Stats Bar', () => 
       hp: 10, maxHp: 14, weapon: null, effects: [],
       getAttack: () => 3, getDefense: () => 2, getRange: () => 1, getAgility: () => 4,
     };
-    const html = buildUnitDetailHtml(entity, {});
+    const html = buildUnitDetailHtml(entity, {}, true);
     assert.match(html, /AGI/);
     assert.match(html, />4</);
   });

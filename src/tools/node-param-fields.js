@@ -48,6 +48,7 @@ export const NODE_PARAM_FIELDS = {
   onMissionStart: [],
   onRoundStart: [{ key: 'round', label: 'Round', kind: 'roundOrAny' }],
   onPhase: [{ key: 'phase', label: 'Phase', kind: 'select', options: PHASES, empty: '' }],
+  onCycleEnd: [],
   onKillCount: [{ key: 'faction', label: 'Faction', kind: 'select', options: FACTIONS }, { key: 'count', label: 'Kill count', kind: 'number' }],
   onAreaEnter: [{ key: 'hexes', label: 'Trigger hexes (or wire a Location)', kind: 'hexList' }],
   factionEvent: [{ key: 'faction', label: 'Faction', kind: 'select', options: FACTIONS }, { key: 'threshold', label: 'Unit-count threshold', kind: 'number' }],

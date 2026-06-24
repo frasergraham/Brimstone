@@ -8,9 +8,11 @@
 // dependency graph, so it stays trivially unit-testable.
 
 import { ENTITY_COLOR, normalizeDamage, isLeaderType } from './entities.js';
+import { ICON } from './icons.js';
 import { makeOverlay } from './overlays.js';
 import { ITEMS, getWeaponDamage, lootDisplayLabel } from './items.js';
 import { pickBlockWord } from './combat-words.js';
+import { groupWhiffEvents } from './battle-utils.js';
 
 // Format a weapon damage spec for the breakdown popup: "2D6", "1D12+1", or a
 // flat number. Pure.
@@ -33,8 +35,8 @@ function weaponName(weaponId) {
 // Glyph fallback when no portrait sprite is available. Matches the maps used in
 // ui.js / ui-render.js (kept local to preserve this module's purity).
 const GLYPHS = Object.freeze({
-  hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟',
-  zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙',
+  hero: ICON.hero, witch: ICON.witch, survivor: ICON.survivor, soldier: ICON.soldier,
+  zombie: ICON.zombie, minion: ICON.minion, wood_golem: ICON.woodGolem, iron_golem: ICON.ironGolem,
 });
 
 /** Presentation outcome kinds for a battle row. */
@@ -462,7 +464,21 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
     ];
     const entries = [];
 
+    // Fold runs of identical whiffs (same actor swinging at the same empty/fled
+    // hex) into a single "TARGET FLED" / "NO TARGET" card — mirrors the on-map
+    // animation's whiff collapse (src/main.js groupWhiffEvents) so card ⟷
+    // animation stay 1:1. Only whiff ACTION_SKIPs are touched; every other event
+    // passes through untouched.
+    const foldedWhiffs = (() => {
+      const whiffs = allEvents.filter(
+        ev => ev.type === RE.ACTION_SKIP && ev.whiffTarget && ev.battleSnaps?.actorSnap);
+      const keep = new Set(groupWhiffEvents(whiffs));
+      return new Set(whiffs.filter(ev => !keep.has(ev)));
+    })();
+
     for (const ev of allEvents) {
+      // A whiff folded into the preceding identical whiff — skip its card.
+      if (foldedWhiffs.has(ev)) continue;
       // Single visibility gate — shared with the on-map animation so a card and
       // its animation always agree (union of source/target hex + public actions).
       if (!isEventVisible(ev, ents, vis,
@@ -616,7 +632,7 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
           label:       'RECEIVE',
           outcomeKind: null,
           targetDmg:   0, actorDmg: 0, killed: false,
-          note:        { text: `📥 from ${fromName}`, kind: 'gain' },
+          note:        { text: `${ICON.receivedFrom} from ${fromName}`, kind: 'gain' },
           hexes:       [
             ...(recipientLeader ? [{ col: recipientLeader.col, row: recipientLeader.row }] : []),
             { col: survivorSnap.col, row: survivorSnap.row },
@@ -657,7 +673,7 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
           label:       ACTION_LABEL[PA.SENT_TO] ?? 'SEND',
           outcomeKind: null,
           targetDmg:   0, actorDmg: 0, killed: false,
-          note:        { text: `📤 to ${destName}`, kind: 'gain' },
+          note:        { text: `${ICON.sentTo} to ${destName}`, kind: 'gain' },
           hexes:       [
             { col: cardActorSnap.col, row: cardActorSnap.row },
             ...(survivorSnap ? [{ col: survivorSnap.col, row: survivorSnap.row }] : []),
@@ -827,8 +843,8 @@ export function buildOutcomeSummary(entry) {
   }
   for (const sh of entry.splashHits ?? []) {
     lines.push(sh.killed
-      ? `\u{1F4A2} ${sh.name ?? 'A bystander'} takes ${sh.damage ?? 1} splash — slain!`
-      : `\u{1F4A2} ${sh.name ?? 'A bystander'} takes ${sh.damage ?? 1} splash.`);
+      ? `${ICON.splash} ${sh.name ?? 'A bystander'} takes ${sh.damage ?? 1} splash — slain!`
+      : `${ICON.splash} ${sh.name ?? 'A bystander'} takes ${sh.damage ?? 1} splash.`);
   }
   return { kind, headline, reason, lines };
 }

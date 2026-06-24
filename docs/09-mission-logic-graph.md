@@ -172,6 +172,7 @@ land as missions need them.
 | **On Mission Start** ✓ | exec | briefing + `round:1` triggers |
 | **On Round Start** ✓ | exec; data: round, phase | `storyTrigger type:round`, `wave round:N` |
 | **On Phase** ✓ | exec; data: phase | `endRound` phase change, node scoring |
+| **On Cycle End** ✓ | exec; data: phase | fixed-end mission deadline (fires AFTER the final turn) |
 | **On Day / Cycle N** | exec; data: cycle | attrition-by-cycle schedule |
 | **On Kill Count** ✓ | exec; data: killer | `wave trigger:hero_kills count:N` |
 | **On Node Control Changed** | exec; data: node, owner | node scoring / control-change log |
@@ -277,11 +278,25 @@ list today — collapse into **one** Area node firing two actions.
 ```
 ‹EVENT› On Round Start (1) ──▶ ‹SIM› Spawn ×2 zombie
 ‹EVENT› On Round Start (3) ──▶ ‹SIM› Spawn ×3 zombie
-‹EVENT› On Phase = DAWN ──▶ ‹FLOW› Branch ⟨Survivors alive ≥ 2?⟩
-                               ├ True  ──▶ ‹OUT› Win  "…held out until dawn."
-                               └ False ──▶ ‹OUT› Lose "Dawn came too late…"
+‹EVENT› On Cycle End ──▶ ‹FLOW› Branch ⟨Survivors alive ≥ 2?⟩
+                            ├ True  ──▶ ‹OUT› Win  "…held out until dawn."
+                            └ False ──▶ ‹OUT› Lose "Dawn came too late…"
 ‹ACTOR› Hero Faction ─On Leader Dead─▶ ‹OUT› Lose (hero_killed)
 ```
+
+**Deadline timing — end at the END of the final turn.** The cycle is non-looping
+(`dusk → 5×night → dawn`, `loop:false`), so its last *playable* round is the
+dawn turn (round = cycle length). The deadline win/lose is wired to **On Cycle
+End**, NOT On Round Start / On Phase: the game dispatches `cycleEnd` once, from
+`pumpMissionLogic('postResolution')`, after the final round has resolved (by
+then `endRound` has advanced `state.round` past the cycle length). Wiring it to
+On Round Start would fire it at the *start* of the dawn turn — the off-by-one
+where the mission ended before the player could act on dawn. `phaseForRound`
+clamps a non-looping cycle to its final phase for any round ≥ length, so the
+dawn turn is fully lit and playable; a one-shot guard (`_cycleEndFiredAt`,
+serialized) makes `cycleEnd` fire exactly once (and re-arm if
+`extendOnWitchScore` grows the cycle). The shipped non-looping missions
+(Ch1M2/3/5/6) all use this wiring.
 
 ### 5.4 Latent choreography (conversation onComplete)
 ```

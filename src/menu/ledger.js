@@ -9,19 +9,36 @@
 // ============================================================================
 
 import { mmSortRows, mmFormatRow, mmIsCampaignRow } from '../main-menu-games.js';
+import { ICON } from '../icons.js';
 import { mountServerSelector } from '../server-selector.js';
+import { MAP_SIZES } from '../map.js';
 import { loadThumb, missionThumb, campaignMissionRowId } from './thumbnails.js';
-import { isModeAvailable, isFactionAvailable, COMING_SOON_LABEL } from '../demo-config.js';
+import { isModeAvailable, isFactionAvailable, isOnlineAvailable, ONLINE_ONLY_DESTINATIONS, COMING_SOON_LABEL } from '../demo-config.js';
+import { getCampaignPortrait } from '../campaign/campaign-ui.js';
+import { levelPillHtml } from '../ui-render.js';
 
 /** The six rail destinations, top to bottom (mirrors the mock). */
 const DESTINATIONS = [
-  { id: 'continue', icon: '▶',  label: 'Continue',         title: 'Continue',         tag: '— the night is not over',            accent: 'gold' },
-  { id: 'campaign', icon: '☀',  label: 'Campaign',         title: 'The Campaign',     tag: '— six nights to break the curse',    accent: 'gold' },
-  { id: 'skirmish', icon: '🎯', label: 'Skirmish',         title: 'Skirmish',         tag: '— choose a champion, set the night', accent: 'gold' },
-  { id: 'others',   icon: '🌙', label: 'Play Online',       title: 'Play Online',      tag: '— a single battle, or the war',      accent: 'purple' },
-  { id: 'replays',  icon: '📜', label: 'Replays',          title: 'Replays',          tag: '— games already told',               accent: 'gold' },
-  { id: 'account',  icon: '⚙',  label: 'Account',          title: 'Account',          tag: '',                                   accent: 'gold' },
+  { id: 'continue', icon: ICON.play,  label: 'Battle Log',       title: 'Battle Log',       tag: 'Games in Progress',            accent: 'gold' },
+  { id: 'campaign', icon: '\uE021',  label: 'Campaign',         title: 'The Campaign',     tag: 'Assemble a party of survivors and follow the story of Ishmael and the Witch',    accent: 'gold' },
+  { id: 'skirmish', icon: '\uE061', label: 'Skirmish',         title: 'Skirmish',         tag: 'Single player battle vs. AI - hold the majority of power nodes to win', accent: 'gold' },
+  { id: 'others',   icon: '\uE023', label: 'Play Online',       title: 'Play Online',      tag: 'Multiplayer single battles, or join the persistent two-week long async battle for Caleb\'s Hollow',      accent: 'purple' },
+  { id: 'replays',  icon: '\uE014', label: 'Replays',          title: 'Replays',          tag: 'Revisit past games',               accent: 'gold' },
+  { id: 'account',  icon: '\uE0A1',  label: 'Account',          title: 'Account',          tag: '',                                   accent: 'gold' },
 ];
+
+/**
+ * The rail destinations to render in THIS build. On the server-less static
+ * (itch.io) build the online-only entries (Play Online + Account/leaderboard)
+ * are dropped entirely \u2014 there's no server to reach, so they would only error
+ * on click. Every other build (dev / Electron / Capacitor) shows the full set.
+ * Pure: takes the online flag so a unit test can drive both branches off-DOM.
+ * @param {boolean} [onlineAvailable]  defaults to isOnlineAvailable()
+ */
+export function railDestinations(onlineAvailable = isOnlineAvailable()) {
+  if (onlineAvailable) return DESTINATIONS;
+  return DESTINATIONS.filter((d) => !ONLINE_ONLY_DESTINATIONS.includes(d.id));
+}
 
 let _root = null;
 let _activeId = null;
@@ -30,9 +47,11 @@ let _renderToken = 0;            // guards against out-of-order async panel rend
 let _campSlot = null;            // selected campaign slot (Campaign destination)
 let _campView = 'missions';      // Campaign sub-view: 'missions' | 'party'
 let _campBriefing = null;        // active mission briefing ({slot,missionId,resume,title,briefing,index})
+let _campBriefingReturn = null;  // briefing stashed while editing the party (so we can return)
 let _campConfirmDelete = null;   // slot index awaiting delete confirmation
+let _campConfirmAbandon = false; // briefing's Abandon-save confirm awaiting yes/no
 let _skFaction = null;           // selected Skirmish champion
-const _skOpts = { mapSize: 'standard', nodeCount: 3, aiDifficulty: 'normal' };
+const _skOpts = { mapSize: 'standard', nodeCount: 3, aiDifficulty: 'normal', startingResources: 'none' };
 let _othersView = 'landing';     // Play With Others sub-view: 'landing'|'find'|'lobby'|'battle'
 let _lobby = null;               // current lobby state (from the onLobby push)
 let _lobbyList = [];             // open public lobbies (from onLobbyList)
@@ -111,7 +130,7 @@ function _renderRail() {
   const host = document.getElementById('ledger-rail-items');
   if (!host) return;
   host.replaceChildren();
-  for (const d of DESTINATIONS) {
+  for (const d of railDestinations()) {
     const item = document.createElement('div');
     const available = isModeAvailable(d.id);   // demo builds can flip a mode OFF
     item.className = 'ledger-rail-item' + (available ? '' : ' is-soon');
@@ -119,7 +138,10 @@ function _renderRail() {
     item.innerHTML = `<span class="ic">${d.icon}</span><span class="lb">${d.label}</span>` +
       (available ? '' : `<span class="lg-soon-badge">${COMING_SOON_LABEL}</span>`);
     if (available) {
-      item.addEventListener('click', () => { _campBriefing = null; _campConfirmDelete = null; select(d.id); });
+      item.addEventListener('click', () => {
+        _campBriefing = null; _campBriefingReturn = null; _campConfirmDelete = null; _campConfirmAbandon = false;
+        select(d.id);
+      });
     } else {
       item.setAttribute('aria-disabled', 'true');
       item.title = `${d.label} — ${COMING_SOON_LABEL}`;
@@ -132,12 +154,17 @@ function _renderRail() {
 export function select(id) {
   let dest = DESTINATIONS.find(d => d.id === id);
   if (!dest) return;
+  // The static (itch.io) build hides the online-only destinations entirely —
+  // never bind the pane to one (e.g. via the `start` default or a stale lobby
+  // push); fall back to a shown destination. _renderRail already omits them.
+  const shown = railDestinations();
+  const isShown = (d) => shown.includes(d);
   // A demo build can disable a mode — never bind the pane to a coming-soon
   // destination (e.g. via the `start` default); fall back to Continue.
-  if (!isModeAvailable(dest.id)) {
-    dest = DESTINATIONS.find(d => d.id === 'continue' && isModeAvailable('continue')) ||
-           DESTINATIONS.find(d => isModeAvailable(d.id)) || dest;
-    if (!isModeAvailable(dest.id)) return;
+  if (!isShown(dest) || !isModeAvailable(dest.id)) {
+    dest = shown.find(d => d.id === 'continue' && isModeAvailable('continue')) ||
+           shown.find(d => isModeAvailable(d.id)) || dest;
+    if (!isShown(dest) || !isModeAvailable(dest.id)) return;
   }
   id = dest.id;
   _activeId = id;
@@ -181,15 +208,19 @@ const PANELS = {
 
 /** Continue — your last save as the hero object, then everything else waiting. */
 function _panelContinue(body) {
-  if (!_data?.activeGames) return _placeholderPanel(body, { label: 'Continue' });
+  if (!_data?.activeGames) return _placeholderPanel(body, { label: 'Battle Log' });
   const token = ++_renderToken;
   body.innerHTML = `<p class="ledger-placeholder">Reading the ledger…</p>`;
   _data.activeGames().then((rows) => {
     if (token !== _renderToken) return;              // a newer render superseded us
     const sorted = mmSortRows(rows || []);
     body.replaceChildren();
+    // New players (nothing in progress) see Learn to Play as the headline; once
+    // there are games to resume, it slips below them as a quiet refresher option.
+    const firstTime = !sorted.length;
+    if (firstTime) body.appendChild(_learnToPlayCard(true));
     if (!sorted.length) {
-      body.appendChild(_empty('Nothing in progress. Begin a Campaign or a Skirmish from the rail.'));
+      body.appendChild(_empty('Or begin a Campaign or a Skirmish from the rail.'));
       return;
     }
     const [hero, ...rest] = sorted;
@@ -201,7 +232,28 @@ function _panelContinue(body) {
       for (const r of rest.slice(0, 5)) list.appendChild(_feedRow(r));
       body.appendChild(list);
     }
+    body.appendChild(_learnToPlayCard(false));
   }).catch(() => { if (token === _renderToken) body.replaceChildren(_empty('Could not read the ledger.')); });
+}
+
+/** "Learn to Play" — launches the standalone guided tutorial. */
+function _learnToPlayCard(headline) {
+  const card = document.createElement('div');
+  card.className = 'lg-learn-card' + (headline ? ' is-headline' : '');
+  card.setAttribute('role', 'button');
+  card.tabIndex = 0;
+  card.innerHTML =
+    `<div class="lg-learn-thumb" aria-hidden="true" style="background-image:url(assets/mission-maps/learn.jpg)"></div>` +
+    `<div class="lg-learn-body">` +
+      `<div class="lg-learn-kicker">${headline ? 'New here?' : 'Refresher'}</div>` +
+      `<div class="lg-learn-title gthc">Learn to Play</div>` +
+      `<div class="lg-learn-sub">A short guided battle — plan, fight, and hold a Power Node.</div>` +
+    `</div>` +
+    `<span class="lg-learn-cta">${ICON.play} Start</span>`;
+  const go = () => _data?.startLearnToPlay?.();
+  card.addEventListener('click', go);
+  card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
+  return card;
 }
 
 /** Campaign — pick a playthrough slot, then play any available mission. */
@@ -247,7 +299,7 @@ function _panelCampaign(body) {
         `<div class="lg-slot-title gthc">New</div>` +
         `<div class="lg-slot-sub">begin a playthrough</div>`;
     card.addEventListener('click', () => {
-      _campSlot = s.slot; _campBriefing = null;
+      _campSlot = s.slot; _campBriefing = null; _campBriefingReturn = null; _campConfirmAbandon = false;
       _data?.setActiveCampaignSlot?.(s.slot);   // persist so Continue tracks this slot
       select('campaign');
     });
@@ -257,7 +309,7 @@ function _panelCampaign(body) {
       const del = document.createElement('button');
       del.type = 'button';
       del.className = 'lg-slot-del';
-      del.textContent = '✕';
+      del.textContent = '\uE070';
       del.title = 'Delete this slot';
       del.addEventListener('click', (e) => { e.stopPropagation(); _campConfirmDelete = s.slot; select('campaign'); });
       card.appendChild(del);
@@ -270,7 +322,9 @@ function _panelCampaign(body) {
   const tabs = document.createElement('div');
   tabs.className = 'lg-camp-tabs';
   tabs.appendChild(_button('Choose Next Mission', _campView === 'missions' ? 'gold' : 'ghost',
-    () => { _campView = 'missions'; select('campaign'); }));
+    // Switching to the chronicle abandons any pending "edit party → back to
+    // briefing" round-trip (the player chose a different destination).
+    () => { _campView = 'missions'; _campBriefingReturn = null; select('campaign'); }));
   tabs.appendChild(_button('Manage the Party', _campView === 'party' ? 'gold' : 'ghost',
     () => { _campView = 'party'; select('campaign'); }));
   body.appendChild(tabs);
@@ -294,7 +348,12 @@ function _panelCampaign(body) {
     const chron = document.createElement('div');
     chron.className = 'lg-chronicle';
     for (const { m, index } of chap.missions) {
-      const status = m.completed ? 'done' : (m.id === sel.nextMissionId ? 'current' : (m.available ? 'available' : 'locked'));
+      // A disabled mission is shelved — shown greyed + non-selectable, never
+      // current/available, regardless of slot progress.
+      const status = m.disabled ? 'disabled'
+        : m.completed ? 'done'
+        : (m.id === sel.nextMissionId ? 'current'
+        : (m.available ? 'available' : 'locked'));
       chron.appendChild(_missionRow(sel, m, status, index, data.campaignId));
     }
     body.appendChild(chron);
@@ -308,13 +367,16 @@ const CHAPTER_TITLES = {
 };
 
 /** Bucket a flat mission list into ordered chapters, preserving each mission's
- *  overall campaign index (used for its Roman-numeral label). Missions with no
- *  `chapter` tag fall into Chapter 1. */
+ *  overall campaign number (used for its Roman-numeral label). We use the stable
+ *  catalog `number` (tutorial=0, prologue=1, …), NOT the list position — so a
+ *  dropped disabled mission never renumbers the rest. Missions with no `chapter`
+ *  tag fall into Chapter 1. */
 function _groupByChapter(missions) {
   const order = [];
   const byChapter = new Map();
-  missions.forEach((m, index) => {
+  missions.forEach((m, pos) => {
     const chapter = Number.isFinite(m.chapter) ? m.chapter : 1;
+    const index = Number.isFinite(m.number) ? m.number : pos;
     if (!byChapter.has(chapter)) { byChapter.set(chapter, []); order.push(chapter); }
     byChapter.get(chapter).push({ m, index });
   });
@@ -335,7 +397,9 @@ function _chapterHeading(chapter) {
 /** Mission briefing — shown before a mission launches (title, briefing, Begin). */
 function _campaignBriefing(body) {
   const b = _campBriefing;
-  body.appendChild(_backRow('‹ Back to the chronicle', () => { _campBriefing = null; select('campaign'); }));
+  body.appendChild(_backRow('‹ Back to the chronicle', () => {
+    _campBriefing = null; _campBriefingReturn = null; _campConfirmAbandon = false; select('campaign');
+  }));
 
   // Two-column briefing: the map image on the LEFT, the mission text (kicker +
   // title + briefing copy) on the RIGHT. The columns stack on narrow widths
@@ -352,8 +416,12 @@ function _campaignBriefing(body) {
   head.className = 'lg-brief-head';
   // Mission number is 0-based from the tutorial — Mission 0 is the tutorial.
   const kicker = `Mission ${b.index ?? 0}`;
+  // NEW vs RESUMED is the load-bearing distinction here: a resumed save drops the
+  // player back mid-mission, a new start regenerates the board. Badge it plainly.
+  const badge = b.resume ? 'RESUMING SAVE' : 'NEW MISSION';
   head.innerHTML =
-    `<div class="lg-brief-kicker">${esc(kicker)}</div>` +
+    `<div class="lg-brief-kicker">${esc(kicker)} ` +
+      `<span class="lg-brief-badge${b.resume ? ' is-resume' : ''}">${esc(badge)}</span></div>` +
     `<div class="lg-brief-title gthc">${esc(b.title)}</div>`;
   textCol.appendChild(head);
   const rule = document.createElement('div'); rule.className = 'ledger-rule'; textCol.appendChild(rule);
@@ -365,10 +433,97 @@ function _campaignBriefing(body) {
 
   body.appendChild(cols);
 
-  const begin = _button(b.resume ? '▶ Resume Mission' : '▶ Begin Mission', 'gold',
+  // ── Deploying party strip — the EXACT set that will deploy (hero + survivors),
+  //    sourced from beginMissionParty which resolves through the same
+  //    resolveDeployIndices the launch path uses (display == deploy). Portraits
+  //    load lazily; preload then render so glyphs don't flash as tofu.
+  _appendDeployingStrip(body, b);
+
+  // Begin/Resume + Edit Party live on one row, with Abandon (resume only) below.
+  const btnRow = document.createElement('div');
+  btnRow.className = 'lg-brief-actions';
+  const beginBtn = _button(b.resume ? `${ICON.play} Resume Mission` : `${ICON.play} Begin Mission`, 'gold',
     () => _data?.startMission?.(b.slot, b.missionId, b.resume));
-  begin.style.marginTop = '20px';
-  body.appendChild(begin);
+  // Stable hook for the browser-verification harness (startCampaignMission).
+  beginBtn.dataset.testid = 'begin-mission';
+  btnRow.appendChild(beginBtn);
+  btnRow.appendChild(_button('Edit Party', 'ghost', () => {
+    // Stash the pending briefing so the party view can return to it, then open
+    // the party sub-view of the campaign panel.
+    _campBriefingReturn = b;
+    _campBriefing = null;
+    _campConfirmAbandon = false;
+    _campView = 'party';
+    _campSlot = b.slot;
+    select('campaign');
+  }));
+  body.appendChild(btnRow);
+
+  // Resumed saves can be abandoned (delete the mid-mission save → start fresh).
+  // INLINE confirm; on confirm we delete ONLY the mission save (never the
+  // playthrough) and flip the screen to "NEW MISSION".
+  if (b.resume) _appendAbandonControl(body, b);
+}
+
+/** Build + append the "Deploying" party strip for a briefing. Async portrait
+ *  load is awaited before paint (preloadPortraits) so icons render as art. */
+function _appendDeployingStrip(body, b) {
+  const strip = document.createElement('div');
+  strip.className = 'lg-brief-party';
+  body.appendChild(strip);
+  const render = () => {
+    // Guard against a stale render after the player left the briefing.
+    if (_campBriefing !== b || !strip.isConnected) return;
+    const party = _data?.beginMissionParty?.(b.slot, b.missionId);
+    if (!Array.isArray(party) || party.length === 0) { strip.remove(); return; }
+    strip.innerHTML =
+      `<div class="lg-brief-party-label">Deploying</div>` +
+      `<div class="lg-brief-party-row">` +
+        party.map(_deployChipHtml).join('') +
+      `</div>`;
+  };
+  Promise.resolve(_data?.preloadPortraits?.()).then(render).catch(render);
+}
+
+/** One portrait + name (+ level pill if veteran) chip in the deploying strip. */
+function _deployChipHtml(u) {
+  const portrait = getCampaignPortrait(u.assetId, 44);
+  const icon = portrait
+    ? `<img class="lg-deploy-portrait" src="${portrait}" alt="">`
+    : `<span class="lg-deploy-glyph">${u.isHero ? ICON.hero : ICON.survivor}</span>`;
+  return `<div class="lg-deploy-chip${u.isHero ? ' is-hero' : ''}">` +
+    icon +
+    `<span class="lg-deploy-name">${esc(u.name)}${levelPillHtml(u.level)}</span>` +
+  `</div>`;
+}
+
+/** The "Abandon save & restart mission" control for a resumed briefing. Inline
+ *  confirm (mirrors the slot-delete / row-abandon patterns). On confirm it deletes
+ *  ONLY the mid-mission save (abandonMissionSave), then flips the briefing to a
+ *  fresh NEW MISSION start — the whole playthrough/roster is untouched. */
+function _appendAbandonControl(body, b) {
+  const wrap = document.createElement('div');
+  wrap.className = 'lg-brief-abandon';
+  if (_campConfirmAbandon) {
+    const q = document.createElement('span');
+    q.className = 'lg-confirm-q';
+    q.textContent = 'Abandon this save and restart the mission from the beginning?';
+    wrap.append(
+      q,
+      _button('Abandon save', 'danger', () => {
+        _data?.abandonMissionSave?.(b.slot, b.missionId);
+        b.resume = false;               // the save is gone — this is now a fresh start
+        _campConfirmAbandon = false;
+        select('campaign');             // re-render: now reads "NEW MISSION" / "Begin"
+      }),
+      _button('Keep save', 'ghost', () => { _campConfirmAbandon = false; select('campaign'); }),
+    );
+  } else {
+    wrap.appendChild(_button('Abandon save & restart mission', 'danger', () => {
+      _campConfirmAbandon = true; select('campaign');
+    }));
+  }
+  body.appendChild(wrap);
 }
 
 /** Displayed mission number label for a catalog index. The list is 0-based from
@@ -389,7 +544,7 @@ function _briefMapImage(b) {
   const el = document.createElement('div');
   el.className = 'lg-brief-map' + (img ? ' has-img' : '');
   if (img) el.style.backgroundImage = `url(${img})`;
-  else el.textContent = '🜂';
+  else el.textContent = '\uE08D';
   el.setAttribute('aria-hidden', 'true');
   return el;
 }
@@ -397,6 +552,17 @@ function _briefMapImage(b) {
 /** Warband (Party) view — reuses the existing party-pane renderer + mutations.
  *  Injects the party HTML and wires its controls back to partyAction. */
 function _renderPartyView(body, sel) {
+  // When the player opened the party screen via "Edit Party" on a briefing, give
+  // them a one-tap route back to that briefing so they're never stranded (the
+  // module-level _campBriefingReturn holds the pending briefing).
+  if (_campBriefingReturn) {
+    const ret = _campBriefingReturn;
+    body.appendChild(_backRow('‹ Back to briefing', () => {
+      _campBriefingReturn = null;
+      _campBriefing = ret;        // restore the pending briefing
+      select('campaign');
+    }));
+  }
   const container = document.createElement('div');
   container.className = 'lg-party';
   body.appendChild(container);
@@ -422,7 +588,7 @@ function _ensureInvTab(container) {
   const tab = document.createElement('button');
   tab.type = 'button';
   tab.className = 'lg-inv-tab';
-  tab.textContent = '🎒 Inventory';
+  tab.textContent = '\uE016 Inventory';
   tab.addEventListener('click', () => shared.classList.toggle('is-open'));
   container.appendChild(tab);
 }
@@ -540,7 +706,7 @@ function _panelSkirmish(body) {
   body.appendChild(_cap('Your champion'));
   const champs = document.createElement('div');
   champs.className = 'lg-champ-scroll';
-  for (const [side, label, icon] of [['day', 'Day — the Hero', '☀'], ['night', 'Night — the Witch', '🌙']]) {
+  for (const [side, label, icon] of [['day', 'Day — the Hero', '\uE021'], ['night', 'Night — the Witch', '\uE023']]) {
     // Available champions first; demo-blocked ("coming soon") ones sort to the
     // end of their side (stable sort preserves the authored order otherwise).
     const fs = factions.filter((f) => f.side === side)
@@ -560,27 +726,35 @@ function _panelSkirmish(body) {
   body.appendChild(_cap('The night ahead'));
   const opts = document.createElement('div');
   opts.className = 'lg-opts';
-  opts.appendChild(_optSelect('mapSize', 'Map size', MAP_SIZE_OPTS, (v) => v));
-  opts.appendChild(_optSelect('nodeCount', 'Power nodes', [
-    { value: '2', label: '2', sub: 'sparse' }, { value: '3', label: '3', sub: 'default' }, { value: '4', label: '4', sub: 'crowded' },
-  ], (v) => parseInt(v, 10)));
+
+  // Map size and Power nodes are linked: the node-count range follows the
+  // selected size (larger maps allow up to 7; small maps stay narrow). Changing
+  // the size re-clamps the chosen count into the new size's [min,max] band.
+  const nodeDd = _dropdown(_nodeCountOpts(_skOpts.mapSize), String(_skOpts.nodeCount), (v) => {
+    _skOpts.nodeCount = parseInt(v, 10);
+  });
+  const mapDd = _dropdown(MAP_SIZE_OPTS, _skOpts.mapSize, (v) => {
+    _skOpts.mapSize = v;
+    _skOpts.nodeCount = _clampNodeCount(v, _skOpts.nodeCount);
+    nodeDd.setOptions(_nodeCountOpts(v), _skOpts.nodeCount);
+  });
+  // Initial clamp in case a stale _skOpts.nodeCount sits outside the size range.
+  _skOpts.nodeCount = parseInt(nodeDd.value, 10);
+  opts.appendChild(_optWrap('Map size', mapDd));
+  opts.appendChild(_optWrap('Power nodes', nodeDd));
   opts.appendChild(_optSelect('aiDifficulty', 'AI cunning', [
     { value: 'easy', label: 'Easy', sub: 'forgiving' }, { value: 'normal', label: 'Normal', sub: 'balanced' }, { value: 'hard', label: 'Hard', sub: 'ruthless' },
   ], (v) => v));
+  opts.appendChild(_optSelect('startingResources', 'Starting resources', STARTING_RES_OPTS, (v) => v));
   body.appendChild(opts);
 
   const startRow = document.createElement('div');
   startRow.className = 'lg-skirmish-start';
-  startRow.appendChild(_button('▶ Start', 'gold', () => {
+  startRow.appendChild(_button(`${ICON.play} Start`, 'gold', () => {
     if (!isFactionAvailable(_skFaction)) return;   // never launch a demo-blocked champion
     _data?.startSkirmish?.(_skFaction, { ..._skOpts });
   }));
-  const summ = document.createElement('span');
-  summ.className = 'lg-skirmish-summary';
-  summ.id = 'lg-sk-summary';
-  startRow.appendChild(summ);
   body.appendChild(startRow);
-  _updateSkirmishSummary();
 }
 
 function _champCard(f) {
@@ -594,11 +768,11 @@ function _champCard(f) {
       `${stat('AGI', f.agi, 'Agility — higher acts earlier each turn')}</div>`
     : '';
   const weaponHtml = f.weapon
-    ? `<div class="lg-champ-weapon">⚔ ${esc(f.weapon.name)}${f.weapon.stats ? ` <span class="lg-champ-wstats">${esc(f.weapon.stats)}</span>` : ''}</div>`
+    ? `<div class="lg-champ-weapon">\uE0A2 ${esc(f.weapon.name)}${f.weapon.stats ? ` <span class="lg-champ-wstats">${esc(f.weapon.stats)}</span>` : ''}</div>`
     : '';
   const abilitiesHtml = (f.abilities && f.abilities.length)
     ? `<div class="cprog-uabilities">${f.abilities.map((a) =>
-        `<span class="cprog-uability" data-tip="${esc(a.description)}">✦ ${esc(a.label)}</span>`).join('')}</div>`
+        `<span class="cprog-uability" data-tip="${esc(a.description)}">\uE062 ${esc(a.label)}</span>`).join('')}</div>`
     : '';
   card.innerHTML =
     `<img src="${esc(f.img)}" alt="">` +
@@ -619,16 +793,8 @@ function _champCard(f) {
 }
 
 function _optSelect(key, label, options, parse) {
-  const dd = _dropdown(options, String(_skOpts[key]), (v) => { _skOpts[key] = parse(v); _updateSkirmishSummary(); });
+  const dd = _dropdown(options, String(_skOpts[key]), (v) => { _skOpts[key] = parse(v); });
   return _optWrap(label, dd);
-}
-
-function _updateSkirmishSummary() {
-  const el = document.getElementById('lg-sk-summary');
-  if (!el) return;
-  const f = (_data?.skirmishFactions?.() ?? []).find((x) => x.id === _skFaction);
-  const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
-  el.textContent = [f?.name, cap(_skOpts.mapSize), `${_skOpts.nodeCount} nodes`, cap(_skOpts.aiDifficulty)].filter(Boolean).join(' · ');
 }
 
 /** Play With Others — landing (rhythms + Battle + games), Find-a-Game, and the
@@ -654,7 +820,7 @@ function _othersLanding(body) {
     }
     const rh = document.createElement('div');
     rh.className = 'lg-rhythms';
-    rh.appendChild(_rhythmCard('⚔ Single Battle', 'live or async', 'One game against another player. Choose the pace when you create it.',
+    rh.appendChild(_rhythmCard('\uE000 Single Battle', 'live or async', 'One game against another player. Choose the pace when you create it.',
       () => { _createAsync = false; _othersView = 'find'; select('others'); }));
     body.appendChild(rh);
 
@@ -673,10 +839,10 @@ function _othersLanding(body) {
         // glyph still shows so the card has a board, matching feed/resume rows.
         ? `<div class="lg-battle-thumb${battleThumb ? ' has-img clickable' : ''}" aria-hidden="true"` +
             `${battleThumb ? ` style="background-image:url(${battleThumb})" title="View battle details"` : ''}>` +
-            `${battleThumb ? '' : '🜂'}</div>`
+            `${battleThumb ? '' : '\uE08D'}</div>`
         : '') +
       `<div class="lg-battle-body">` +
-        `<div class="lg-battle-head"><span class="gthc">⚔ The Battle for Caleb's Hollow</span>` +
+        `<div class="lg-battle-head"><span class="gthc">${ICON.hero} The Battle for Caleb's Hollow</span>` +
         `${inBattle ? '<span class="lg-battle-live">● live</span>' : '<span class="lg-battle-cta">View ▸</span>'}</div>` +
         `<div class="lg-battle-sub">Persistent 10v10 war — turns resolve at noon &amp; midnight.` +
         `${inBattle && battle.round != null ? ' · Round ' + battle.round : ''}</div>` +
@@ -721,21 +887,30 @@ function _othersFind(body) {
   opts.className = 'lg-opts';
   const modeDd = _dropdown(CADENCE_OPTS, _createAsync ? 'async' : 'live', (v) => { _createAsync = v === 'async'; select('others'); });
   const ppsDd  = _dropdown([{ value: '1', label: '1v1' }, { value: '2', label: '2v2' }, { value: '3', label: '3v3' }, { value: '4', label: '4v4' }], '1');
-  const mapDd  = _dropdown(MAP_SIZE_OPTS, 'standard');
+  // Map size and Power nodes are linked, same as Skirmish — the node-count range
+  // follows the map size; changing the size re-clamps the choice into its band.
+  const nodeDd = _dropdown(_nodeCountOpts('standard'), String(MAP_SIZES.standard.nodeCount ?? 3));
+  const mapDd  = _dropdown(MAP_SIZE_OPTS, 'standard', (v) => {
+    nodeDd.setOptions(_nodeCountOpts(v), _clampNodeCount(v, parseInt(nodeDd.value, 10)));
+  });
   const privDd = _dropdown([{ value: 'false', label: 'Public', sub: 'Listed; anyone can join' }, { value: 'true', label: 'Private', sub: 'Join by code only' }], 'false');
+  const resDd  = _dropdown(STARTING_RES_OPTS, 'none');
   const timeDd = _createAsync
     ? _dropdown([{ value: '43200000', label: '12 hours' }, { value: '86400000', label: '1 day' }, { value: '172800000', label: '2 days' }], '86400000')
     : _dropdown([{ value: '60000', label: '60 sec' }, { value: '90000', label: '90 sec' }, { value: '120000', label: '2 min' }], '90000');
   opts.appendChild(_optWrap('Cadence', modeDd));
   opts.appendChild(_optWrap('Players', ppsDd));
   opts.appendChild(_optWrap('Map', mapDd));
+  opts.appendChild(_optWrap('Power nodes', nodeDd));
+  opts.appendChild(_optWrap('Resources', resDd));
   opts.appendChild(_optWrap(_createAsync ? 'Per turn' : 'Turn timer', timeDd));
   opts.appendChild(_optWrap('Visibility', privDd));
   body.appendChild(opts);
   const createBtn = _button('＋ Create Game', 'gold', () => _data.lobby?.create?.({
     playersPerSide: parseInt(ppsDd.value, 10), mapSize: mapDd.value,
+    nodeCount: _clampNodeCount(mapDd.value, parseInt(nodeDd.value, 10)),
     isPrivate: privDd.value === 'true', isAsync: _createAsync,
-    turnIntervalMs: parseInt(timeDd.value, 10),
+    turnIntervalMs: parseInt(timeDd.value, 10), startingResources: resDd.value,
   }));
   createBtn.style.marginTop = '12px';
   body.appendChild(createBtn);
@@ -807,10 +982,10 @@ function _othersLobby(body, lobby) {
   if (link) {
     const inviteRow = document.createElement('div');
     inviteRow.className = 'lg-invite-row';
-    const copy = _button('📋 Copy invite link', 'ghost', () => {
+    const copy = _button('\uE078 Copy invite link', 'ghost', () => {
       navigator.clipboard?.writeText(link).then(() => {
-        copy.textContent = 'Copied ✓';
-        setTimeout(() => { copy.textContent = '📋 Copy invite link'; }, 1500);
+        copy.textContent = 'Copied \uE071';
+        setTimeout(() => { copy.textContent = '\uE078 Copy invite link'; }, 1500);
       }).catch(() => {});
     });
     inviteRow.appendChild(copy);
@@ -828,7 +1003,7 @@ function _othersLobby(body, lobby) {
 
   const cols = document.createElement('div');
   cols.className = 'lg-seats';
-  for (const [side, label, icon] of [['day', 'Day', '☀'], ['night', 'Night', '🌙']]) {
+  for (const [side, label, icon] of [['day', 'Day', '\uE021'], ['night', 'Night', '\uE023']]) {
     const col = document.createElement('div');
     col.className = 'lg-seat-col is-' + side;
     col.innerHTML = `<div class="lg-seat-label">${icon} ${label}</div>`;
@@ -840,9 +1015,9 @@ function _othersLobby(body, lobby) {
 
   const footer = document.createElement('div');
   footer.className = 'lg-lobby-footer';
-  if (isHost) footer.appendChild(_button('🤖 Fill with AI', 'ghost', () => _data.lobby?.fillAll?.('random')));
+  if (isHost) footer.appendChild(_button('\uE07F Fill with AI', 'ghost', () => _data.lobby?.fillAll?.('random')));
   const allFilled = (lobby.slots || []).every((s) => s.status === 'human' || s.status === 'ai');
-  const startBtn = _button('▶ Start', 'gold', () => _data.lobby?.start?.());
+  const startBtn = _button(`${ICON.play} Start`, 'gold', () => _data.lobby?.start?.());
   if (!isHost || !allFilled) startBtn.disabled = true;
   footer.appendChild(startBtn);
   body.appendChild(footer);
@@ -878,9 +1053,9 @@ function _lobbySeat(lobby, slot, { myId, isHost, canClaim }) {
     }
   } else if (slot.status === 'ai') {
     el.classList.add('is-ai');
-    el.innerHTML = `<span class="nm">🤖 ${esc(slot.name || 'AI')}</span><span class="fac">${esc(cap(fac))}</span>`;
+    el.innerHTML = `<span class="nm">${ICON.bot} ${esc(slot.name || 'AI')}</span><span class="fac">${esc(cap(fac))}</span>`;
     if (isHost) {
-      const rm = _button('✕', 'ghost', () => _data.lobby?.removeSlotAI?.(idx));
+      const rm = _button('\uE070', 'ghost', () => _data.lobby?.removeSlotAI?.(idx));
       rm.classList.add('lg-seat-x');
       el.appendChild(rm);
     }
@@ -890,7 +1065,7 @@ function _lobbySeat(lobby, slot, { myId, isHost, canClaim }) {
     const acts = document.createElement('div');
     acts.className = 'lg-seat-acts';
     if (canClaim) acts.appendChild(_button('Claim', 'gold', () => _data.lobby?.claimSlot?.(idx)));
-    if (isHost) acts.appendChild(_button('🤖 AI', 'ghost', () => _data.lobby?.setSlotAI?.(idx, 'random')));
+    if (isHost) acts.appendChild(_button('\uE07F AI', 'ghost', () => _data.lobby?.setSlotAI?.(idx, 'random')));
     el.appendChild(acts);
   }
   return el;
@@ -907,27 +1082,31 @@ function _othersBattle(body) {
     loading.remove();
     const b = st?.myBattle || (st?.battles && st.battles[0]) || null;
     if (!b) { body.appendChild(_empty('No active Battle right now — check back at the next muster.')); return; }
-    const day = b.dayScore ?? 0, night = b.nightScore ?? 0, total = (day + night) || 1;
+    // Day = hero side, Night = witch side. The server's battle-status payload
+    // carries the cumulative totals as heroScore/witchScore (the canonical
+    // nodeScore fields); accept the day/night aliases too for forward-compat.
+    const day = b.dayScore ?? b.heroScore ?? 0, night = b.nightScore ?? b.witchScore ?? 0;
+    const total = (day + night) || 1;
     const pps = b.maxPerSide ?? 10;
     const card = document.createElement('div');
     card.className = 'lg-battle is-live';
     card.innerHTML =
-      `<div class="lg-battle-head"><span class="gthc">⚔ The Battle for Caleb's Hollow</span><span class="lg-battle-live">● live</span></div>` +
-      `<div class="lg-battle-scorebar"><span class="d">☀ Day ${day}</span>` +
+      `<div class="lg-battle-head"><span class="gthc">${ICON.hero} The Battle for Caleb's Hollow</span><span class="lg-battle-live">● live</span></div>` +
+      `<div class="lg-battle-scorebar"><span class="d">${ICON.day} Day ${day}</span>` +
       `<div class="track"><div class="fill" style="width:${Math.round(day / total * 100)}%"></div></div>` +
-      `<span class="n">${night} Night 🌙</span></div>` +
+      `<span class="n">${night} Night ${ICON.night}</span></div>` +
       `<div class="lg-battle-sub">Persistent ${pps}v${pps} war${b.round != null ? ' · Round ' + b.round : ''}.</div>`;
     body.appendChild(card);
     const mySide = st?.mySide;
     if (mySide) {
-      body.appendChild(_note(`You fight for ${mySide === 'day' ? '☀ Day' : '🌙 Night'}.`));
+      body.appendChild(_note(`You fight for ${mySide === 'day' ? '\uE021 Day' : '\uE023 Night'}.`));
     }
     // Always offer a way into the live game. A player already in the battle needs
     // to RETURN to it (joinBattle with no roomId ⇒ the server routes them back to
     // their own room); an unjoined player JOINS. Previously the in-battle branch
     // rendered only the status note with no button, so a joined player had no way
     // to launch back in — a dead "launch screen that does nothing".
-    const j = _button(mySide ? '⚔ Return to Battle' : '⚔ Join the Battle', 'purple', () => _data.joinBattle?.());
+    const j = _button(mySide ? '\uE000 Return to Battle' : '\uE000 Join the Battle', 'purple', () => _data.joinBattle?.());
     j.style.marginTop = '14px';
     body.appendChild(j);
   }).catch(() => { if (token === _renderToken) { loading.remove(); body.appendChild(_empty('Could not reach the Battle.')); } });
@@ -948,6 +1127,44 @@ const MAP_SIZE_OPTS = [
   { value: 'campaign', label: 'Campaign', sub: '23×23 · long game' },
   { value: 'battle',   label: 'Battle',   sub: '42×42 · epic war' },
 ];
+
+// Power-node count options for a map size — the selectable range is driven by
+// the size's nodeCountMin/nodeCountMax (larger maps reach up to 7; small maps
+// stay narrow). Values are strings to match the dropdown contract; the default
+// for the size is tagged so the picker shows a sensible starting choice.
+export function _nodeCountOpts(mapSize) {
+  const cfg = MAP_SIZES[mapSize] ?? MAP_SIZES.standard;
+  const min = cfg.nodeCountMin ?? 1;
+  const max = cfg.nodeCountMax ?? cfg.nodeCount ?? 3;
+  const def = cfg.nodeCount ?? min;
+  const opts = [];
+  for (let i = min; i <= max; i++) {
+    let sub;
+    if (i === def) sub = 'default';
+    else if (i === min) sub = 'sparse';
+    else if (i === max) sub = 'crowded';
+    opts.push({ value: String(i), label: String(i), sub });
+  }
+  return opts;
+}
+
+// Clamp a node count into a map size's allowed [min,max] range.
+export function _clampNodeCount(mapSize, n) {
+  const cfg = MAP_SIZES[mapSize] ?? MAP_SIZES.standard;
+  const min = cfg.nodeCountMin ?? 1;
+  const max = cfg.nodeCountMax ?? cfg.nodeCount ?? 3;
+  const v = Number.isFinite(n) ? n : (cfg.nodeCount ?? min);
+  return Math.max(min, Math.min(max, v));
+}
+// "Starting Resources" — a faction-tuned cache each side begins with. 'None'
+// keeps the faction defaults (the long-standing baseline); higher levels add
+// summon stock for the witch and sustain/economy for the hero.
+const STARTING_RES_OPTS = [
+  { value: 'none', label: 'None',   sub: 'faction defaults' },
+  { value: 'low',  label: 'Low',    sub: 'a small cache' },
+  { value: 'med',  label: 'Medium', sub: 'a healthy stock' },
+  { value: 'high', label: 'High',   sub: 'a war chest' },
+];
 const CADENCE_OPTS = [
   { value: 'live',  label: 'Live',  sub: 'Timed turns, one sitting' },
   { value: 'async', label: 'Async', sub: 'Play over days; we notify you' },
@@ -964,42 +1181,67 @@ function _bindDropdownClose() {
 
 /** Custom dropdown matching the ledger aesthetic, with per-option subtext.
  *  options: [{ value, label, sub? }]. Returns an element exposing a live `.value`. */
-function _dropdown(options, value, onChange) {
+export function _dropdown(options, value, onChange) {
   _bindDropdownClose();
   let cur = value ?? options[0]?.value;
+  let curOptions = options;
   const root = document.createElement('div');
   root.className = 'lg-dd';
   Object.defineProperty(root, 'value', { get: () => cur, configurable: true });
-  const labelFor = (v) => options.find((o) => o.value === v)?.label ?? v;
+  const labelFor = (v) => curOptions.find((o) => o.value === v)?.label ?? v;
   const capBtn = document.createElement('button');
   capBtn.type = 'button';
   capBtn.className = 'lg-dd-cap';
   const renderCap = () => { capBtn.innerHTML = `<span class="lg-dd-cur">${esc(labelFor(cur))}</span><span class="lg-dd-arrow">▾</span>`; };
-  renderCap();
   const menu = document.createElement('div');
   menu.className = 'lg-dd-menu';
-  for (const o of options) {
-    const item = document.createElement('button');
-    item.type = 'button';
-    item.className = 'lg-dd-item' + (o.value === cur ? ' is-sel' : '') + (o.disabled ? ' is-soon' : '');
-    item.innerHTML = `<span class="lg-dd-item-label">${esc(o.label)}</span>` +
-      (o.sub ? `<span class="lg-dd-item-sub">${esc(o.sub)}</span>` : '');
-    if (o.disabled) {
-      // Visible but unpickable (e.g. a demo-blocked champion).
-      item.disabled = true;
-      item.setAttribute('aria-disabled', 'true');
-    } else {
-      item.addEventListener('click', (e) => {
-        e.stopPropagation();
-        cur = o.value;
-        renderCap();
-        menu.querySelectorAll('.lg-dd-item').forEach((el) => el.classList.toggle('is-sel', el === item));
-        root.classList.remove('is-open');
-        onChange?.(cur);
-      });
+  // (Re)build the menu items from `curOptions`, keeping `cur` if still present
+  // (else snapping to the first pickable option). `silent` skips the onChange
+  // callback — used by setOptions so re-clamping the value doesn't recurse.
+  const buildMenu = (silent) => {
+    menu.replaceChildren();
+    if (!curOptions.some((o) => o.value === cur && !o.disabled)) {
+      const next = curOptions.find((o) => !o.disabled) ?? curOptions[0];
+      const changed = next && next.value !== cur;
+      cur = next?.value ?? cur;
+      if (changed && !silent) onChange?.(cur);
     }
-    menu.appendChild(item);
-  }
+    for (const o of curOptions) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'lg-dd-item' + (o.value === cur ? ' is-sel' : '') + (o.disabled ? ' is-soon' : '');
+      item.innerHTML = `<span class="lg-dd-item-label">${esc(o.label)}</span>` +
+        (o.sub ? `<span class="lg-dd-item-sub">${esc(o.sub)}</span>` : '');
+      if (o.disabled) {
+        // Visible but unpickable (e.g. a demo-blocked champion).
+        item.disabled = true;
+        item.setAttribute('aria-disabled', 'true');
+      } else {
+        item.addEventListener('click', (e) => {
+          e.stopPropagation();
+          cur = o.value;
+          renderCap();
+          menu.querySelectorAll('.lg-dd-item').forEach((el) => el.classList.toggle('is-sel', el === item));
+          root.classList.remove('is-open');
+          onChange?.(cur);
+        });
+      }
+      menu.appendChild(item);
+    }
+    renderCap();
+  };
+  // Swap the option set (e.g. node-count range follows the selected map size).
+  // Optionally pin the selection to `desiredValue` (a pre-clamped value the
+  // caller wants shown); if it isn't in the new set, buildMenu snaps to the
+  // first pickable option. Never fires onChange (silent re-clamp).
+  root.setOptions = (next, desiredValue) => {
+    curOptions = next;
+    if (desiredValue != null && next.some((o) => o.value === String(desiredValue) && !o.disabled)) {
+      cur = String(desiredValue);
+    }
+    buildMenu(true);
+  };
+  buildMenu(true);
   capBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     const willOpen = !root.classList.contains('is-open');
@@ -1070,7 +1312,7 @@ function _panelAccount(body) {
   body.appendChild(_editRow('New name', 'text', (val, status) => {
     status('Saving…');
     Promise.resolve(_data?.setUsername?.(val)).then((r) => {
-      status(r?.ok ? 'Saved ✓' : (r?.error || 'Could not change name'), r?.ok);
+      status(r?.ok ? 'Saved \uE071' : (r?.error || 'Could not change name'), r?.ok);
       if (r?.ok) setTimeout(() => select('account'), 700);
     });
   }));
@@ -1079,7 +1321,7 @@ function _panelAccount(body) {
   body.appendChild(_editRow('you@example.com', 'email', (val, status) => {
     status('Sending…');
     Promise.resolve(_data?.linkEmail?.(val)).then((r) =>
-      status(r?.ok ? (r.message || 'Check your email ✓') : (r?.error || 'Could not send link'), r?.ok));
+      status(r?.ok ? (r.message || 'Check your email \uE071') : (r?.error || 'Could not send link'), r?.ok));
   }));
 
   const out = _button('Sign out', 'ghost', () => _data?.signOut?.());
@@ -1198,7 +1440,7 @@ function _resumeHero(row) {
   wrap.className = 'lg-resume';
   wrap.innerHTML =
     `<div class="lg-resume-thumb${thumb ? ' has-img' : ''}" aria-hidden="true"` +
-      `${thumb ? ` style="background-image:url(${thumb})"` : ''}>${thumb ? '' : '🜂'}</div>` +
+      `${thumb ? ` style="background-image:url(${thumb})"` : ''}>${thumb ? '' : '\uE08D'}</div>` +
     `<div class="lg-resume-body">` +
       `<div class="lg-resume-kicker">${row.action_needed ? 'Your turn' : 'Continue'}</div>` +
       `<div class="lg-resume-title gthc">${esc(f.title)}</div>` +
@@ -1223,7 +1465,7 @@ function _resumeHero(row) {
   }
   const actions = document.createElement('div');
   actions.className = 'lg-resume-actions lg-feed-actions';
-  _fillGameActions(actions, row, '▶ Resume');
+  _fillGameActions(actions, row, `${ICON.play} Resume`);
   wrap.querySelector('.lg-resume-body').appendChild(actions);
   return wrap;
 }
@@ -1280,17 +1522,37 @@ function _detailStatsHTML(d) {
   out.push(`<div class="lg-detail-meta">${meta.join(' · ')}</div>`);
 
   if (d.score) {
-    const max = d.score.threshold || 4;
-    const pips = (side, n) => Array.from({ length: max }, (_, i) =>
-      `<span class="score-pip ${side}${i < n ? ' filled' : ''}"></span>`).join('');
-    const dots = (d.nodes || []).map((n) =>
-      `<span class="node-dot ${esc(n.controller)}" style="border-color:${esc(n.color)}"></span>`).join('');
-    out.push(`<div class="lg-detail-stat lg-detail-score"><span>Node score</span>` +
-      `<span class="lg-detail-tracks">` +
-        `<span class="score-track hero-track">${pips('hero', d.score.hero)}</span>` +
-        (dots ? `<span class="node-dots-group">${dots}</span>` : '') +
-        `<span class="score-track witch-track">${pips('witch', d.score.witch)}</span>` +
-      `</span><i>first to ${max}</i></div>`);
+    if (d.kind === 'battle') {
+      // The persistent Battle has NO first-to-N node goal, so the 4-dot tracker
+      // is misleading. Show the cumulative per-side total instead, mirroring the
+      // live battle card's .lg-battle-scorebar (hero score = Day, witch = Night).
+      const day = d.score.hero ?? 0, night = d.score.witch ?? 0;
+      const total = (day + night) || 1;
+      out.push(`<div class="lg-detail-stat lg-detail-score"><span>Score</span>` +
+        `<span class="lg-detail-tracks"><span class="lg-battle-scorebar">` +
+          `<span class="d">${ICON.day} Day ${day}</span>` +
+          `<div class="track"><div class="fill" style="width:${Math.round(day / total * 100)}%"></div></div>` +
+          `<span class="n">${night} Night ${ICON.night}</span>` +
+        `</span></span></div>`);
+      // Battle has no first-to-N score goal, but who currently holds each Power
+      // Node is still meaningful — keep the control circles (just not the pips).
+      const dots = (d.nodes || []).map((n) =>
+        `<span class="node-dot ${esc(n.controller)}" style="border-color:${esc(n.color)}"></span>`).join('');
+      if (dots) out.push(`<div class="lg-detail-stat lg-detail-score"><span>Nodes</span>` +
+        `<span class="lg-detail-tracks"><span class="node-dots-group">${dots}</span></span></div>`);
+    } else {
+      const max = d.score.threshold || 4;
+      const pips = (side, n) => Array.from({ length: max }, (_, i) =>
+        `<span class="score-pip ${side}${i < n ? ' filled' : ''}"></span>`).join('');
+      const dots = (d.nodes || []).map((n) =>
+        `<span class="node-dot ${esc(n.controller)}" style="border-color:${esc(n.color)}"></span>`).join('');
+      out.push(`<div class="lg-detail-stat lg-detail-score"><span>Node score</span>` +
+        `<span class="lg-detail-tracks">` +
+          `<span class="score-track hero-track">${pips('hero', d.score.hero)}</span>` +
+          (dots ? `<span class="node-dots-group">${dots}</span>` : '') +
+          `<span class="score-track witch-track">${pips('witch', d.score.witch)}</span>` +
+        `</span><i>first to ${max}</i></div>`);
+    }
   }
   if (d.kills) {
     out.push(`<div class="lg-detail-stat"><span>Slain</span>` +
@@ -1322,9 +1584,9 @@ function _openGameDetail(row) {
   panel.className = 'lg-detail';
   panel.innerHTML =
     `<div class="lg-detail-img${d.thumb ? ' has-img' : ''}"` +
-      `${d.thumb ? ` style="background-image:url(${d.thumb})"` : ''}>${d.thumb ? '' : '🜂'}</div>` +
+      `${d.thumb ? ` style="background-image:url(${d.thumb})"` : ''}>${d.thumb ? '' : '\uE08D'}</div>` +
     `<div class="lg-detail-side">${_detailStatsHTML(d)}</div>` +
-    `<button class="lg-detail-close" aria-label="Close">✕</button>`;
+    `<button class="lg-detail-close" aria-label="Close">${ICON.close}</button>`;
   const close = () => { back.remove(); document.removeEventListener('keydown', onKey); };
   const onKey = (e) => { if (e.key === 'Escape') close(); };
   back.addEventListener('click', (e) => { if (e.target === back) close(); });
@@ -1338,7 +1600,7 @@ function _openGameDetail(row) {
  *  re-renders the panel (the abandoned game drops out of the refreshed list). */
 function _fillGameActions(actions, row, cta = null) {
   actions.replaceChildren();
-  actions.appendChild(_button(cta || (row.action_needed ? 'Your turn ▸' : '▶ Resume'), 'gold', () => _activateRow(row)));
+  actions.appendChild(_button(cta || (row.action_needed ? 'Your turn ▸' : `${ICON.play} Resume`), 'gold', () => _activateRow(row)));
   if (!_data?.abandonable?.(row)) return;
   actions.appendChild(_button('Abandon', 'danger', () => {
     const q = document.createElement('span');
@@ -1365,7 +1627,9 @@ function _activateRow(row) {
 function _missionRow(slot, m, status, index, campaignId) {
   const playable = status === 'current' || status === 'available';
   const resume = status === 'current' && slot.resumeMissionId === m.id;
-  const mark = status === 'done' ? '✓' : status === 'locked' ? '🔒' : '◆';
+  const mark = status === 'done' ? '\uE071'
+    : (status === 'locked' || status === 'disabled') ? '\uE081'
+    : '◆';
   // Map image: the live saved thumbnail when this mission is in progress (keyed
   // by its row id `<campaignId>/slot<N>/<missionId>`, captured at round-end like
   // a skirmish), else the mission's fixed pre-generated map image.
@@ -1373,16 +1637,21 @@ function _missionRow(slot, m, status, index, campaignId) {
   const img = missionThumb(m.id, rowId);
   const el = document.createElement('div');
   el.className = 'lg-mission is-' + status + (playable ? ' is-playable' : '');
+  // Stable hooks for the browser-verification harness (startCampaignMission):
+  // pick a row by mission id (or title) without depending on text/DOM order.
+  el.dataset.missionId = m.id;
+  el.dataset.missionTitle = m.title || m.id;
   el.innerHTML =
     `<span class="lg-mission-thumb" aria-hidden="true"${img ? ` style="background-image:url(${img})"` : ''}></span>` +
     `<span class="lg-mission-n gthc">${esc(_missionNumLabel(index))}</span>` +
     `<span class="lg-mission-name">${esc(m.title || m.id)}</span>` +
     (playable
-      ? `<button class="lg-btn lg-btn-gold lg-btn-sm">${resume ? '▶ Resume' : '▶ Play'}</button>`
+      ? `<button class="lg-btn lg-btn-gold lg-btn-sm">${resume ? `${ICON.play} Resume` : `${ICON.play} Play`}</button>`
       : `<span class="lg-mission-mark">${mark}</span>`);
   if (playable) {
     const go = (e) => {
       e?.stopPropagation?.();
+      _campBriefingReturn = null; _campConfirmAbandon = false;   // fresh briefing entry
       _campBriefing = { slot: slot.slot, missionId: m.id, resume, title: m.title || m.id, briefing: m.briefing || '', index, campaignId };
       select('campaign');
     };
@@ -1444,7 +1713,7 @@ function _gameTimeMeta(row) {
   const dl = _countdown(row.turn_deadline);
   const bits = [];
   if (last) bits.push(`last turn ${last}`);
-  if (dl) bits.push(`⏱ ${dl}`);
+  if (dl) bits.push(`${ICON.timer} ${dl}`);
   return bits.join(' · ');
 }
 

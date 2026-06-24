@@ -37,7 +37,7 @@ export const ITEMS = Object.freeze({
     category: 'melee',
     statMods: { attack: 2, defense: 0 },
     damage: { count: 2, sides: 6 },          // 2D6 (avg 7) — the workhorse blade
-    label: '⚔ Sword (+2 ATK)',
+    label: '\uE0A2 Sword (+2 ATK)',
   },
   axe: {
     id: 'axe',
@@ -46,7 +46,7 @@ export const ITEMS = Object.freeze({
     category: 'melee',
     statMods: { attack: 1, defense: 1 },
     damage: { count: 1, sides: 12, flat: 1 }, // 1D12+1 (avg 7.5) — swingy
-    label: '🪓 Axe (+1 ATK, +1 DEF)',
+    label: '\uE041 Axe (+1 ATK, +1 DEF)',
   },
   bow: {
     id: 'bow',
@@ -57,7 +57,7 @@ export const ITEMS = Object.freeze({
     damage: { count: 2, sides: 4 },          // 2D4 (avg 5) — ranged, no crush
     range: 3,
     projectileType: 'bolt',
-    label: '🏹 Bow (range 3)',
+    label: '\uE043 Bow (range 3)',
   },
   crossbow: {
     id: 'crossbow',
@@ -68,7 +68,7 @@ export const ITEMS = Object.freeze({
     damage: { count: 1, sides: 10 },         // 1D10 (avg 5.5)
     range: 2,
     projectileType: 'bolt',
-    label: '🏹 Crossbow (+1 ATK, range 2)',
+    label: '\uE043 Crossbow (+1 ATK, range 2)',
   },
   musket: {
     id: 'musket',
@@ -79,7 +79,7 @@ export const ITEMS = Object.freeze({
     damage: { count: 2, sides: 8 },          // 2D8 (avg 9) — premium, no crush
     range: 2,
     projectileType: 'bolt',
-    label: '🔫 Musket (+2 ATK, range 2)',
+    label: '\uE044 Musket (+2 ATK, range 2)',
   },
   pistol: {
     id: 'pistol',
@@ -90,7 +90,7 @@ export const ITEMS = Object.freeze({
     damage: { count: 1, sides: 10 },         // 1D10 (avg 5.5)
     range: 2,
     projectileType: 'bolt',
-    label: '🔫 Flintlock (+1 ATK, range 2)',
+    label: '\uE044 Flintlock (+1 ATK, range 2)',
   },
   sling: {
     id: 'sling',
@@ -101,7 +101,7 @@ export const ITEMS = Object.freeze({
     damage: { count: 2, sides: 4 },          // 2D4 (avg 5)
     range: 2,
     projectileType: 'bolt',
-    label: '🪨 Sling (range 2)',
+    label: '\uE045 Sling (range 2)',
   },
   shield: {
     id: 'shield',
@@ -110,7 +110,7 @@ export const ITEMS = Object.freeze({
     category: 'melee',
     statMods: { attack: 0, defense: 2 },
     damage: { count: 2, sides: 6 },          // 2D6 (avg 7) — defensive, normal dmg
-    label: '🛡 Shield (+2 DEF)',
+    label: '\uE042 Shield (+2 DEF)',
   },
   staff: {
     id: 'staff',
@@ -119,7 +119,7 @@ export const ITEMS = Object.freeze({
     category: 'melee',
     statMods: { attack: 1, defense: 0 },
     damage: { count: 2, sides: 6 },          // 2D6 (avg 7) — edge is the undead advantage
-    label: '🪄 Staff (+1 ATK, advantage vs undead)',
+    label: '\uE046 Staff (+1 ATK, advantage vs undead)',
     // Grants +1 attack advantage die vs undead defenders only (zombies).
     // Pre-refactor this also fired against minions and golems, but that
     // effectively made the staff a flat +adv vs every witch unit — not
@@ -136,7 +136,7 @@ export const ITEMS = Object.freeze({
     category: 'melee',
     statMods: { attack: 1, defense: 0 },
     damage: { count: 1, sides: 10 },         // 1D10 (avg 5.5) — fast, light
-    label: '🗡 Dagger (+1 ATK)',
+    label: '\uE040 Dagger (+1 ATK)',
   },
   // ── Premium tier ──────────────────────────────────────────────────────────
   // Rarer, stronger weapons that only appear later in a game (gated by round
@@ -150,7 +150,7 @@ export const ITEMS = Object.freeze({
     category: 'melee',
     statMods: { attack: 3, defense: 0 },
     damage: { count: 3, sides: 6 },          // 3D6 (avg 10.5) — heavy two-hander
-    label: '⚔ Great Sword (+3 ATK)',
+    label: '\uE0A2 Great Sword (+3 ATK)',
   },
   warhammer: {
     id: 'warhammer',
@@ -159,7 +159,7 @@ export const ITEMS = Object.freeze({
     category: 'melee',
     statMods: { attack: 2, defense: 1 },
     damage: { count: 1, sides: 12, flat: 4 }, // 1D12+4 (avg 10.5) — swingy, crushes hard
-    label: '⚒ War Hammer (+2 ATK, +1 DEF)',
+    label: '\uE047 War Hammer (+2 ATK, +1 DEF)',
   },
   longrifle: {
     id: 'longrifle',
@@ -170,7 +170,7 @@ export const ITEMS = Object.freeze({
     damage: { count: 2, sides: 8, flat: 2 },  // 2D8+2 (avg 11) — premium marksman
     range: 3,
     projectileType: 'bolt',
-    label: '🔫 Long Rifle (+3 ATK, range 3)',
+    label: '\uE044 Long Rifle (+3 ATK, range 3)',
   },
   // Witch / Necromancer innate ranged attack. Issued as starting gear via
   // Faction.innateLeaderWeapon; never looted (noLoot) and equippable only
@@ -189,7 +189,7 @@ export const ITEMS = Object.freeze({
     projectileType: 'sparkle',
     wielderFactions: ['witch', 'necromancer'],
     noLoot: true,
-    label: '✨ Magic Bolt (+1 ATK, range 2)',
+    label: '\uE062 Magic Bolt (+1 ATK, range 2)',
   },
 
   // ── Key items ────────────────────────────────────────────────────────────
@@ -202,7 +202,7 @@ export const ITEMS = Object.freeze({
   horn: {
     id: 'horn',
     kind: 'key',
-    label: '📯 Horn',
+    label: '\uE049 Horn',
     noLoot: true,        // never rolls on a random loot table; placed by hand
   },
 });
@@ -214,13 +214,13 @@ export function getItem(id) {
 // Discovered loot that isn't a registered ITEM (horse mount + raw resources)
 // still wants a readable, stat-bearing label in the action card / round summary.
 const NON_ITEM_LOOT_LABELS = Object.freeze({
-  horse:     '🐴 Horse (+1 move)',
-  herbs:     '🌿 Herbs',
-  wood:      '🪵 Wood',
-  metal:     '⚙ Metal',
-  food:      '🍞 Food',
-  silver:    '🥈 Silver',
-  scripture: '📜 Scripture',
+  horse:     '\uE048 Horse (+1 move)',
+  herbs:     '\uE015 Herbs',
+  wood:      '\uE010 Wood',
+  metal:     '\uE011 Metal',
+  food:      '\uE012 Food',
+  silver:    '\uE013 Silver',
+  scripture: '\uE014 Scripture',
 });
 
 /**

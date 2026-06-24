@@ -402,12 +402,15 @@ describe('R5 — _buildRiverBankMeshes integration', () => {
       `_riverFlowTextures should hold one diffuse texture per per-tile river clone (expected ${segments.length}, got ${inst._riverFlowTextures.length})`);
   });
 
-  // R5 polish 3 — the playable splat material must `disableDepthWrite` so the
-  // displaced river-hex cone (centre/corners at riverCornerY) does not
-  // depth-occlude the water ribbon at RIVER_BED_Y. Border splat already does
-  // this via its alpha-blend pipeline; the opaque playable splat needs the
-  // explicit flag.
-  test('_buildSplatMaterial(opaque) sets disableDepthWrite so the river-hex cone does not occlude the water', () => {
+  // Z-buffer refit — the playable splat now WRITES DEPTH (disableDepthWrite
+  // false). The river stays visible because the channel-sink pass carves a flat
+  // trench floor (centre + inner ring below RIVER_BED_Y across a radius wider
+  // than the max water half-width), so the water clears the splat without the
+  // old workaround. Writing depth makes the terrain a true occluder so bridge
+  // decks + the playable/border seam sort correctly via the z-buffer instead of
+  // fragile transparent-pass alphaIndex stacking. The BORDER splat keeps
+  // disableDepthWrite (it is alpha-blended — separate test).
+  test('_buildSplatMaterial(opaque) WRITES depth (no disableDepthWrite) — terrain is a real occluder', () => {
     const inst = Object.create(Renderer3D.prototype);
     inst._babylon = {
       StandardMaterial: function (name) {
@@ -424,8 +427,32 @@ describe('R5 — _buildRiverBankMeshes integration', () => {
     inst._fogTileDarken = 1;
     inst._terrainDetailTexture = () => null;
     const mat = inst._buildSplatMaterial({ alphaBlend: false });
+    assert.equal(mat.disableDepthWrite, false,
+      'playable (opaque) splat must write depth so props/bridges/seams occlude correctly via the z-buffer');
+  });
+
+  // The BORDER (alpha-blended wilderness) splat must STILL skip depth-write so
+  // its per-ring edge dissolve composites cleanly — only the playable splat
+  // flipped to writing depth.
+  test('_buildSplatMaterial(border) keeps disableDepthWrite for the alpha dissolve', () => {
+    const inst = Object.create(Renderer3D.prototype);
+    inst._babylon = {
+      StandardMaterial: function (name) {
+        this.name = name;
+        this.disableDepthWrite = false;
+        this.transparencyMode = 0;
+        this.backFaceCulling = true;
+        this.specularColor = null;
+      },
+      Color3: function (r, g, b) { this.r = r; this.g = g; this.b = b; },
+      Material: { MATERIAL_ALPHABLEND: 2 },
+    };
+    inst._scene = {};
+    inst._fogTileDarken = 1;
+    inst._terrainDetailTexture = () => null;
+    const mat = inst._buildSplatMaterial({ alphaBlend: true });
     assert.equal(mat.disableDepthWrite, true,
-      'playable (opaque) splat material must disableDepthWrite so the river-hex cone does not depth-occlude the water ribbon');
+      'border (alpha-blend) splat must keep disableDepthWrite so the edge dissolve composites cleanly');
   });
 });
 
@@ -438,10 +465,20 @@ describe('riverCornerY (pure helper)', () => {
   test('3 water neighbours → full bed depth', () => {
     assert.equal(riverCornerY(3), RIVER_BED_Y);
   });
-  test('monotonic in waterCount (1 < 2 in magnitude)', () => {
-    assert.ok(riverCornerY(1) < 0 && riverCornerY(1) > RIVER_BED_Y);
-    assert.ok(riverCornerY(2) < riverCornerY(1)); // deeper
-    assert.ok(riverCornerY(2) > RIVER_BED_Y);
+  test('2 water neighbours → full bed depth (water flows across this corner)', () => {
+    // Z-buffer refit — a corner shared by ≥2 water tiles is on the river's flow
+    // path; with the depth-writing splat it MUST reach full bed depth or the
+    // terrain occludes the water at every straight-reach tile seam.
+    assert.equal(riverCornerY(2), RIVER_BED_Y);
+  });
+  test('1 water neighbour → shallow dry bank (between ground and bed)', () => {
+    assert.ok(riverCornerY(1) < 0 && riverCornerY(1) > RIVER_BED_Y,
+      `waterCount 1 should be a partial bank slope, got ${riverCornerY(1)}`);
+  });
+  test('monotonic deepening 0 → 1 → 2 in magnitude', () => {
+    assert.equal(riverCornerY(0), 0);
+    assert.ok(riverCornerY(1) < riverCornerY(0)); // deeper than ground
+    assert.ok(riverCornerY(2) < riverCornerY(1)); // deeper than the bank
   });
   test('clamps negative / out-of-range input', () => {
     assert.equal(riverCornerY(-2), 0);
@@ -466,7 +503,7 @@ describe('SPLAT_RIVER_CENTRE_EPS — channel constant', () => {
 // Integration: build a real splat ground over a tiny river map and verify
 // both (a) the centre/corner Y values match the spec and (b) every corner
 // shared by multiple hexes lands at the SAME Y across all sharers.
-describe('_buildSplatPlayableMesh — symmetric channel displacement', () => {
+describe('_buildSplatPlayableMesh — river hexes excluded, ground stays flat', () => {
   function makeSplatBabylon() {
     const Color3 = makeColor3();
     class Vector3 {
@@ -531,6 +568,10 @@ describe('_buildSplatPlayableMesh — symmetric channel displacement', () => {
     const baseV = range.get(hexKey(col, row));
     return mesh.positions[baseV * 3 + 1];
   }
+  function innerY(mesh, range, col, row, j) {
+    const baseV = range.get(hexKey(col, row));
+    return mesh.positions[(baseV + 7 + j) * 3 + 1];
+  }
   function cornerXZ(mesh, range, col, row, j) {
     const baseV = range.get(hexKey(col, row));
     return {
@@ -539,20 +580,30 @@ describe('_buildSplatPlayableMesh — symmetric channel displacement', () => {
     };
   }
 
-  test('river hex centre sits BELOW the water ribbon (no z-fight)', () => {
-    // Horizontal river across row=1: (1,1) (2,1) (3,1).
+  test('river/bridge hexes are NOT emitted into the merged ground', () => {
+    // Horizontal river across row=1: (1,1) (2,1) (3,1) — each is now its own
+    // standalone cut-channel mesh, so the merged ground skips them entirely.
     const tiles = makeMap(new Set(['1,1', '2,1', '3,1']));
     const inst = setupSplatInst(tiles);
     inst._buildSplatPlayableMesh({ name: 'root' });
-    const mesh  = inst._splatGround;
     const range = inst._hexVertexRange;
     for (const [c, r] of [[1, 1], [2, 1], [3, 1]]) {
-      assert.ok(centreY(mesh, range, c, r) < RIVER_BED_Y,
-        `river hex (${c},${r}) centre Y ${centreY(mesh, range, c, r)} should sit below RIVER_BED_Y ${RIVER_BED_Y}`);
+      assert.equal(range.get(hexKey(c, r)), undefined,
+        `river hex (${c},${r}) should be excluded from the merged ground`);
     }
-    // Grass hex centre stays at ground level.
-    assert.equal(centreY(mesh, range, 0, 0), 0);
-    assert.equal(centreY(mesh, range, 2, 0), 0);
+    // Grass hexes are still emitted.
+    assert.ok(range.get(hexKey(0, 0)) != null, 'grass hex (0,0) should be emitted');
+    assert.ok(range.get(hexKey(2, 0)) != null, 'grass hex (2,0) should be emitted');
+  });
+
+  test('the merged ground stays flat (Y=0) — no channel carving', () => {
+    const tiles = makeMap(new Set(['1,1', '2,1', '3,1']));
+    const inst = setupSplatInst(tiles);
+    inst._buildSplatPlayableMesh({ name: 'root' });
+    const mesh = inst._splatGround;
+    for (let i = 1; i < mesh.positions.length; i += 3) {
+      assert.equal(mesh.positions[i], 0, `merged-ground vertex Y (index ${i}) should be 0`);
+    }
   });
 
   test('corner shared by 3 grass hexes stays at Y=0', () => {
@@ -567,65 +618,7 @@ describe('_buildSplatPlayableMesh — symmetric channel displacement', () => {
     }
   });
 
-  test('every shared corner agrees on Y across all hexes that touch it', () => {
-    // Horizontal river through the middle row + one tributary going up from (2,1) to (2,0).
-    const tiles = makeMap(new Set(['1,1', '2,1', '3,1', '2,0']));
-    const inst = setupSplatInst(tiles);
-    inst._buildSplatPlayableMesh({ name: 'root' });
-    const mesh  = inst._splatGround;
-    const range = inst._hexVertexRange;
-    // Group every corner vertex by (rounded) XZ position; assert all Y values
-    // in each group are identical. That's the symmetric-corner-drop invariant.
-    const groups = new Map();
-    for (const tile of tiles.values()) {
-      for (let j = 0; j < 6; j++) {
-        const { x, z } = cornerXZ(mesh, range, tile.col, tile.row, j);
-        const y = cornerY(mesh, range, tile.col, tile.row, j);
-        const k = `${x.toFixed(4)},${z.toFixed(4)}`;
-        if (!groups.has(k)) groups.set(k, []);
-        groups.get(k).push({ col: tile.col, row: tile.row, j, y });
-      }
-    }
-    for (const [k, members] of groups) {
-      if (members.length < 2) continue; // unshared border corner
-      const y0 = members[0].y;
-      for (const m of members) {
-        // Float32 round-trip can lose a few ULPs; sub-1e-5 still nails the
-        // "agree" invariant we care about (any real seam would be cm-scale).
-        assert.ok(Math.abs(m.y - y0) < 1e-5,
-          `corner ${k} sees Y=${y0} from ${members[0].col},${members[0].row}#${members[0].j} `
-          + `but Y=${m.y} from ${m.col},${m.row}#${m.j} — seam gap!`);
-      }
-    }
-  });
-
-  test('corner interior to a 3-water junction lands at the full bed depth', () => {
-    // Three river hexes meeting at a single corner: (1,1), (2,1), (2,0)
-    // share corner — that corner should sit at riverCornerY(3) = RIVER_BED_Y.
-    const tiles = makeMap(new Set(['1,1', '2,1', '2,0']));
-    const inst = setupSplatInst(tiles);
-    inst._buildSplatPlayableMesh({ name: 'root' });
-    const mesh  = inst._splatGround;
-    const range = inst._hexVertexRange;
-    // Walk every shared corner and find the deepest Y; for this map the corner
-    // shared by all 3 water tiles is the deepest, exactly RIVER_BED_Y.
-    const groups = new Map();
-    for (const tile of tiles.values()) {
-      for (let j = 0; j < 6; j++) {
-        const { x, z } = cornerXZ(mesh, range, tile.col, tile.row, j);
-        const y = cornerY(mesh, range, tile.col, tile.row, j);
-        const k = `${x.toFixed(4)},${z.toFixed(4)}`;
-        if (!groups.has(k)) groups.set(k, { count: 0, y });
-        groups.get(k).count++;
-      }
-    }
-    let deepest = 0;
-    for (const g of groups.values()) {
-      if (g.count >= 3 && g.y < deepest) deepest = g.y;
-    }
-    // Float32 storage loses ~1e-7 of precision on RIVER_BED_Y; allow a tiny
-    // tolerance and assert depth (not exact equality).
-    assert.ok(Math.abs(deepest - RIVER_BED_Y) < 1e-5,
-      `corner shared by 3 water hexes should sit at RIVER_BED_Y ${RIVER_BED_Y}, got ${deepest}`);
-  });
+  // (The old shared-corner-agreement and 3-water-junction depth tests are gone:
+  // the merged ground no longer carves the channel — river hexes are standalone
+  // cut-channel meshes, covered by tests/river-channel-mesh.test.js.)
 });

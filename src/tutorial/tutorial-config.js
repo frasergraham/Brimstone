@@ -197,7 +197,7 @@ export const TUTORIAL_STEPS = [
   {
     id: 'welcome',
     title: 'The Road to Caleb\'s Hollow',
-    body: 'Shadows stir in the forest — something is not right. You play as the ⚔ Hero; let\'s learn by doing.',
+    body: 'Shadows stir in the forest — something is not right. You play as the \uE000 Hero; let\'s learn by doing.',
     trigger: 'click',
     spotlight: null,
     tooltipPos: 'center',
@@ -227,7 +227,7 @@ export const TUTORIAL_STEPS = [
   {
     id: 'select_hero',
     title: 'Select Your Hero',
-    body: 'Click your ⚔ Hero on the map.',
+    body: 'Click your \uE000 Hero on the map.',
     trigger: { type: 'entity_selected', entityType: EntityType.HERO },
     spotlight: { type: 'hex', col: 2, row: 7, arrow: 'down' },
     tooltipPos: 'bottom-left',
@@ -247,7 +247,7 @@ export const TUTORIAL_STEPS = [
     title: 'Action Budget',
     body: 'Every action a unit takes spends one point from your side\'s shared budget — the badge tracks what\'s left this round.',
     trigger: 'click',
-    spotlight: { type: 'element', selector: '#plan-budget-badge', arrow: 'right' },
+    spotlight: { type: 'element', selector: '#turn-info', arrow: 'up' },
     tooltipPos: 'center',
     witchPlan: null,
   },
@@ -284,7 +284,7 @@ export const TUTORIAL_STEPS = [
   {
     id: 'combat_intro',
     title: 'A Minion Blocks the Road!',
-    body: 'A witch\'s minion has emerged from the tree line. Select your ⚔ Hero, then click the enemy to attack it.',
+    body: 'A witch\'s minion has emerged from the tree line. Select your \uE000 Hero, then click the enemy to attack it.',
     trigger: { type: 'action_queued', actionType: PlanActionType.BATTLE_UNIT },
     spotlight: { type: 'hex', col: 3, row: 5, arrow: 'down' },
     tooltipPos: 'bottom-left',
@@ -320,7 +320,7 @@ export const TUTORIAL_STEPS = [
   {
     id: 'day_night',
     title: 'Day / Night Cycle',
-    body: 'The badge shows the 8-round cycle: 🌅 Dawn → ☀ Day → 🌇 Dusk → 🌙 Night. Enemies grow stronger at night; Dawn and Dusk are scoring checkpoints.',
+    body: 'The badge shows the 8-round cycle: \uE020 Dawn → \uE021 Day → \uE022 Dusk → \uE023 Night. Enemies grow stronger at night; Dawn and Dusk are scoring checkpoints.',
     trigger: 'click',
     spotlight: { type: 'element', selector: '#cycle-bump', arrow: 'down' },
     tooltipPos: 'center',
@@ -382,7 +382,7 @@ export const TUTORIAL_STEPS = [
     title: 'One Budget, Many Units',
     body: 'Queue a Move for the survivor too. All your units spend from the same action budget — watch the badge tick down.',
     trigger: { type: 'action_queued', actionType: PlanActionType.MOVE, entityType: EntityType.SURVIVOR },
-    spotlight: { type: 'element', selector: '#plan-budget-badge', arrow: 'right' },
+    spotlight: { type: 'element', selector: '#turn-info', arrow: 'up' },
     tooltipPos: 'bottom-left',
     witchPlan: null,
   },

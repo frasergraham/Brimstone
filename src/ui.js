@@ -1,5 +1,6 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
 import { hexKey, hexToPixel, hexDistance, MAP_COLS, MAP_ROWS } from './hex.js';
+import { ICON, coloredResourceIcon, coloredResourceLabel, tintResourceGlyphs } from './icons.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, FORTIFY_HP_PER_LEVEL, getFortifyCombatBonus, legacyTileType } from './tiles.js';
 import { ITEMS, lootDisplayLabel } from './items.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf, rangeOf, getEquippedWeaponIdOf, getItemCountOf, totalItemCount, applyProjectedEquip } from './entities.js';
@@ -7,7 +8,7 @@ import { DAMAGE_SCALE } from './balance.js';
 import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
 import { makeOverlay } from './overlays.js';
-import { concreteFactionOf } from './factions.js';
+import { concreteFactionOf, getFaction } from './factions.js';
 import {
   ActionType, getValidActions, getVisiblePositions, computeCombatOdds,
 } from './actions.js';
@@ -20,7 +21,7 @@ import { compileTurnBattleSummary, compileTurnXpSummary } from './battle-utils.j
 import { buildWrapupCombatsHtml, wrapupIconHtml } from './wrapup-summary.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
-import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildMissionLogHtml, buildMissionLogDescriptionHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos, TurnCardAutoScroll, shouldAutoScrollToActive, computeFadeFlags } from './ui-render.js';
+import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildMissionLogHtml, buildMissionLogDescriptionHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, buildCycleDeadlineHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos, TurnCardAutoScroll, shouldAutoScrollToActive, computeFadeFlags, buildActionPipsHtml, buildActionBudgetTooltipHtml, levelPillHtml } from './ui-render.js';
 import {
   hideActionPopup, getEntityScreenPos, computeArcPositions,
   positionArcPopup, startArcTracking, positionPopup,
@@ -44,6 +45,19 @@ export function isDebugToggleClick(e) {
   if (!t) return false;
   if (typeof t.closest === 'function') return !!t.closest('.actions-label');
   return !!(t.classList && t.classList.contains('actions-label'));
+}
+
+/** Canonical in-game header title state. The top bar shows exactly ONE of three
+ *  titles: PLANNING (building a plan), WAITING (plan locked, awaiting opponents
+ *  online), or RESOLUTION (the round resolving / being replayed — this also
+ *  covers the offline round summary and AI-vs-AI auto-play). Pure so it can be
+ *  unit-tested without a DOM.
+ *  @param {{planMode:boolean, planSubmitted:boolean}} [s]
+ *  @returns {'PLANNING'|'WAITING'|'RESOLUTION'} */
+export function headerTitleState({ planMode = false, planSubmitted = false } = {}) {
+  if (planMode && !planSubmitted) return 'PLANNING';
+  if (planMode &&  planSubmitted) return 'WAITING';
+  return 'RESOLUTION';
 }
 
 export class UIController {
@@ -120,6 +134,8 @@ export class UIController {
     this._chronicleOpen    = false;
     // Unit stats bar: collapsed by default; clicking the (i) glyph expands to reveal ATK/DEF + abilities
     this._unitStatsExpanded = false;
+    // Plan panel: same (i) glyph on the selected unit toggles its stats + pack detail (hidden by default)
+    this._planStatsExpanded = false;
     // When true, disable all planning/action UI — used for spectator mode
     this.spectator         = false;
     // When true, suppress phase modals and auto-select — used for tutorial mode
@@ -128,6 +144,16 @@ export class UIController {
     this.tutorialClickBlocked = false;
     // When true, block the plan submit button (set by MissionConductor until plan_submitted step)
     this.tutorialSubmitBlocked = false;
+    // Strict Learn-to-Play gating (set by MissionConductor per step). A non-null
+    // Set restricts which map hexes / arc-menu actions the player may use; null
+    // (the default, and free play after handoff) means no restriction.
+    this.tutorialAllowedHexes   = null;
+    this.tutorialAllowedActions = null;
+    // Restrict which units may be picked from a multi-unit hex (by entity type).
+    this.tutorialAllowedUnits   = null;
+    // One-shot: set by the conductor when a MOVE completes a gated step, so the
+    // post-move re-select deselects instead of chaining (keeps unit-switching clean).
+    this._tutorialSuppressReselect = false;
 
     // ── App mode (set by main.js via onModeChange) ───────────────────────────
     this.appMode        = 'MENU';  // mirrors AppMode enum from app-mode.js
@@ -339,14 +365,15 @@ export class UIController {
     this._el('zoom-me')?.addEventListener('click', () => {
       this._replayManualCamera(() => {
         if (this._selectedEntity && this._selectedEntity.alive) {
-          // Zoom to selected unit
+          // Zoom to selected unit — an explicit distance change (fit), so it
+          // recomputes the radius and establishes the user zoom.
           const pos = this._planMode ? (this._getProjectedPos(this._selectedEntity.id) ?? this._selectedEntity) : this._selectedEntity;
-          this.renderer.frameHexes([pos], { maxZoom: 3.5, paddingHexes: 1.5, duration: 400 });
+          this.renderer.frameHexes([pos], { maxZoom: 3.5, paddingHexes: 1.5, duration: 400, fit: true });
         } else {
-          // No selection — frame all player's units
+          // No selection — frame all player's units (explicit fit).
           const faction = this._planFaction ?? (!this.state.heroIsAI ? 'hero' : 'witch');
           const units   = this.state.entities.filter(e => e.alive && e.owner === faction);
-          if (units.length > 0) this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 400 });
+          if (units.length > 0) this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 400, fit: true });
         }
       });
       this.onRedraw();
@@ -482,7 +509,7 @@ export class UIController {
     // Sound toggle — label reflects persisted mute state on first open.
     const soundBtn = this._el('menu-sound-btn');
     const _syncSoundLabel = () => {
-      if (soundBtn) soundBtn.textContent = audio.isMuted() ? '🔇 Sound: Off' : '🔊 Sound: On';
+      if (soundBtn) soundBtn.textContent = audio.isMuted() ? '\uE077 Sound: Off' : '\uE076 Sound: On';
     };
     _syncSoundLabel();
     soundBtn?.addEventListener('click', () => {
@@ -628,7 +655,6 @@ export class UIController {
     });
     _tap(this._el('plan-autoguard-btn'), () => this._autoFillGuard());
     _tap(this._el('plan-aiassist-btn'),  () => this._fillAIAssistPlan());
-    _tap(this._el('plan-toggle-btn'), () => this._togglePlanPanel());
     _tap(this._el('plan-tab'),        () => this._togglePlanPanel());
 
     // Delegated click handler for nudge buttons inside the player list
@@ -729,9 +755,9 @@ export class UIController {
 
     this._syncAIAssistButton();
 
-    // Show replay button if there's history to replay
-    const replayBtn = this._el('replay-turn-btn');
-    if (replayBtn) replayBtn.style.display = this._hasReplayHistory ? '' : 'none';
+    // The Last Turn (↺) replay button's visibility is centralised in
+    // _renderEndTurnBtn (called via _updateSidebar below) so it tracks the
+    // three header states (PLANNING-only) rather than being set once here.
 
     const panel = this._el('plan-panel');
     if (panel) {
@@ -1169,7 +1195,7 @@ export class UIController {
     this._startUndoBtnTracking();
     if (this._selectedEntity) this._selectEntity(this._selectedEntity);
     this.onRedraw();
-    this._showPlanToast(`🛡 Auto-Guard: ${added} guard action${added === 1 ? '' : 's'} queued.`);
+    this._showPlanToast(`${ICON.shield} Auto-Guard: ${added} guard action${added === 1 ? '' : 's'} queued.`);
   }
 
   /**
@@ -1201,7 +1227,7 @@ export class UIController {
       return 0;
     }
     if (!plan || plan.length === 0) {
-      if (!autorun) this._showPlanToast('🤖 AI had no actions to plan this round.');
+      if (!autorun) this._showPlanToast('\uE07F AI had no actions to plan this round.');
       return 0;
     }
     this._unitPlans = groupPlanByEntity(plan);
@@ -1212,8 +1238,8 @@ export class UIController {
     if (this._selectedEntity) this._selectEntity(this._selectedEntity);
     this.onRedraw();
     this._showPlanToast(autorun
-      ? `🤖 Autorun: ${plan.length} action${plan.length === 1 ? '' : 's'} — submitting…`
-      : `🤖 AI queued ${plan.length} action${plan.length === 1 ? '' : 's'} — review, then Submit.`);
+      ? `${ICON.bot} Autorun: ${plan.length} action${plan.length === 1 ? '' : 's'} — submitting…`
+      : `${ICON.bot} AI queued ${plan.length} action${plan.length === 1 ? '' : 's'} — review, then Submit.`);
     return plan.length;
   }
 
@@ -1494,16 +1520,8 @@ export class UIController {
   /** Render the plan panel steps list (per-unit blocks). */
   _renderPlanPanel() {
     const stepsEl  = this._el('plan-steps');
-    const budgeEl  = this._el('plan-budget-badge');
     const statusEl = this._el('plan-status');
     if (!stepsEl) return;
-
-    // Count budget-consuming actions across all unit queues
-    const flatPlan = interleavePlan(this._unitPlans);
-    const budgetCost = flatPlan.filter(a => actionCosts(a.type)).length;
-    const remaining = this._planBudget - budgetCost;
-
-    if (budgeEl) budgeEl.textContent = `${Math.max(0, remaining)} left`;
 
     // Food is auto-applied to over-budget actions until exhausted.
     const foodAvailable = getItemCountOf(this.state.inventory?.hero, ResourceType.FOOD);
@@ -1526,6 +1544,7 @@ export class UIController {
       this._unitPlans, this._planBudget, foodAvailable,
       this._planSubmitted, this.state.entities ?? [], initialInv,
       controllable, this._selectedEntity?.id ?? null, portraitMap,
+      this._planStatsExpanded,
     );
     // The rebuilt HTML drops any `.plan-unit-selected` class — re-apply it from
     // the single subscriber so selection highlight survives the rebuild.
@@ -1551,11 +1570,20 @@ export class UIController {
       });
     });
 
+    // (i) glyph on the selected unit → toggle its stats + pack detail.
+    stepsEl.querySelectorAll('.plan-stats-btn').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        this._planStatsExpanded = !this._planStatsExpanded;
+        this._renderPlanPanel();
+      });
+    });
+
     // Click on a unit block → select that unit on the map.
     stepsEl.querySelectorAll('.plan-unit-block').forEach(block => {
       block.addEventListener('click', e => {
-        // Don't steal clicks meant for the per-step remove ✕.
-        if (e.target.closest('.plan-step-remove')) return;
+        // Don't steal clicks meant for the per-step remove ✕ or the (i) toggle.
+        if (e.target.closest('.plan-step-remove') || e.target.closest('.plan-stats-btn')) return;
         const id = block.dataset.entityId;
         const entity = this.state.entities.find(x => x.id === id && x.alive);
         if (!entity) return;
@@ -1572,27 +1600,10 @@ export class UIController {
 
     if (statusEl && !this._planSubmitted) statusEl.textContent = '';
 
-    // Keep the collapse-tab count badge in sync — show count and color by budget state
-    const tabCount = this._el('plan-tab-count');
-    if (tabCount) {
-      tabCount.textContent = budgetCost;
-      const foodAvail = getItemCountOf(this.state?.inventory?.hero, ResourceType.FOOD);
-      if (budgetCost > this._planBudget + foodAvail) {
-        tabCount.className = 'plan-tab-count plan-tab-over';
-      } else if (budgetCost > this._planBudget) {
-        tabCount.className = 'plan-tab-count plan-tab-food';
-      } else {
-        tabCount.className = 'plan-tab-count plan-tab-ok';
-      }
-    }
-
-    // Update collapse-button arrow direction
+    // Update the side-tab +/- affordance to match collapsed state. (The action
+    // count + collapse arrow that used to live in the panel header were removed —
+    // the action budget now lives only in the top-bar ACTION BUDGET pips.)
     const panel = this._el('plan-panel');
-    const toggleBtn = this._el('plan-toggle-btn');
-    if (toggleBtn && panel) {
-      toggleBtn.textContent = panel.classList.contains('collapsed') ? '▶' : '◀';
-    }
-    // Update the side-tab +/- affordance to match collapsed state
     const tabToggle = this._el('plan-tab-toggle');
     if (tabToggle && panel) {
       tabToggle.textContent = panel.classList.contains('collapsed') ? '+' : '\u2212';
@@ -1636,8 +1647,6 @@ export class UIController {
     if (!panel) return;
     panel.classList.toggle('collapsed');
     const isCollapsed = panel.classList.contains('collapsed');
-    const toggleBtn = this._el('plan-toggle-btn');
-    if (toggleBtn) toggleBtn.textContent = isCollapsed ? '▶' : '◀';
     const tabToggle = this._el('plan-tab-toggle');
     if (tabToggle) tabToggle.textContent = isCollapsed ? '+' : '\u2212';
     // On mobile, plan and chronicle are mutually exclusive \u2014 close chronicle when opening plan.
@@ -1672,6 +1681,10 @@ export class UIController {
     const { x, y } = this._canvasPos(e);
     const hex = this._canvasToHex(x, y);
     if (hex.col < 0 || hex.col >= MAP_COLS || hex.row < 0 || hex.row >= MAP_ROWS) return;
+    // Strict tutorial gating: when an allowlist is published, only the spotlit
+    // hexes are clickable — every other click is swallowed so the player can't
+    // deviate from the scripted path. Null (the default / free play) = no gate.
+    if (this.tutorialAllowedHexes && !this.tutorialAllowedHexes.has(`${hex.col},${hex.row}`)) return;
 
     // Round-summary wrap-up is on screen: clicking one of YOUR units resolves it
     // as Continue (identical teardown to the Continue button) and pre-selects
@@ -2212,8 +2225,19 @@ export class UIController {
 
       // Add to plan queue (only reachable in planning mode)
       this._addToPlan({ type: PlanActionType.MOVE, entityId: actor.id, toCol: hex.col, toRow: hex.row });
-      if (actor.alive) this._selectEntity(actor);
-      else this._clearSelection();
+      // Normally re-select the actor so further moves chain (multi-hop advance).
+      // The tutorial sets a one-shot suppress flag for the move that COMPLETES a
+      // gated step, so that move deselects instead — the next click then reliably
+      // selects the next scripted unit rather than moving this one again (the
+      // allowlist blocks clicking empty ground to deselect by hand).
+      if (actor.alive && this._tutorialSuppressReselect) {
+        this._tutorialSuppressReselect = false;
+        this._clearSelection();
+      } else if (actor.alive) {
+        this._selectEntity(actor);
+      } else {
+        this._clearSelection();
+      }
       this._updateSidebar();
       this.onRedraw();
 
@@ -2298,17 +2322,20 @@ export class UIController {
       return;
     }
 
-    // In planning mode use projected position so attack is available after a planned move
+    // In planning mode use the unit's PROJECTED position (after queued MOVEs) and
+    // PROJECTED weapon (after a queued equip) so the arc's available actions and
+    // their range reflect what the plan LEAVES the unit as — not the live state.
+    // Mirrors _selectEntity; applyProjectedEquip re-parents to Entity.prototype so
+    // hasAbility / getAttack / getRange still resolve.
     let effectiveEntity = entity;
     if (this._planMode) {
-      const proj = this._getProjectedPos(entity.id);
-      if (proj && (proj.col !== entity.col || proj.row !== entity.row)) {
-        // Re-parent the spread to Entity.prototype so methods like
-        // hasAbility / getAttack still resolve; plain spread loses them.
-        effectiveEntity = Object.setPrototypeOf(
-          { ...entity, col: proj.col, row: proj.row },
-          Object.getPrototypeOf(entity)
-        );
+      const proj          = this._getProjectedPos(entity.id);
+      const projWeapon    = this._getProjectedWeaponId(entity.id);
+      const posChanged    = proj && (proj.col !== entity.col || proj.row !== entity.row);
+      const weaponChanged = projWeapon && projWeapon !== entity.getEquippedWeaponId();
+      if (posChanged || weaponChanged) {
+        effectiveEntity = applyProjectedEquip(entity, weaponChanged ? projWeapon : null);
+        if (posChanged) { effectiveEntity.col = proj.col; effectiveEntity.row = proj.row; }
       }
     }
     const actions = getValidActions(state, effectiveEntity);
@@ -2333,6 +2360,9 @@ export class UIController {
     const arcItems = [];
 
     for (const action of actions) {
+      // Strict tutorial gating: only whitelisted actions appear in the arc menu
+      // (move/attack stay available as hex clicks). Null = no restriction.
+      if (this.tutorialAllowedActions && !this.tutorialAllowedActions.has(action.type)) continue;
       const dis = !hasAct;
       switch (action.type) {
         case ActionType.MOVE:
@@ -2346,7 +2376,7 @@ export class UIController {
         case ActionType.SOUND_HORN:
           arcItems.push({ group: 'scout', label: 'Sound Horn', fullLabel: 'Sound Horn — call hidden survivors within 4 hexes, but reveal your position this round (1 action, 1 food)',
             desc: 'Calls hidden survivors within 4 hexes, but reveals your position this round.',
-            color: '#7eccd6', dis: !action.affordable || dis, cost: 1, resCost: '1🍞', attrs: 'data-action="sound_horn"' });
+            color: '#7eccd6', dis: !action.affordable || dis, cost: 1, resCost: `1 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.FOOD])}`, attrs: 'data-action="sound_horn"' });
           break;
         case ActionType.GUARD: {
           const charges = action.currentCharges || 0;
@@ -2369,7 +2399,7 @@ export class UIController {
           const doublerGain = Math.min(MAX_FORTIFY_LEVEL, cur + 2) - cur;
           const woodGain    = Math.min(MAX_FORTIFY_LEVEL, cur + 1) - cur;
           const shortLbl = hasMetal ? 'Reinforce Hex' : 'Fortify Hex';
-          const fortRes = hasMetal ? '1⚙' : '1🪵';
+          const fortRes = hasMetal ? `1 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.METAL])}` : `1 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.WOOD])}`;
           const fullLbl = hasMetal
             ? `Reinforce +${metalGain} lvl (1 metal)`
             : hasDoubler
@@ -2397,7 +2427,7 @@ export class UIController {
           }
           arcItems.push({ group: 'items', label: 'Heal', fullLabel: action.atFullHp ? 'Already at full HP' : 'Herbs (heal 2D10 HP)',
             desc: action.atFullHp ? 'Already at full HP.' : 'Spend 1 herb to heal this unit 2D10 HP. (1 action)',
-            color: '#55cc55', dis: healDis, cost: 1, resCost: '1🌿',
+            color: '#55cc55', dis: healDis, cost: 1, resCost: `1 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.HERBS])}`,
             attrs: 'data-action="heal"' });
           break;
         }
@@ -2475,8 +2505,8 @@ export class UIController {
           .map(o => o.summonType)
       );
       const ALL_SUMMONS = [
-        { st: EntityType.IRON_GOLEM, label: 'Summon Iron Golem',  full: 'Summon Iron Golem (2 metal)',  afford: projMetal >= 2, res: '2⚙' },
-        { st: EntityType.WOOD_GOLEM, label: 'Summon Wood Golem', full: 'Summon Wood Golem (2 wood)',   afford: projWood >= 2, res: '2🪵' },
+        { st: EntityType.IRON_GOLEM, label: 'Summon Iron Golem',  full: 'Summon Iron Golem (2 metal)',  afford: projMetal >= 2, res: `2 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.METAL])}` },
+        { st: EntityType.WOOD_GOLEM, label: 'Summon Wood Golem', full: 'Summon Wood Golem (2 wood)',   afford: projWood >= 2, res: `2 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.WOOD])}` },
         { st: EntityType.MINION,     label: 'Summon Minion',      full: 'Summon Minion (2 any resource)', afford: projTotal >= 2, res: '2 res' },
       ];
       for (const s of ALL_SUMMONS) {
@@ -2630,7 +2660,7 @@ export class UIController {
 
       const imgHtml = src
         ? `<img class="arc-portrait-img" src="${src}">`
-        : `<div class="arc-portrait-img" style="display:flex;align-items:center;justify-content:center;font-size:1.2rem;background:rgba(20,16,32,0.8);">${u.displayName.charAt(0)}</div>`;
+        : `<div class="arc-portrait-img" style="display:flex;align-items:center;justify-content:center;font-size:var(--fs-md);background:rgba(20,16,32,0.8);">${u.displayName.charAt(0)}</div>`;
 
       const atkCount = attacksPerTarget.get(u.id) ?? 0;
       const badgeHtml = atkCount > 0
@@ -2644,7 +2674,7 @@ export class UIController {
 
       arcItems.push({
         group: 'disambig',
-        label: `<div class="arc-portrait-img-wrap">${imgHtml}${badgeHtml}</div><div class="arc-portrait-hp"><div class="arc-portrait-hp-fill" style="width:${(pct * 100).toFixed(0)}%;background:${hpColor};"></div></div><span class="arc-portrait-name">${u.displayName}</span>${oddsHtml}`,
+        label: `<div class="arc-portrait-img-wrap">${imgHtml}${badgeHtml}</div><div class="arc-portrait-hp"><div class="arc-portrait-hp-fill" style="width:${(pct * 100).toFixed(0)}%;background:${hpColor};"></div></div><span class="arc-portrait-name">${u.displayName}${levelPillHtml(u.level)}</span>${oddsHtml}`,
         fullLabel: odds
           ? `${u.displayName} — HP ${u.hp}/${u.maxHp} — ${this._formatOddsText(odds)}`
           : `${u.displayName} — HP ${u.hp}/${u.maxHp}`,
@@ -2839,15 +2869,15 @@ export class UIController {
       const nodeBadge = buildNodeBadgeHtml(this.state.witchObjectives, this.state.entities, displayCol, displayRow);
       const terrainBadge = _buildTerrainBadge(tile, nodeBadge);
       const TERRAIN_ICON = {
-        [TileType.GRASS]: '🌿', [TileType.FOREST]: '🌲', [TileType.DIRT]: '🪨',
-        [TileType.ROAD]: '🛤', [TileType.RIVER]: '💧', [TileType.BRIDGE]: '🌉',
+        [TileType.GRASS]: ICON.grass, [TileType.FOREST]: ICON.forest, [TileType.DIRT]: ICON.dirt,
+        [TileType.ROAD]: ICON.road, [TileType.RIVER]: ICON.river, [TileType.BRIDGE]: ICON.bridge,
       };
-      const icon = tile.building ? (BUILDING_ICON[tile.building] ?? '🏠') : (TERRAIN_ICON[legacyTileType(tile)] ?? '🌿');
+      const icon = tile.building ? (BUILDING_ICON[tile.building] ?? ICON.shelter) : (TERRAIN_ICON[legacyTileType(tile)] ?? ICON.grass);
       const label = tile.building ? (BUILDING_LABEL[tile.building] ?? 'Building') : (legacyTileType(tile) ?? 'terrain');
       const tileSrc = this.renderer.getTileDataURL(tile, displayCol, displayRow, 56);
       const tileImgHtml = tileSrc
         ? `<img class="usb-terrain-hex" src="${tileSrc}" alt="">`
-        : `<span class="usb-icon" style="background:#3a4a3a;font-size:1.1rem">${icon}</span>`;
+        : `<span class="usb-icon" style="background:#3a4a3a;font-size:var(--fs-md)">${icon}</span>`;
       bar.style.display = 'flex';
       bar.classList.remove('usb-expanded');
       bar.innerHTML = `
@@ -2857,7 +2887,7 @@ export class UIController {
             <span class="usb-tile-name">${label}</span>
             <span class="usb-tile-details">${terrainBadge}</span>
           </span>
-          <button class="usb-deselect-btn" title="Deselect">✕</button>
+          <button class="usb-deselect-btn" title="Deselect">×</button>
         </div>
       `;
       bar.querySelector('.usb-deselect-btn').addEventListener('click', () => {
@@ -2874,8 +2904,8 @@ export class UIController {
     }
 
     const GLYPHS = {
-      hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟',
-      zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙',
+      hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003',
+      zombie: '\uE005', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007',
     };
     const COLORS = {
       hero: '#d4a72c', witch: '#9b59b6', survivor: '#4caf7d', soldier: '#3f78c4',
@@ -2892,7 +2922,7 @@ export class UIController {
     const equippedWeaponId = getEquippedWeaponIdOf(entity.items);
     const weaponLabel = equippedWeaponId
       ? (WEAPON_LABEL[equippedWeaponId] || equippedWeaponId)
-      : '👊 Unarmed';
+      : '\uE08C Unarmed';
     const effectsHtml = buildEffectsHtml(entity);
 
     // XP bar — campaign veterancy progress, shown beneath the HP bar. Gated on
@@ -2951,7 +2981,7 @@ export class UIController {
     // Expanded block: ATK, DEF, and any ability description — toggled by the (i) glyph
     const expanded = !!this._unitStatsExpanded;
     const abilityHtml = entity.abilityLabel
-      ? `<span class="usb-ability">✦ ${entity.abilityLabel}</span>`
+      ? `<span class="usb-ability">\uE062 ${entity.abilityLabel}</span>`
       : '';
     const expandedBlockHtml = expanded
       ? `<span class="usb-extra">
@@ -2971,7 +3001,7 @@ export class UIController {
         ${portraitHtml}
         ${cycleNextHtml}
         <span class="usb-info">
-          <span class="usb-name" style="color:${color}">${entity.displayName}</span>
+          <span class="usb-name" style="color:${color}">${entity.displayName}${levelPillHtml(entity.level)}</span>
           <span class="usb-details">
             <span class="usb-hp-wrap">
               <span class="usb-stat">HP</span>
@@ -2987,7 +3017,7 @@ export class UIController {
           ${xpRowHtml}
           ${expandedBlockHtml}
         </span>
-        <button class="usb-deselect-btn" title="Deselect unit">✕</button>
+        <button class="usb-deselect-btn" title="Deselect unit">×</button>
       </div>
       ${terrainBoxHtml}
     `;
@@ -3016,12 +3046,16 @@ export class UIController {
     const cycleLen     = CYCLE_STEPS.length;
     const roundInCycle = (state.round - 1) % cycleLen;
     const cycle        = Math.ceil(state.round / cycleLen);
-    const roundLabel   = state.cycleConfig && !state.cycleConfig.loop
-      ? `Round ${state.round} of ${cyclePhases.length}`
+    const nonLooping   = !!(state.cycleConfig && !state.cycleConfig.loop);
+    const roundLabel   = nonLooping
+      ? `Round ${Math.min(state.round, cyclePhases.length)} of ${cyclePhases.length}`
       : `Day ${cycle} · Round ${roundInCycle + 1}`;
 
-    // Pill bump above the score bar: "[phase icon] Night — Day 1 · Round 2"
-    const activeStep = CYCLE_STEPS[roundInCycle];
+    // For a non-looping (fixed-end) cycle the clamped phase past the end stays the
+    // final phase — show the deadline phase + round once we reach/overshoot it so
+    // the icon/label match the countdown track rather than a stale modulo step.
+    const stepIdx    = nonLooping ? Math.min(roundInCycle, cycleLen - 1) : roundInCycle;
+    const activeStep = CYCLE_STEPS[stepIdx];
     const bumpEl   = this._el('cycle-bump');
     const iconEl   = this._el('cycle-bump-icon');
     const labelEl  = this._el('cycle-bump-label');
@@ -3037,83 +3071,81 @@ export class UIController {
       labelEl.textContent = `${activeStep.label} — ${roundLabel}`;
     }
 
-    // During planning phase, show planning info
-    if (this._planMode) {
-      const faction = this._planFaction;
-      const glyph   = faction === 'hero' ? '⚔' : '✦';
-      const budget  = this._planBudget;
-      const used    = interleavePlan(this._unitPlans).filter(a => actionCosts(a.type)).length;
-      const capped  = Math.min(used, budget); // don't render more diamonds than budget
-      const diamonds = '◆'.repeat(Math.max(0, budget - capped)) + '◇'.repeat(capped);
-      if (this._planSubmitted) {
-        el.innerHTML = `
-          <span class="turn-faction player-${faction}">${glyph}</span>
-          <span class="turn-line">Waiting for opponent…</span>
-        `;
+    // Deadline countdown — only for non-looping (fixed-end) missions. Normal /
+    // looping games leave this hidden so their cycle bar is visually unchanged.
+    const deadlineEl  = this._el('cycle-deadline');
+    const countEl     = this._el('cycle-deadline-count');
+    const trackEl     = this._el('cycle-deadline-track');
+    if (deadlineEl) {
+      const cd = buildCycleDeadlineHtml(state);
+      if (cd) {
+        deadlineEl.hidden = false;
+        if (countEl)  countEl.textContent  = cd.countLabel;
+        if (trackEl)  trackEl.innerHTML     = cd.trackHtml;
+        if (bumpEl)   bumpEl.title          = `Mission ends at ${cd.deadlinePhase} (round ${cd.total})`;
       } else {
-        el.innerHTML = `
-          <span class="turn-faction player-${faction}">${glyph}</span>
-          <span class="actions-label">Actions</span>
-          <div class="actions-remaining" title="Tap for breakdown">${diamonds}</div>
-        `;
-        const pipsEl = el.querySelector('.actions-remaining');
-        if (pipsEl) pipsEl.addEventListener('click', () => this._showBudgetBreakdown());
+        deadlineEl.hidden = true;
+        if (trackEl) trackEl.innerHTML = '';
       }
+    }
+
+    // ── Header title — exactly three canonical states ─────────────────────
+    // PLANNING (building a plan) · WAITING FOR OPPONENTS (plan locked, online)
+    // · RESOLUTION (the round resolving / being replayed). The menu button
+    // (top-left) is a header sibling and stays put across all three; the
+    // Submit / Last Turn buttons live in .header-buttons and are gated to the
+    // PLANNING state by _renderEndTurnBtn.
+    const titleState = headerTitleState({
+      planMode: this._planMode, planSubmitted: this._planSubmitted,
+    });
+
+    if (titleState === 'PLANNING') {
+      // Title + action-budget pips: colour-coded pips with a hover/tap tooltip
+      // breakdown. The budget anchors right (above the plan panel).
+      const used = interleavePlan(this._unitPlans).filter(a => actionCosts(a.type)).length;
+      const { parts, rows, total, foodLabel } = this._computeActionBudget();
+      const pips = buildActionPipsHtml(parts, used);
+      const tip  = buildActionBudgetTooltipHtml(rows, total, foodLabel);
+      el.innerHTML = `
+        <span class="turn-title">Planning</span>
+        <div class="action-budget">
+          <span class="actions-label">Action Budget</span>
+          <div class="actions-remaining" tabindex="0" aria-label="Action budget breakdown">${pips}<div id="budget-breakdown" class="budget-breakdown">${tip}</div></div>
+        </div>
+      `;
+      const pipsEl = el.querySelector('.actions-remaining');
+      if (pipsEl) pipsEl.addEventListener('click', (e) => { e.stopPropagation(); this._toggleBudgetTip(pipsEl); });
       return;
     }
 
-    // During resolution, show neutral resolution label
-    if (state.resolving) {
-      el.innerHTML = `<span class="turn-line">Resolving Actions…</span>`;
+    if (titleState === 'WAITING') {
+      el.innerHTML = `<span class="turn-title">Waiting for Opponents…</span>`;
       return;
     }
 
-    // Online mode: if we reach here without plan mode or resolving, the client
-    // may be in a transient state (summary, animation) or genuinely stuck.
-    // Only attempt recovery if we're supposed to be in PLANNING mode.
-    if (this.mp) {
-      if (this.appMode === 'PLANNING' && !this._stateRecoveryPending) {
-        this._stateRecoveryPending = true;
-        // Delay before requesting state — gives enterPlanningMode time to fire
+    // RESOLUTION — the round is resolving or being replayed. Also covers the
+    // offline round summary, the online summary/sync window, and AI-vs-AI
+    // auto-play. Keep the online state-recovery watchdog: a PLANNING appMode
+    // reached here means our planning payload never arrived, so request a
+    // resync (and bail to menu if it never recovers).
+    if (this.mp && this.appMode === 'PLANNING' && !this._stateRecoveryPending) {
+      this._stateRecoveryPending = true;
+      // Delay before requesting state — gives enterPlanningMode time to fire.
+      this._stateRecoveryTimer = setTimeout(() => {
+        this._stateRecoveryPending = false;
+        if (this._planMode || this.state.resolving || this.appMode !== 'PLANNING') return;
+        console.warn('[ui] Invalid online state — requesting state refresh.');
+        this.mp._send({ type: 'requestState' });
+        // If still stuck after another 5 seconds, bail to menu
         this._stateRecoveryTimer = setTimeout(() => {
-          this._stateRecoveryPending = false;
-          if (this._planMode || this.state.resolving || this.appMode !== 'PLANNING') return;
-          console.warn('[ui] Invalid online state — requesting state refresh.');
-          this.mp._send({ type: 'requestState' });
-          // If still stuck after another 5 seconds, bail to menu
-          this._stateRecoveryTimer = setTimeout(() => {
-            if (!this._planMode && !this.state.resolving && this.appMode === 'PLANNING') {
-              console.error('[ui] State recovery failed — returning to menu');
-              if (this.onQuitToMenu) this.onQuitToMenu();
-            }
-          }, 5000);
-        }, 2000);
-      }
-      // Show appropriate label based on current app mode
-      if (this.appMode === 'SUMMARY') {
-        el.innerHTML = `<span class="turn-line">Round Summary</span>`;
-      } else {
-        el.innerHTML = `<span class="turn-line" style="color:var(--muted)">Syncing…</span>`;
-      }
-      return;
+          if (!this._planMode && !this.state.resolving && this.appMode === 'PLANNING') {
+            console.error('[ui] State recovery failed — returning to menu');
+            if (this.onQuitToMenu) this.onQuitToMenu();
+          }
+        }, 5000);
+      }, 2000);
     }
-
-    // Offline / local mode: show legacy sequential-turn display
-    const glyph  = state.activePlayer === 'hero' ? '⚔' : '✦';
-    const player = state.activePlayer === 'hero' ? 'Hero' : 'Witch';
-    const isAI   = (state.activePlayer === 'witch' && state.witchIsAI) ||
-                   (state.activePlayer === 'hero'  && state.heroIsAI);
-
-    const diamonds = state.actionsLeft > 0
-      ? '◆'.repeat(state.actionsLeft)
-      : '◇';
-
-    el.innerHTML = `
-      <span class="turn-faction player-${state.activePlayer}">${glyph}</span>
-      <span class="turn-line">${player}'s Turn ${isAI ? '<span class="ai-badge">AI</span>' : ''}</span>
-      <span class="actions-label">Actions</span>
-      <div class="actions-remaining">${diamonds}</div>
-    `;
+    el.innerHTML = `<span class="turn-title">Resolution</span>`;
   }
 
   _renderObjectives() {
@@ -3257,6 +3289,15 @@ export class UIController {
   }
 
   _renderEndTurnBtn() {
+    // Last Turn (↺) lives in the header during PLANNING only, and only once a
+    // prior round exists to replay (i.e. not turn 1). Hidden while waiting for
+    // opponents and throughout RESOLUTION so those states are title-only.
+    const replayBtn = this._el('replay-turn-btn');
+    if (replayBtn) {
+      const showReplay = this._planMode && !this._planSubmitted && this._hasReplayHistory;
+      replayBtn.style.display = showReplay ? '' : 'none';
+    }
+
     const btn = this._el('end-turn-btn');
     const returnBtn = this._el('plan-return-btn');
     if (!btn) return;
@@ -3277,11 +3318,11 @@ export class UIController {
                    && !panel.classList.contains('collapsed');
 
     if (this._planSubmitted) {
-      // After submission: hide submit, show return-to-menu
+      // WAITING FOR OPPONENTS — a title-only state. Hide the submit button AND
+      // the return-to-menu (← Menu) button: the top-left menu (☰) is the single,
+      // consistent exit across all three header states.
       btn.style.display = 'none';
-      if (returnBtn) {
-        returnBtn.style.display = panelOpen ? 'none' : '';
-      }
+      if (returnBtn) returnBtn.style.display = 'none';
     } else {
       // During planning: show submit, hide return-to-menu
       btn.style.display = '';
@@ -3290,7 +3331,7 @@ export class UIController {
       btn.classList.add('planning-active');
       btn.dataset.tip = 'Lock in your plan — it resolves alongside your opponent’s';
       if (!this._countdownTimer && !this._graceActive) {
-        btn.textContent = '✓ Submit';
+        btn.textContent = '\uE071 Submit';
       }
       btn.classList.toggle('plan-open', !!panelOpen);
       if (returnBtn) returnBtn.style.display = 'none';
@@ -3318,6 +3359,14 @@ export class UIController {
     if (action === 'pick_unit') {
       this._pendingDisambig = null;
       const unit = state.entities.find(e => e.id === button.dataset.unitId);
+      // Strict tutorial gating: the disambiguation picker still shows BOTH units
+      // (the player learns to choose), but only the scripted unit may actually be
+      // picked — the hero, not the townsperson sharing the hex. Picking the wrong
+      // one re-shows the picker so the player tries again rather than stalling.
+      if (unit && this.tutorialAllowedUnits && !this.tutorialAllowedUnits.has(unit.type)) {
+        if (this._pendingUnitPick) this._showActionPopup(null);
+        return;
+      }
       if (unit) this._selectEntity(unit);
       this._updateSidebar();
       this.onRedraw();
@@ -3802,16 +3851,16 @@ export class UIController {
     if (!container) return;
 
     const outcome = result.killed
-      ? '💀 slain'
+      ? '\uE097 slain'
       : result.hit
-        ? result.damage >= 2 ? `💥 crush −${result.damage}HP` : `⚔ hit −${result.damage}HP`
-        : result.counterDmg > 0 ? '🛡 counter' : 'miss';
+        ? result.damage >= 2 ? `${ICON.crush} crush −${result.damage}HP` : `${ICON.hero} hit −${result.damage}HP`
+        : result.counterDmg > 0 ? '\uE042 counter' : 'miss';
 
     const toast = document.createElement('div');
     toast.className = 'battle-toast' +
       (result.killed ? ' kill' : result.damage >= 2 ? ' crush' : '');
     const splashNote = result.splashHits?.length
-      ? ` +💢${result.splashHits.length} splashed`
+      ? ` +${ICON.splash}${result.splashHits.length} splashed`
       : '';
     toast.textContent =
       `${actorSnap.name} → ${targetSnap.name}  [${result.attackRoll}v${result.defenseRoll}]  ${outcome}${splashNote}`;
@@ -3834,95 +3883,70 @@ export class UIController {
       ? 'Exposed survivors suffer 1 damage each night.'
       : `Exposed survivors now suffer ${level} damage each night.`;
     this._showResultDialog([
-      `🌑 The curse deepens — Caleb's Hollow's mystical energy grows stronger!`,
+      `${ICON.newMoon} The curse deepens — Caleb's Hollow's mystical energy grows stronger!`,
       ``,
       desc,
-      `🌙 Night: survivors in the open take ${level} damage`,
+      `${ICON.night} Night: survivors in the open take ${level} damage`,
     ], () => {});
   }
 
-  // ── Budget breakdown popup ───────────────────────────────────────────────
+  // ── Action budget ────────────────────────────────────────────────────────
 
-  /** Show a small popup with the action budget breakdown (triggered by tapping action pips). */
-  _dismissBudgetBreakdown() {
-    const el = this._el('budget-breakdown');
-    if (el) el.classList.remove('visible');
+  /**
+   * Itemised action budget for the current planning faction: the source `parts`
+   * (for the colour-coded pips), human-readable `rows` (for the tooltip), the
+   * capped `total`, and the spare-`food` count. Uses the SAME faction math the
+   * game uses for the budget (Faction.computeBudgetBreakdown), so the pips/total
+   * always match `_planBudget`.
+   */
+  _computeActionBudget() {
+    const faction    = this._planFaction;
+    const factionObj = getFaction(faction);
+    const phase      = this.state.phase;
+    const phaseIcon  = PHASE_ICON[phase] ?? '';
+    const phaseLabel = phase ? phase.charAt(0).toUpperCase() + phase.slice(1) : '';
+    const entities   = this.state.entities;
+    const stash      = faction === 'hero' ? this.state.inventory?.hero : this.state.inventory?.witch;
+    const food       = getItemCountOf(stash, 'food');
+
+    const unitCount = entities.filter(
+      e => e.alive && e.owner === faction && e.type !== factionObj.leaderType
+    ).length;
+    const nodeBonus = countHeldNodes(faction, this.state.witchObjectives ?? [], entities);
+    const { parts, total } = factionObj.computeBudgetBreakdown(phase, unitCount, nodeBonus);
+
+    const unitIcon = faction === 'hero' ? ICON.survivor : ICON.minion;
+    const unitNoun = faction === 'hero' ? 'Survivor'    : 'Minion';
+    const labelFor = (p) => {
+      switch (p.key) {
+        case 'base':  return 'Base';
+        case 'phase': return `${phaseIcon} ${phaseLabel} bonus`;
+        case 'unit':  return `${unitIcon} ${unitNoun}${p.value !== 1 ? 's' : ''} (${p.count})`;
+        case 'node':  return `◆ Power Node${p.value !== 1 ? 's' : ''} (${p.value})`;
+        default:      return p.key;
+      }
+    };
+    const rows = parts.filter(p => p.value > 0).map(p => ({ key: p.key, label: labelFor(p), value: p.value }));
+    const foodLabel = food > 0 ? `${coloredResourceIcon('food')} Food ×${food}` : '';
+    return { parts, rows, total, food, foodLabel };
+  }
+
+  /** Toggle the budget breakdown tooltip open (tap on touch; desktop uses CSS hover). */
+  _toggleBudgetTip(pipsEl) {
+    const open = pipsEl.classList.toggle('tip-open');
     if (this._budgetDismiss) {
       document.removeEventListener('click', this._budgetDismiss, true);
       this._budgetDismiss = null;
     }
-  }
-
-  _showBudgetBreakdown() {
-    const el = this._el('budget-breakdown');
-    if (!el || !this._planMode) return;
-
-    // Toggle off
-    if (el.classList.contains('visible')) {
-      this._dismissBudgetBreakdown();
-      return;
+    if (open) {
+      this._budgetDismiss = (e) => {
+        if (pipsEl.contains(e.target)) return;   // a tap on the pips re-toggles via its own handler
+        pipsEl.classList.remove('tip-open');
+        document.removeEventListener('click', this._budgetDismiss, true);
+        this._budgetDismiss = null;
+      };
+      document.addEventListener('click', this._budgetDismiss, true);
     }
-
-    // Reparent into the actions-remaining div so absolute positioning anchors correctly
-    const pipsEl = document.querySelector('.actions-remaining');
-    if (pipsEl && el.parentElement !== pipsEl) pipsEl.appendChild(el);
-
-    const faction = this._planFaction;
-    const phase = this.state.phase;
-    const phaseIcon = PHASE_ICON[phase] ?? '';
-    const phaseLabel = phase ? phase.charAt(0).toUpperCase() + phase.slice(1) : '';
-    const actions = this._planBudget ?? 0;
-    const entities = this.state.entities;
-    const inventory = this.state.inventory;
-    const stash = faction === 'hero' ? inventory?.hero : inventory?.witch;
-    const foodCount = getItemCountOf(stash, 'food');
-
-    const rows = [];
-    if (faction === 'hero') {
-      const timeBonus     = (phase === 'day' || phase === 'dawn') ? 1 : 0;
-      const survivorCount = entities.filter(e => e.alive && e.owner === 'hero' && e.type !== 'hero').length;
-      const survivorBonus = Math.min(survivorCount, 5);
-      rows.push({ label: 'Base', value: 3 });
-      if (timeBonus)     rows.push({ label: `${phaseIcon} ${phaseLabel} bonus`, value: timeBonus });
-      if (survivorBonus) rows.push({ label: `☺ Survivor${survivorBonus !== 1 ? 's' : ''} (${survivorCount})`, value: survivorBonus });
-    } else {
-      const timeBonus = phase === 'night' ? 1 : 0;
-      const unitCount = entities.filter(e => e.alive && e.owner === 'witch' && e.type !== 'witch').length;
-      const unitBonus = Math.min(unitCount, 3);
-      rows.push({ label: 'Base', value: 3 });
-      if (timeBonus) rows.push({ label: `${phaseIcon} ${phaseLabel} bonus`, value: timeBonus });
-      if (unitBonus) rows.push({ label: `☠ Minion${unitBonus !== 1 ? 's' : ''} (${unitCount})`, value: unitBonus });
-    }
-    const nodeBonus = countHeldNodes(faction, this.state.witchObjectives ?? [], entities);
-    if (nodeBonus) {
-      rows.push({ label: `◆ Power Node${nodeBonus !== 1 ? 's' : ''} (${nodeBonus})`, value: nodeBonus });
-    }
-
-    let html = '<div class="action-breakdown-table">';
-    for (const r of rows) {
-      html += `<div class="abkd-row"><span class="abkd-label">${r.label}</span><span class="abkd-val">+${r.value}</span></div>`;
-    }
-    html += `<hr class="abkd-divider">`;
-    html += `<div class="abkd-row abkd-total"><span class="abkd-label">Total</span><span class="abkd-val">${actions}</span></div>`;
-    if (foodCount > 0) {
-      html += `<div class="abkd-row abkd-food"><span class="abkd-label">🍞 Food ×${foodCount}</span><span class="abkd-val">(extra actions)</span></div>`;
-    }
-    html += '</div>';
-    el.innerHTML = html;
-    el.classList.add('visible');
-
-    // Dismiss on click outside (but not on the pips themselves — that's handled by toggle above)
-    this._budgetDismiss = (e) => {
-      // Ignore clicks on the pips trigger — the toggle handles those
-      if (pipsEl?.contains(e.target)) return;
-      this._dismissBudgetBreakdown();
-    };
-    // Use setTimeout so the current click event finishes before the listener activates
-    setTimeout(() => {
-      if (el.classList.contains('visible')) {
-        document.addEventListener('click', this._budgetDismiss, true);
-      }
-    }, 0);
   }
 
   /**
@@ -3978,8 +4002,8 @@ export class UIController {
       const wrapper = this._el('canvas-wrapper');
       if (wrapper) wrapper.appendChild(toast);
     }
-    const icon = change === 'completed' ? '✓'
-      : change === 'added' ? '🗒'
+    const icon = change === 'completed' ? '\uE071'
+      : change === 'added' ? '\uE07A'
       : '•';
     const verb = change === 'completed' ? 'Objective complete'
       : change === 'added' ? 'New objective'
@@ -4057,7 +4081,7 @@ export class UIController {
     const dialog = this._el('encounter-dialog');
     const card   = this._el('encounter-card');
 
-    const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
+    const GLYPHS = { hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003', zombie: '\uE005', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007' };
     const glyph  = GLYPHS[encounterUnit.type] ?? '?';
     const color  = encounterUnit.color || '#d4c9b0';
 
@@ -4068,14 +4092,14 @@ export class UIController {
 
     const portraitHtml = src
       ? `<img src="${src}" style="width:72px;height:72px;border-radius:50%;border:2px solid ${color};display:block;">`
-      : `<div style="font-size:2.8rem;line-height:1;color:${color};width:72px;text-align:center;">${glyph}</div>`;
+      : `<div style="font-size:var(--fs-2xl);line-height:1;color:${color};width:72px;text-align:center;">${glyph}</div>`;
 
     const titleHtml = encounterUnit.title
-      ? `<div style="font-size:0.75rem;color:#9a8a7a;font-style:italic;margin-bottom:0.25rem;">${encounterUnit.title}</div>`
+      ? `<div style="font-size:var(--fs-xs);color:#9a8a7a;font-style:italic;margin-bottom:0.25rem;">${encounterUnit.title}</div>`
       : '';
 
     const abilityHtml = encounterUnit.abilityLabel
-      ? `<div style="font-size:0.72rem;color:#88eeff;margin-top:0.3rem;">✦ ${encounterUnit.abilityLabel}</div>`
+      ? `<div style="font-size:var(--fs-xs);color:#88eeff;margin-top:0.3rem;">\uE062 ${encounterUnit.abilityLabel}</div>`
       : '';
 
     const hpPct   = encounterUnit.maxHp > 0 ? (encounterUnit.hp / encounterUnit.maxHp) * 100 : 100;
@@ -4099,16 +4123,16 @@ export class UIController {
       <div style="display:flex;align-items:center;gap:0.85rem;margin-bottom:0.75rem;">
         <div style="flex-shrink:0;">${portraitHtml}</div>
         <div style="flex:1;min-width:0;">
-          <div style="font-size:1rem;font-weight:bold;color:${color};margin-bottom:0.12rem;">${glyph} ${encounterUnit.name}</div>
+          <div style="font-size:var(--fs-base);font-weight:bold;color:${color};margin-bottom:0.12rem;">${glyph} ${encounterUnit.name}</div>
           ${titleHtml}
-          <div style="font-size:0.72rem;color:#c8b89a;">HP ${encounterUnit.hp}/${encounterUnit.maxHp} · ATK ${attackOf(encounterUnit)} · DEF ${defenseOf(encounterUnit)}</div>
+          <div style="font-size:var(--fs-xs);color:#c8b89a;">HP ${encounterUnit.hp}/${encounterUnit.maxHp} · ATK ${attackOf(encounterUnit)} · DEF ${defenseOf(encounterUnit)}</div>
           <div style="background:#1e1e2a;border-radius:3px;height:5px;margin-top:0.3rem;overflow:hidden;">
             <div style="width:${hpPct}%;height:100%;background:${hpColor};border-radius:3px;"></div>
           </div>
           ${abilityHtml}
         </div>
       </div>
-      <div style="font-size:0.82rem;color:#b8a88a;text-align:center;margin-bottom:0.5rem;">${message}</div>
+      <div style="font-size:var(--fs-sm);color:#b8a88a;text-align:center;margin-bottom:0.5rem;">${message}</div>
       ${this.autoplay ? '' : '<div class="result-dismiss">— click anywhere to continue —</div>'}
     `;
 
@@ -4372,7 +4396,7 @@ export class UIController {
     footer.innerHTML    = (this.autoplay || this.speedMode !== 'cinematic')
       ? ''
       : '<div class="result-dismiss">— click to skip —</div>' +
-        '<button class="battle-enable-fast" type="button">⏩ Click to enable fast mode and skip battle dialogs</button>';
+        '<button class="battle-enable-fast" type="button">\uE086 Click to enable fast mode and skip battle dialogs</button>';
 
     // Reset breakdown columns (rendered muted upfront; glow as anim progresses)
     const atkBkd = this._el('battle-atk-breakdown');
@@ -4452,7 +4476,7 @@ export class UIController {
     const revealOutcome = () => {
       if (result.killed) {
         const dmgNote = result.damage > 0 ? ` (${result.damage} damage)` : '';
-        outcome.textContent = `💀 ${targetSnap.name} is slain!${dmgNote}`;
+        outcome.textContent = `${ICON.defeat} ${targetSnap.name} is slain!${dmgNote}`;
         outcome.className   = 'battle-outcome kill';
       } else if (result.hit) {
         const fortNote = result.fortHpDamage
@@ -4461,17 +4485,17 @@ export class UIController {
         const tier = result.breakdown?.dmgTier ?? 1;
         if (tier >= 2) {
           const word = tier >= 3 ? 'Great crushing hit!' : 'Crushing hit!';
-          outcome.textContent = `💥💥 ${word} ${targetSnap.name} takes ${result.damage} damage!${fortNote}`;
+          outcome.textContent = `${ICON.crush}${ICON.crush} ${word} ${targetSnap.name} takes ${result.damage} damage!${fortNote}`;
           outcome.className   = 'battle-outcome kill';
         } else {
-          outcome.textContent = `💥 Hit! ${targetSnap.name} takes ${result.damage} damage${fortNote}`;
+          outcome.textContent = `${ICON.crush} Hit! ${targetSnap.name} takes ${result.damage} damage${fortNote}`;
           outcome.className   = 'battle-outcome hit';
         }
       } else if (result.counterDmg > 0) {
-        outcome.textContent = `⚔ Counter! ${actorSnap.name} takes ${result.counterDmg} damage!`;
+        outcome.textContent = `${ICON.hero} Counter! ${actorSnap.name} takes ${result.counterDmg} damage!`;
         outcome.className   = 'battle-outcome kill';
       } else {
-        outcome.textContent = `🛡 ${targetSnap.name} defends!`;
+        outcome.textContent = `${ICON.shield} ${targetSnap.name} defends!`;
         outcome.className   = 'battle-outcome miss';
       }
       outcome.classList.add('battle-outcome-pulse');
@@ -4481,7 +4505,7 @@ export class UIController {
         const splashEl = document.createElement('div');
         splashEl.className = 'battle-splash';
         const lines = result.splashHits.map(h =>
-          h.killed ? `💢 ${h.name} is slain by splash!` : `💢 ${h.name} takes −${h.damage ?? 1} splash damage`
+          h.killed ? `${ICON.splash} ${h.name} is slain by splash!` : `${ICON.splash} ${h.name} takes −${h.damage ?? 1} splash damage`
         );
         splashEl.textContent = lines.join('  ·  ');
         outcome.insertAdjacentElement('afterend', splashEl);
@@ -4510,7 +4534,7 @@ export class UIController {
         const hasActs = this.state.actionsAvailable > 0;
         const rematchBtn = document.createElement('button');
         rematchBtn.className = 'action-btn battle rematch-btn';
-        rematchBtn.textContent = '⚔ Battle Again';
+        rematchBtn.textContent = '\uE000 Battle Again';
         rematchBtn.disabled = !hasActs;
         rematchBtn.addEventListener('click', e => {
           e.stopPropagation();
@@ -4662,7 +4686,7 @@ export class UIController {
     const redoBtn  = this._el('battle-redo-btn');
     const setPauseLabel = () => {
       if (!pauseBtn) return;
-      pauseBtn.textContent = _dismissPaused ? '▶' : '⏸';
+      pauseBtn.textContent = _dismissPaused ? '\uE0B8' : '\uE0B7';
       pauseBtn.title = _dismissPaused ? 'Resume' : 'Pause';
       pauseBtn.setAttribute('aria-label', _dismissPaused ? 'Resume' : 'Pause');
     };
@@ -4704,12 +4728,12 @@ export class UIController {
       [TileType.BUILDING]: '#6e6e6e',
     };
     const TERRAIN_ICON = {
-      [TileType.GRASS]:  '🌿',
-      [TileType.FOREST]: '🌲',
-      [TileType.DIRT]:   '🪨',
-      [TileType.ROAD]:   '🛤',
-      [TileType.RIVER]:  '💧',
-      [TileType.BRIDGE]: '🌉',
+      [TileType.GRASS]:  ICON.grass,
+      [TileType.FOREST]: ICON.forest,
+      [TileType.DIRT]:   ICON.dirt,
+      [TileType.ROAD]:   ICON.road,
+      [TileType.RIVER]:  ICON.river,
+      [TileType.BRIDGE]: ICON.bridge,
     };
 
     // ── SVG hex elements ──
@@ -4721,7 +4745,7 @@ export class UIController {
     if (polyEl) polyEl.setAttribute('fill', fillColor);
 
     // Icon: building emoji or terrain fallback
-    const icon = tile.building ? (BUILDING_ICON[tile.building] ?? '🏠')
+    const icon = tile.building ? (BUILDING_ICON[tile.building] ?? '\uE03C')
                                 : (TERRAIN_ICON[legacyTileType(tile)] ?? '');
     if (iconEl) iconEl.textContent = icon;
 
@@ -4752,11 +4776,11 @@ export class UIController {
 
     if (obj) {
       const ctrl = nodeController(obj, state.entities);
-      const ctrlStr = ctrl === 'hero'      ? '🔵 Hero'
-                    : ctrl === 'witch'     ? '🔴 Witch'
-                    : ctrl === 'contested' ? '⚡ Contested'
-                    : '⭕ Uncontrolled';
-      linesHtml += `<div class="tile-zoom-info-line node">⚔ Power Node (${obj.label}) — ${ctrlStr}</div>`;
+      const ctrlStr = ctrl === 'hero'      ? '\uE099 Hero'
+                    : ctrl === 'witch'     ? '\uE09A Witch'
+                    : ctrl === 'contested' ? '\uE091 Contested'
+                    : '\uE09B Uncontrolled';
+      linesHtml += `<div class="tile-zoom-info-line node">${ICON.hero} Power Node (${obj.label}) — ${ctrlStr}</div>`;
     }
     if (tile.explored && tile.fortifyLevel) {
       const { attack: fAtk, defense: fDef } = getFortifyCombatBonus(tile.fortifyLevel);
@@ -4764,10 +4788,11 @@ export class UIController {
       const hp     = tile.fortifyHP ?? tile.fortifyLevel * FORTIFY_HP_PER_LEVEL;
       const lvlMax = tile.fortifyLevel * FORTIFY_HP_PER_LEVEL;
       const hpStr  = `${hp}/${lvlMax} HP`;
-      const fl = tile.fortifyLevel >= 5 ? `⚙⚙⚙ Bastion (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`
-               : tile.fortifyLevel >= 3 ? `⚙⚙ Heavily Reinforced (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`
-               : tile.fortifyLevel >= 2 ? `⚙ Metal Reinforced (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`
-               : `🪵 Fortified (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`;
+      const metalIcon = coloredResourceIcon('metal');
+      const fl = tile.fortifyLevel >= 5 ? `${metalIcon}${metalIcon}${metalIcon} Bastion (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`
+               : tile.fortifyLevel >= 3 ? `${metalIcon}${metalIcon} Heavily Reinforced (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`
+               : tile.fortifyLevel >= 2 ? `${metalIcon} Metal Reinforced (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`
+               : `${coloredResourceIcon('wood')} Fortified (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`;
       linesHtml += `<div class="tile-zoom-info-line fortified">${fl}</div>`;
     }
     if (!tile.explored) linesHtml += `<div class="tile-zoom-info-line">— unexplored —</div>`;
@@ -4836,8 +4861,6 @@ export class UIController {
         planPanel.classList.add('collapsed');
         const planTabToggle = this._el('plan-tab-toggle');
         if (planTabToggle) planTabToggle.textContent = '+';
-        const planToggleBtn = this._el('plan-toggle-btn');
-        if (planToggleBtn) planToggleBtn.textContent = '▶';
         this._syncPlanInset();
         this._renderEndTurnBtn();
       }
@@ -4865,14 +4888,14 @@ export class UIController {
     const isHero  = faction === 'hero';
     const inv     = state.inventory;
     const stash   = isHero ? inv.hero : inv.witch;
-    const label   = isHero ? '⚔ Supplies' : '🕯 Stores';
+    const label   = isHero ? '\uE000 Supplies' : '\uE067 Stores';
 
     const entries = Object.entries(stash).filter(([, v]) => (v?.count ?? 0) > 0);
 
     const rows = entries.length
       ? entries.map(([k, v]) =>
           `<div class="inv-resource-row">
-            <span class="inv-resource-label">${RESOURCE_LABEL[k] || k}</span>
+            <span class="inv-resource-label">${coloredResourceLabel(RESOURCE_LABEL[k] || k)}</span>
             <span class="inv-resource-val">×${v.count}</span>
           </div>`
         ).join('')
@@ -4968,7 +4991,9 @@ export class UIController {
       const foundRes   = {}; // icon → count  (from explore loot)
       const usedRes   = {}; // icon → count  (from summon/fortify/use-item)
       const _addRes = (map, icon, n = 1) => { map[icon] = (map[icon] || 0) + n; };
-      const RES_ICON_MAP = { wood: '🪵', metal: '⚙', food: '🍞', silver: '🥈', scripture: '📜', herbs: '🌿' };
+      // Reverse map (glyph -> resource id) for parsing legacy glyph-only loot floaters.
+      const RES_ID_BY_ICON = { [ICON.wood]: 'wood', [ICON.metal]: 'metal', [ICON.food]: 'food', [ICON.silver]: 'silver', [ICON.scripture]: 'scripture', [ICON.herb]: 'herbs' };
+      const RES_IDS = new Set(['wood', 'metal', 'food', 'silver', 'scripture', 'herbs']);
 
       for (const step of steps ?? []) {
         // Tag each event with its faction for fog filtering
@@ -5058,19 +5083,20 @@ export class UIController {
                   if (ITEMS[id] || id === 'horse') {
                     equipFinds.push({ label: lootDisplayLabel(id) });
                   } else {
-                    _addRes(foundRes, icon || id);
+                    _addRes(foundRes, id);
                   }
                 }
               } else {
                 for (const item of icons) {
                   if (!item.startsWith('+')) continue;
-                  const icon = item.slice(1);
-                  if (icon === '🐴' || icon === '⚔') {
-                    const keyword = icon === '🐴' ? 'horse' : 'Found a ';
+                  const icon  = item.slice(1);
+                  const glyph = icon.charAt(0);   // floater may be "glyph" or "glyph Name"
+                  if (glyph === '\uE048' || glyph === '\uE0A2') {
+                    const keyword = glyph === '\uE048' ? 'horse' : 'Found a ';
                     const logLine = (ev.result.log ?? []).find(l => l.toLowerCase().includes(keyword));
-                    equipFinds.push({ icon, log: logLine || (icon === '🐴' ? 'Found a horse!' : 'Found a weapon!') });
+                    equipFinds.push({ icon: glyph, log: logLine || (glyph === '\uE048' ? 'Found a horse!' : 'Found a weapon!') });
                   } else {
-                    _addRes(foundRes, icon);
+                    _addRes(foundRes, RES_ID_BY_ICON[glyph] || icon);
                   }
                 }
               }
@@ -5078,19 +5104,18 @@ export class UIController {
             // Resources spent: summon — use result.spent for exact breakdown
             if (ev.action?.type === 'summon') {
               for (const { type, amount } of ev.result?.spent ?? []) {
-                const icon = RES_ICON_MAP[type] ?? type;
-                _addRes(usedRes, icon, amount);
+                _addRes(usedRes, type, amount);
               }
             }
             // Resources spent: fortify
             if (ev.action?.type === 'fortify') {
               const log0 = ev.result?.log?.[0] ?? '';
-              _addRes(usedRes, log0.includes('metal') ? '⚙' : '🪵');
+              _addRes(usedRes, log0.includes('metal') ? 'metal' : 'wood');
             }
             // Resources spent: use-item (only trackable consumables)
             if (ev.action?.type === 'use_item') {
-              const icon = RES_ICON_MAP[ev.action?.item];
-              if (icon) _addRes(usedRes, icon);
+              const rid = ev.action?.item;
+              if (RES_IDS.has(rid)) _addRes(usedRes, rid);
             }
           }
         }
@@ -5177,7 +5202,7 @@ export class UIController {
         }
 
         for (const n of kills) {
-          html += `<div class="summary-kill">☠ ${n} slain</div>`;
+          html += `<div class="summary-kill">${ICON.defeat} ${n} slain</div>`;
         }
 
         // Campaign veterancy: per-unit "+N XP" lines beneath the kills/combat
@@ -5187,25 +5212,25 @@ export class UIController {
         if (isCampaign) {
           for (const xp of compileTurnXpSummary(steps ?? [], this.state.entities, ResEventType)) {
             const cls = xp.leveledUp ? 'summary-xp leveled' : 'summary-xp';
-            html += `<div class="${cls}">✨ ${xp.text}</div>`;
+            html += `<div class="${cls}">${ICON.sparkle} ${xp.text}</div>`;
           }
         }
         for (const s of survivors) {
           if (s.type === 'zombie') {
-            html += `<div class="summary-summon">† Zombie raised</div>`;
+            html += `<div class="summary-summon">${ICON.zombie} Zombie raised</div>`;
           } else {
             const label = s.title ? `${s.name} the ${s.title}` : s.name;
-            html += `<div class="summary-survivor">☺ ${label} joined</div>`;
+            html += `<div class="summary-survivor">${ICON.survivor} ${label} joined</div>`;
           }
         }
         for (const s of summons) {
-          html += `<div class="summary-summon">✦ ${s}</div>`;
+          html += `<div class="summary-summon">${ICON.witch} ${s}</div>`;
         }
 
         for (const eq of equipFinds) {
           // New path: `label` already carries emoji + name + stats. Legacy path:
           // generic icon + parsed log line.
-          const body = eq.label ?? `${eq.icon === '🐴' ? '🐴' : '⚔'} ${eq.log}`;
+          const body = eq.label ?? `${eq.icon === '\uE048' ? '\uE048' : '\uE0A2'} ${eq.log}`;
           html += `<div class="summary-equip">${body}</div>`;
         }
 
@@ -5213,24 +5238,24 @@ export class UIController {
         const foundEntries = Object.entries(foundRes);
         const usedEntries  = Object.entries(usedRes);
         if (foundEntries.length > 0) {
-          const foundStr = foundEntries.map(([icon, n]) => `${n}${icon}`).join(' ');
-          html += `<div class="summary-resources found">📦 Found: ${foundStr}</div>`;
+          const foundStr = foundEntries.map(([id, n]) => `${coloredResourceLabel(RESOURCE_LABEL[id] || id)} \u00d7${n}`).join('   ');
+          html += `<div class="summary-resources found">${ICON.storehouse} Found: ${foundStr}</div>`;
         }
         if (usedEntries.length > 0) {
-          const usedStr = usedEntries.map(([icon, n]) =>
-            icon === 'res' ? `${n} res` : `${n}${icon}`
-          ).join(' ');
-          html += `<div class="summary-resources used">📤 Spent: ${usedStr}</div>`;
+          const usedStr = usedEntries.map(([id, n]) =>
+            id === 'res' ? `${n} res` : `${coloredResourceLabel(RESOURCE_LABEL[id] || id)} \u00d7${n}`
+          ).join('   ');
+          html += `<div class="summary-resources used">${ICON.sentTo} Spent: ${usedStr}</div>`;
         }
 
         // Node control changes
         for (const nc of nodeChanges) {
           if (nc.to === 'hero') {
-            html += `<div class="summary-node hero-text">⚔ Hero now controls ${nc.label}</div>`;
+            html += `<div class="summary-node hero-text">${ICON.hero} Hero now controls ${nc.label}</div>`;
           } else if (nc.to === 'witch') {
-            html += `<div class="summary-node witch-text">✦ Witch has seized ${nc.label}</div>`;
+            html += `<div class="summary-node witch-text">${ICON.witch} Witch has seized ${nc.label}</div>`;
           } else if (nc.to === 'contested') {
-            html += `<div class="summary-node">⚡ ${nc.label} is now contested</div>`;
+            html += `<div class="summary-node">${ICON.join} ${nc.label} is now contested</div>`;
           } else {
             html += `<div class="summary-node">◇ ${nc.label} is no longer controlled</div>`;
           }
@@ -5247,19 +5272,19 @@ export class UIController {
           && (ev.type === 'kill' || !myId || !ev.ownerId || ev.ownerId === myId)
         );
         if (visiblePostEvents.length) {
-          html += `<div class="summary-hazard-header">🌙 Night Attrition</div>`;
+          html += `<div class="summary-hazard-header">${ICON.night} Night Attrition</div>`;
           for (const ev of visiblePostEvents) {
             if (ev.type === 'kill') {
               const cause = ev.text
-                ? String(ev.text).replace(/^💀\s*/, '')
+                ? String(ev.text).replace(/^\uE097\s*/, '')
                 : `${ev.entityName} −${ev.amount} HP (unsheltered at night) — killed`;
-              html += `<div class="summary-hazard">💀 ${cause}</div>`;
+              html += `<div class="summary-hazard">${ICON.defeat} ${cause}</div>`;
             } else if (ev.type === 'damage') {
-              html += `<div class="summary-hazard">🌙 ${ev.entityName} −${ev.amount} HP (unsheltered at night)</div>`;
+              html += `<div class="summary-hazard">${ICON.night} ${ev.entityName} −${ev.amount} HP (unsheltered at night)</div>`;
             } else if (ev.type === 'shelter') {
-              const isBuilding = ev.text.startsWith('🏠');
+              const isBuilding = ev.text.startsWith('\uE03C');
               const desc = isBuilding ? 'sheltered in building' : 'sheltered by fortifications';
-              html += `<div class="summary-shelter">${isBuilding ? '🏠' : '🏰'} ${ev.entityName} ${desc}</div>`;
+              html += `<div class="summary-shelter">${isBuilding ? '\uE03C' : '\uE03B'} ${ev.entityName} ${desc}</div>`;
             }
           }
         }
@@ -5274,7 +5299,7 @@ export class UIController {
           const heroCount = state.witchObjectives.filter(obj =>
             nodeController(obj, state.entities) === 'hero').length;
 
-          const phaseLabel = state.phase === 'dawn' ? '🌅 Dawn Reckoning' : '🌇 Dusk Reckoning';
+          const phaseLabel = state.phase === 'dawn' ? '\uE020 Dawn Reckoning' : '\uE022 Dusk Reckoning';
 
           let reckoningLine;
           if (witchDelta > 0) {
@@ -5293,7 +5318,7 @@ export class UIController {
           html += `<div class="summary-reckoning">
             <div class="summary-reckoning-title">${phaseLabel}</div>
             <div class="summary-reckoning-result">${reckoningLine}</div>
-            <div class="summary-score-track">⚔ ${heroPips}&nbsp;&nbsp;${witchPips} ✦</div>
+            <div class="summary-score-track">${ICON.hero} ${heroPips}&nbsp;&nbsp;${witchPips} ${ICON.witch}</div>
           </div>`;
         }
 
@@ -5302,7 +5327,7 @@ export class UIController {
         // AI takeover messages (from consecutive timeout)
         const takeoverMsgs = this.state._takeoverMessages || [];
         for (const msg of takeoverMsgs) {
-          html += `<div class="summary-takeover">🤖 ${msg}</div>`;
+          html += `<div class="summary-takeover">${ICON.bot} ${msg}</div>`;
         }
         // Clear after showing
         if (this.state._takeoverMessages) this.state._takeoverMessages = [];
@@ -5315,12 +5340,12 @@ export class UIController {
       // Game-over dialog has no speed controls.
       const speedRowEl = gameOver ? null : this._el('round-summary-speed-row');
       if (speedRowEl) {
-        const SPEED_ICONS = { cinematic: '🎬', fast: '⏩', vfast: '⏭' };
+        const SPEED_ICONS = { cinematic: '\uE085', fast: '\uE086', vfast: '\uE087' };
         const SPEED_DESCS = { cinematic: 'Dialog for important battles', fast: 'Cinematic pace, no popups', vfast: '1.5× speed, no popups' };
         const modes = Object.entries(UIController.SPEED_LABELS);
 
         speedRowEl.innerHTML =
-          `<button class="summary-speed-toggle" title="Battle speed">⚡ ${UIController.SPEED_LABELS[this.speedMode]}</button>` +
+          `<button class="summary-speed-toggle" title="Battle speed">${ICON.join} ${UIController.SPEED_LABELS[this.speedMode]}</button>` +
           `<div class="summary-speed-popup" style="display:none">` +
           modes.map(([mode, label]) =>
             `<button class="speed-option${this.speedMode === mode ? ' active' : ''}" data-mode="${mode}">` +
@@ -5349,7 +5374,7 @@ export class UIController {
           if (!btn) return;
           e.stopPropagation();
           this._setSpeed(btn.dataset.mode);
-          toggleBtn.textContent = `⚡ ${UIController.SPEED_LABELS[this.speedMode]}`;
+          toggleBtn.textContent = `${ICON.join} ${UIController.SPEED_LABELS[this.speedMode]}`;
           popup.querySelectorAll('.speed-option').forEach(b =>
             b.classList.toggle('active', b.dataset.mode === this.speedMode)
           );
@@ -5386,8 +5411,14 @@ export class UIController {
         }
         gameOverBtns = document.createElement('div');
         gameOverBtns.className = 'round-summary-gameover-btns';
+        // Campaign missions route this button into the post-mission debrief (NOT
+        // the menu), so label it "Continue →" there — "Return to Menu" read as an
+        // abandon prompt, leaving players parked on the Victory modal over the
+        // still-visible replay ("stuck in replay" on the prologue). data-action
+        // stays 'restart'; _runLocalResolution maps it to _handleCampaignMissionEnd.
+        const primaryLabel = isCampaign ? 'Continue →' : 'Return to Menu';
         gameOverBtns.innerHTML =
-          `<button class="plan-btn primary" data-action="restart">Return to Menu</button>` +
+          `<button class="plan-btn primary" data-action="restart">${primaryLabel}</button>` +
           (hasFullReplay && !isCampaign ? `<button class="plan-btn secondary" data-action="replay-full">Replay Full Game</button>` : '');
         actionsEl.appendChild(gameOverBtns);
       } else if (nextBtn) {
@@ -5934,7 +5965,7 @@ export class UIController {
       // gate (NEXT) advances past it like any turn card (see _presentStoryBeatCard).
       return `<div class="replay-step-col replay-beat-col" data-step="${col.stepIndex}">`
            + `<div class="replay-step-header">`
-           +   `<div class="replay-step-label">✦ ${esc(col.title)}</div>`
+           +   `<div class="replay-step-label">${ICON.witch} ${esc(col.title)}</div>`
            + `</div>`
            + `<div class="replay-beat-text">${esc(col.text)}</div>`
            + `</div>`;
@@ -5954,13 +5985,13 @@ export class UIController {
       }
       return `<div class="replay-step-col replay-conv-col" data-step="${col.stepIndex}">`
            + `<div class="replay-step-header">`
-           +   `<div class="replay-step-label">💬 ${esc(col.title)}</div>`
+           +   `<div class="replay-step-label">${ICON.conversation} ${esc(col.title)}</div>`
            +   muteBtnHtml
            + `</div>`
            + rows
            + `<div class="replay-conv-btns">`
            +   `<button class="replay-conv-btn" type="button">SKIP</button>`
-           +   `<button class="replay-conv-continue" type="button" style="display:none">CONTINUE ▶</button>`
+           +   `<button class="replay-conv-continue" type="button" style="display:none">CONTINUE ${ICON.play}</button>`
            + `</div>`
            + `</div>`;
     }
@@ -6133,8 +6164,12 @@ export class UIController {
       targetOut = out(entry.targetDmg > 0 ? `−${entry.targetDmg}` : '', kind);
     } else {
       // Move / explore / etc.: the note (BLOCKED / "+1 RESOURCE") sits centred.
+      // Loot/explore notes carry resource glyphs (e.g. " Wood" / " Herbs"); tint
+      // each by type so the glyph reads brown/green while the label stays
+      // ambient. Non-resource notes (BLOCKED / FOUND SURVIVOR / …) pass through
+      // unchanged — tintResourceGlyphs only touches the six resource PUA glyphs.
       actorOut  = out('', '');
-      centerOut = entry.note ? out(entry.note.text, entry.note.kind) : out('', '');
+      centerOut = entry.note ? out(tintResourceGlyphs(entry.note.text), entry.note.kind) : out('', '');
       targetOut = out('', '');
     }
 
@@ -6390,9 +6425,14 @@ export class UIController {
     let lootHtml = '';
     if (loot.length) {
       const tally = new Map();
-      for (const it of loot) tally.set(it, (tally.get(it) ?? 0) + 1);
-      const pips = [...tally.entries()].map(([icon, n]) =>
-        `<span class="wrapup-loot-pip">${esc(icon)}${n > 1 ? `<span class="wrapup-loot-x">×${n}</span>` : ''}</span>`
+      for (const it of loot) { const k = String(it).replace(/^\+/, ''); tally.set(k, (tally.get(k) ?? 0) + 1); }
+      // Tint each pip's leading resource glyph by type (wood brown, herbs green,
+      // …) while the label text stays ambient. esc() runs first for safety; the
+      // resource PUA glyphs are not &<> so they survive escaping, and
+      // tintResourceGlyphs wraps only those six glyphs — horse/weapon pips pass
+      // through ambient.
+      const pips = [...tally.entries()].map(([label, n]) =>
+        `<span class="wrapup-loot-pip">${tintResourceGlyphs(esc(label))}${n > 1 ? `<span class="wrapup-loot-x">×${n}</span>` : ''}</span>`
       ).join('');
       lootHtml = `<div class="wrapup-loot"><div class="wrapup-found-label">Looted</div>`
         + `<div class="wrapup-loot-row">${pips}</div></div>`;
@@ -6407,18 +6447,18 @@ export class UIController {
           // DOT deaths carry their cause in `text` ("🩸 X succumbs to
           // bleeding!"); night-attrition kills keep the classic copy.
           const note = a.text
-            ? esc(String(a.text).replace(/^💀\s*/, ''))
+            ? esc(String(a.text).replace(/^\uE097\s*/, ''))
             : `${esc(a.name)} <span class="wrapup-attr-note">consumed by the night</span>`;
-          return `<div class="wrapup-attr-row hurt">💀 ${note}</div>`;
+          return `<div class="wrapup-attr-row hurt">${ICON.defeat} ${note}</div>`;
         }
         if (a.kind === 'damage') {
-          return `<div class="wrapup-attr-row hurt">🌙 ${esc(a.name)} <span class="wrapup-attr-dmg">−${a.amount} HP</span> <span class="wrapup-attr-note">exposed</span></div>`;
+          return `<div class="wrapup-attr-row hurt">${ICON.night} ${esc(a.name)} <span class="wrapup-attr-dmg">−${a.amount} HP</span> <span class="wrapup-attr-note">exposed</span></div>`;
         }
-        const icon = a.shelter === 'building' ? '🏠' : '🏰';
+        const icon = a.shelter === 'building' ? '\uE03C' : '\uE03B';
         const desc = a.shelter === 'building' ? 'sheltered in building' : 'sheltered by fort';
         return `<div class="wrapup-attr-row safe">${icon} ${esc(a.name)} <span class="wrapup-attr-note">${desc}</span></div>`;
       }).join('');
-      attritionListHtml = `<div class="wrapup-attr"><div class="wrapup-found-label">🌙 Night Attrition</div>`
+      attritionListHtml = `<div class="wrapup-attr"><div class="wrapup-found-label">${ICON.night} Night Attrition</div>`
         + `<div class="wrapup-attr-rows">${rows}</div></div>`;
     }
 
@@ -6432,7 +6472,7 @@ export class UIController {
     // Night-attrition escalation warning, folded in from its old modal.
     let attritionHtml = '';
     if (attritionLevel > 0) {
-      attritionHtml = `<div class="wrapup-attrition">🌙 The curse deepens — exposed survivors `
+      attritionHtml = `<div class="wrapup-attrition">${ICON.night} The curse deepens — exposed survivors `
         + `now take <b>${attritionLevel}</b> damage each night.</div>`;
     }
     return attritionHtml + combatHtml + foundHtml + lootHtml + attritionListHtml + scoreHtml;
@@ -6555,7 +6595,7 @@ function _buildTerrainBadge(tile, nodeBadge = '') {
     const lvl    = tile.fortifyLevel;
     const hp     = tile.fortifyHP ?? lvl * FORTIFY_HP_PER_LEVEL;
     const lvlMax = lvl * FORTIFY_HP_PER_LEVEL;
-    parts.push(`<span class="usb-terrain-fort">⚙ Fort L${lvl} · ${hp}/${lvlMax} HP</span>`);
+    parts.push(`<span class="usb-terrain-fort">${coloredResourceIcon('metal')} Fort L${lvl} · ${hp}/${lvlMax} HP</span>`);
   }
   if (nodeBadge) {
     parts.push(nodeBadge);
@@ -6617,7 +6657,7 @@ function _entityPortraitId(snap) {
  * @param {number}  [opts.portraitSize] Portrait diameter in px (default 36).
  */
 function _unitCardHTML(entity, { renderer = null, selectable = false, showStats = true, portraitSize = 36 } = {}) {
-  const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
+  const GLYPHS = { hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003', zombie: '\uE005', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007' };
   const color  = ENTITY_COLOR[entity.type] || '#888';
   const glyph  = GLYPHS[entity.type] ?? '?';
   const label  = (entity.type === 'survivor' && entity.name) ? entity.name
@@ -6636,7 +6676,7 @@ function _unitCardHTML(entity, { renderer = null, selectable = false, showStats 
   const hpMax  = entity.maxHp ?? entity.hp ?? 0;
   const fullHearts  = Math.round(hpNow / DAMAGE_SCALE);
   const totalHearts = Math.max(fullHearts, Math.round(hpMax / DAMAGE_SCALE));
-  const hearts = '♥'.repeat(fullHearts) + '♡'.repeat(Math.max(0, totalHearts - fullHearts));
+  const hearts = '\uE088'.repeat(fullHearts) + '\uE089'.repeat(Math.max(0, totalHearts - fullHearts));
   let statsHtml = hearts;
   if (showStats && entity.attack !== undefined) {
     const atk = attackOf(entity);
@@ -6652,12 +6692,8 @@ function _unitCardHTML(entity, { renderer = null, selectable = false, showStats 
   return `<div class="${cls}"${dataId}>${portraitHtml}<span class="tile-unit-card-name" style="color:${color}">${label}</span><span class="tile-unit-card-stats">${statsHtml}</span></div>`;
 }
 
-function _snapEntity(e) {
-  return { id: e.id, name: e.displayName, hp: e.hp, maxHp: e.maxHp, attack: e.getAttack(), defense: e.getDefense(), type: e.type, title: e.title ?? null };
-}
-
 function _combatantHTML(snap, role, portraitSrc = null) {
-  const label      = role === 'atk' ? '⚔ Attacker' : '🛡 Defender';
+  const label      = role === 'atk' ? '\uE000 Attacker' : '\uE042 Defender';
   const color      = ENTITY_COLOR[snap.type] || '#888';
   const hpPct      = (snap.hp / snap.maxHp) * 100;
   const hpColor    = hpPct > 50 ? '#4caf50' : hpPct > 25 ? '#ff9800' : '#f44336';
@@ -6666,8 +6702,8 @@ function _combatantHTML(snap, role, portraitSrc = null) {
     : '';
   return `
     ${portraitHtml}
-    <div class="combatant-name" style="color:${color}">${snap.name}</div>
-    <div style="font-size:0.68rem;color:#7a7060;margin-bottom:0.3rem">${label}</div>
+    <div class="combatant-name" style="color:${color}">${snap.name}${levelPillHtml(snap.level)}</div>
+    <div style="font-size:var(--fs-2xs);color:#7a7060;margin-bottom:0.3rem">${label}</div>
     <div class="combatant-stats">HP: ${snap.hp}/${snap.maxHp} · ATK: ${snap.attack} · DEF: ${snap.defense}</div>
     <div class="combatant-hp-bar">
       <div class="combatant-hp-fill" style="width:${hpPct}%;background:${hpColor}"></div>
@@ -6692,28 +6728,28 @@ function _breakdownData(snap, bd, side, total) {
   const add = (label, val, sign, tip = null) => rows.push({ label, val, sign, tip });
   if (side === 'atk') {
     add(`${snap.name} ATK`, snap.attack, 'base', 'Base attack stat (including equipped weapon).');
-    if (snap.attackBonus)    add('🪙 Silver',          snap.attackBonus,    'pos', 'Silver weapon bonus.');
-    if (bd.phaseBonus)       add('🌙 Night',           bd.phaseBonus,       'pos', 'Phase bonus — the night favors the witch’s forces.');
-    if (bd.atkStaffBonus)    add('⚕ Staff (undead)',   bd.atkStaffBonus,    'pos', 'Weapon trigger — the staff is potent against undead defenders.');
-    if (bd.atkFortAtkBonus)  add('🏰 Fort ATT',        bd.atkFortAtkBonus,  'pos', 'Attacking from a fortified tile.');
+    if (snap.attackBonus)    add('\uE013 Silver',          snap.attackBonus,    'pos', 'Silver weapon bonus.');
+    if (bd.phaseBonus)       add('\uE023 Night',           bd.phaseBonus,       'pos', 'Phase bonus — the night favors the witch’s forces.');
+    if (bd.atkStaffBonus)    add('\uE08A Staff (undead)',   bd.atkStaffBonus,    'pos', 'Weapon trigger — the staff is potent against undead defenders.');
+    if (bd.atkFortAtkBonus)  add('\uE03B Fort ATT',        bd.atkFortAtkBonus,  'pos', 'Attacking from a fortified tile.');
     const atkAllyNames = bd.atkAllyNames ?? [];
     const atkAllyContrib = Math.min(atkAllyNames.length, bd.atkGangupFlat || 0);
     if (atkAllyContrib > 0) {
-      for (let i = 0; i < atkAllyContrib; i++) add(`👥 ${atkAllyNames[i]}`, 1, 'pos', GANGUP_TIP);
+      for (let i = 0; i < atkAllyContrib; i++) add(`${ICON.players} ${atkAllyNames[i]}`, 1, 'pos', GANGUP_TIP);
     } else if (bd.atkGangupFlat) {
-      add('👥 Gang-up flat', bd.atkGangupFlat, 'pos', GANGUP_TIP);
+      add('\uE080 Gang-up flat', bd.atkGangupFlat, 'pos', GANGUP_TIP);
     }
   } else {
     add(`${snap.name} DEF`, snap.defense, 'base', 'Base defense stat (including equipped weapon).');
-    if (snap.defenseBonus)  add('🛡 Bonus DEF',   snap.defenseBonus,  'pos', 'Temporary defense bonus.');
-    if (bd.fortBonus)       add('🏰 Fort DEF',    bd.fortBonus,       'pos', 'Fortification — each fort level on the defender’s tile adds defense.');
-    if (bd.fatiguePenalty)  add('😓 Fatigue',     -bd.fatiguePenalty, 'neg', 'Fatigue — defending repeatedly in one round wears the defender down.');
+    if (snap.defenseBonus)  add('\uE042 Bonus DEF',   snap.defenseBonus,  'pos', 'Temporary defense bonus.');
+    if (bd.fortBonus)       add('\uE03B Fort DEF',    bd.fortBonus,       'pos', 'Fortification — each fort level on the defender’s tile adds defense.');
+    if (bd.fatiguePenalty)  add('\uE08B Fatigue',     -bd.fatiguePenalty, 'neg', 'Fatigue — defending repeatedly in one round wears the defender down.');
     const defAllyNames = bd.defAllyNames ?? [];
     const defAllyContrib = Math.min(defAllyNames.length, bd.defGangupFlat || 0);
     if (defAllyContrib > 0) {
-      for (let i = 0; i < defAllyContrib; i++) add(`👥 ${defAllyNames[i]}`, 1, 'pos', GANGUP_TIP);
+      for (let i = 0; i < defAllyContrib; i++) add(`${ICON.players} ${defAllyNames[i]}`, 1, 'pos', GANGUP_TIP);
     } else if (bd.defGangupFlat) {
-      add('👥 Allies flat', bd.defGangupFlat, 'pos', GANGUP_TIP);
+      add('\uE080 Allies flat', bd.defGangupFlat, 'pos', GANGUP_TIP);
     }
   }
   return { pool, picked, advantage, rows, total };

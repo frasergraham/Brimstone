@@ -17,6 +17,7 @@ import {
   rebaseRootBoneY,
   rootBoneTrackAverageY,
   MANNEQUIN_RIG_FILE,
+  RIGGED_ENTITY_TYPES,
   LAZY_RIG_TYPES,
 } from '../src/renderer-3d.js';
 import { EntityType } from '../src/entities.js';
@@ -109,11 +110,27 @@ describe('stripRootBoneTranslation keepY', () => {
 });
 
 describe('entityTypeRigFile', () => {
-  test('derives <type>-idle.glb from the entity type', () => {
+  test('derives <type>-idle.glb only for a type that ships a rig', () => {
+    // zombie & paladin have a committed <type>-idle.glb → probed.
     assert.equal(entityTypeRigFile({ type: 'zombie' }), 'zombie-idle.glb');
-    assert.equal(entityTypeRigFile({ type: 'witch' }), 'witch-idle.glb');
-    // Underscored multi-word types pass through verbatim (already slug-safe).
-    assert.equal(entityTypeRigFile({ type: 'wood_golem' }), 'wood_golem-idle.glb');
+    assert.equal(entityTypeRigFile({ type: 'paladin' }), 'paladin-idle.glb');
+  });
+
+  test('returns null for a type WITHOUT a shipped rig (no doomed 404 probe)', () => {
+    // These types have no <type>-idle.glb on disk; they must skip straight to
+    // the mannequin rather than probe-and-404. Pin the no-rig types so a stray
+    // missing GLB can never re-introduce the noisy network log.
+    assert.equal(entityTypeRigFile({ type: 'witch' }), null);
+    assert.equal(entityTypeRigFile({ type: 'minion' }), null);
+    assert.equal(entityTypeRigFile({ type: 'wood_golem' }), null);
+    assert.equal(entityTypeRigFile({ type: 'iron_golem' }), null);
+    assert.equal(entityTypeRigFile({ type: 'survivor' }), null);
+  });
+
+  test('every RIGGED_ENTITY_TYPES member maps to a <type>-idle.glb', () => {
+    for (const type of RIGGED_ENTITY_TYPES) {
+      assert.equal(entityTypeRigFile({ type }), `${type}-idle.glb`);
+    }
   });
 
   test('returns null for a missing / non-string type', () => {
@@ -124,11 +141,20 @@ describe('entityTypeRigFile', () => {
 });
 
 describe('fallbackRigCandidates', () => {
-  test('orders the type-specific rig before the shared mannequin', () => {
+  test('orders the type-specific rig before the shared mannequin (rigged type)', () => {
     assert.deepEqual(fallbackRigCandidates({ type: 'zombie' }),
       ['zombie-idle.glb', MANNEQUIN_RIG_FILE]);
-    assert.deepEqual(fallbackRigCandidates({ type: 'survivor' }),
-      ['survivor-idle.glb', MANNEQUIN_RIG_FILE]);
+    assert.deepEqual(fallbackRigCandidates({ type: 'paladin' }),
+      ['paladin-idle.glb', MANNEQUIN_RIG_FILE]);
+  });
+
+  test('a no-rig type skips its own probe and goes straight to the mannequin', () => {
+    // The fix for the 404 noise: an unknown / un-rigged type must NOT list a
+    // <type>-idle.glb candidate at all, so the cascade never sends a doomed
+    // request for it. (Visual parity: the unit still ends up on the mannequin.)
+    assert.deepEqual(fallbackRigCandidates({ type: 'survivor' }), [MANNEQUIN_RIG_FILE]);
+    assert.deepEqual(fallbackRigCandidates({ type: 'witch' }), [MANNEQUIN_RIG_FILE]);
+    assert.deepEqual(fallbackRigCandidates({ type: 'a_brand_new_type' }), [MANNEQUIN_RIG_FILE]);
   });
 
   test('falls back to mannequin-only when there is no usable type', () => {
@@ -192,14 +218,26 @@ describe('_ensureFallbackRig cascade', () => {
     const r = newRenderer();
     const calls = [];
     r._loadFallbackRig = (file) => { calls.push(file); return Promise.resolve(null); };
-    // Reproduce the stuck state: witch-idle.glb was attempted and 404'd, so it
-    // sits in BOTH _rigFileMissing and (staler) _rigLoadPromises.
-    r._rigFileMissing.add('witch-idle.glb');
-    r._rigLoadPromises.set('witch-idle.glb', Promise.resolve(null));
-    r._ensureFallbackRig({ type: 'witch' });
+    // Reproduce the stuck state for a RIGGED type whose rig 404'd at runtime:
+    // zombie-idle.glb was attempted and 404'd, so it sits in BOTH
+    // _rigFileMissing and (staler) _rigLoadPromises.
+    r._rigFileMissing.add('zombie-idle.glb');
+    r._rigLoadPromises.set('zombie-idle.glb', Promise.resolve(null));
+    r._ensureFallbackRig({ type: 'zombie' });
     // Must skip the dead type rig and kick the mannequin — not get blocked on
     // the stale in-flight promise.
     assert.deepEqual(calls, [MANNEQUIN_RIG_FILE]);
+  });
+
+  test('a no-rig type never probes its own <type>-idle.glb — straight to mannequin', () => {
+    // (B) 404-noise fix: an un-rigged type must not even attempt <type>-idle.glb.
+    const r = newRenderer();
+    const calls = [];
+    r._loadFallbackRig = (file) => { calls.push(file); return Promise.resolve(null); };
+    r._ensureFallbackRig({ type: 'witch' });
+    assert.deepEqual(calls, [MANNEQUIN_RIG_FILE]);
+    assert.ok(!calls.includes('witch-idle.glb'),
+      'witch-idle.glb must never be requested');
   });
 
   test('kicks the type-specific rig first when nothing is loaded yet', () => {
@@ -363,14 +401,26 @@ describe('preload scope — survivors are lazy', () => {
     assert.ok(!calls.includes('survivor-idle.glb'), 'survivor NOT preloaded up front');
   });
 
-  test('preloadEntityRig loads a survivor rig on demand', async () => {
+  test('preloadEntityRig loads a lazily-revealed RIGGED type on demand', async () => {
+    // A type that ships its own rig (zombie) loads it JIT when revealed in a
+    // replay, rather than being preloaded up front.
     const r = newRenderer();
     const calls = [];
     r._loadFallbackRig      = (file) => { calls.push(file); return Promise.resolve(null); };
     r._loadWalkingAnimation = () => Promise.resolve(null);
     r._retargetWalkOntoRig  = () => null;
+    await r.preloadEntityRig({ type: 'zombie' });
+    assert.deepEqual(calls, ['zombie-idle.glb']);
+  });
+
+  test('preloadEntityRig is a no-op for a no-rig type (uses preloaded mannequin)', async () => {
+    // Survivors ship no rig of their own, so there is nothing to JIT-load — they
+    // render on the already-preloaded mannequin and we never probe (no 404).
+    const r = newRenderer();
+    const calls = [];
+    r._loadFallbackRig = (file) => { calls.push(file); return Promise.resolve(null); };
     await r.preloadEntityRig({ type: 'survivor' });
-    assert.deepEqual(calls, ['survivor-idle.glb']);
+    assert.deepEqual(calls, []);
   });
 
   test('preloadEntityRig is a no-op for mannequin-backed types', async () => {

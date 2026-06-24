@@ -6,6 +6,7 @@
 // plus a left-sidebar info panel.
 
 import { hexKey, hexDistance } from './hex.js';
+import { ICON } from './icons.js';
 import { describePlanAction } from './ui-render.js';
 
 // Board-shape differs per faction (witch board: visibleHeroes; hero board: witch + witchMinions),
@@ -215,7 +216,7 @@ export function updateAIDebugPanel(data, entities = []) {
   // Faction + personality header
   const factionRow = document.getElementById('ai-debug-faction-row');
   if (factionRow) {
-    const glyph = data.faction === 'witch' ? '✦' : '⚔';
+    const glyph = data.faction === 'witch' ? '\uE001' : '\uE000';
     const name = data.personality || 'balanced';
     factionRow.textContent = `${glyph} ${_capitalize(data.faction)} — ${_capitalize(name)}`;
   }
@@ -324,14 +325,14 @@ function _buildBoardSummaryRows(faction, b) {
     rows.push(['HP', `${b.witchHp ?? '?'}/${b.witchMaxHp ?? '?'} (${_pct(b.witchHpRatio)})`]);
     rows.push(['Army', `${b.minionCount ?? 0} minions`]);
     rows.push(['Strength', `${(b.armyStrength ?? 0).toFixed(1)}`]);
-    rows.push(['Resources', `🪵${b.woodCount ?? 0} ⚙${b.metalCount ?? 0}`]);
+    rows.push(['Resources', `${ICON.wood}${b.woodCount ?? 0} ${ICON.metal}${b.metalCount ?? 0}`]);
     rows.push(['Hero dist', `${b.heroDistance ?? '?'} hex`]);
     rows.push(['Hero HP', _pct(b.heroHpRatio)]);
   } else {
     rows.push(['HP', `${b.heroHp ?? '?'}/${b.heroMaxHp ?? '?'} (${_pct(b.heroHpRatio)})`]);
     rows.push(['Survivors', `${b.survivorCount ?? 0}`]);
-    rows.push(['Items', `🌿${b.herbCount ?? 0} 🍖${b.foodCount ?? 0}`]);
-    rows.push(['Resources', `🪵${b.woodCount ?? 0} ⚙${b.metalCount ?? 0}`]);
+    rows.push(['Items', `${ICON.herb}${b.herbCount ?? 0} ${ICON.food}${b.foodCount ?? 0}`]);
+    rows.push(['Resources', `${ICON.wood}${b.woodCount ?? 0} ${ICON.metal}${b.metalCount ?? 0}`]);
     rows.push(['Witch dist', `${b.witchDistance ?? '?'} hex`]);
     rows.push(['Witch HP', _pct(b.witchHpRatio)]);
   }

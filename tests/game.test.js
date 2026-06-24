@@ -204,6 +204,65 @@ describe('Victory — kill conditions', () => {
   });
 });
 
+// peekVictory() — a READ-ONLY look at whether the current (already-resolved)
+// state has sealed a game-over, WITHOUT mutating state.winner/log. The offline
+// resolution loop uses it the moment resolvePlans() returns so it can auto-run
+// the round's replay to completion (instead of stranding a manual-stepping
+// player on the replay HUD, never reaching the Victory/Defeat modal — the
+// "stuck in replay after killing the golem" bug on Mission 1 / the prologue).
+describe('peekVictory — read-only game-over detection (Mission 1 stuck-replay fix)', () => {
+  test('does not mutate state and reports nothing when the game is live', () => {
+    const state = new GameState(true, true);
+    assert.equal(state.peekVictory(), null, 'no game-over while both leaders stand');
+    assert.equal(state.winner, null, 'peek must not set winner');
+    assert.equal(state.gameOver, false, 'peek must not flip gameOver');
+  });
+
+  test('detects an impending standard leader-death win without mutating', () => {
+    const state = new GameState(true, true);
+    state.witch.hp = 0; // resolution just slew the witch leader
+    const peek = state.peekVictory();
+    assert.ok(peek, 'peek sees the sealed win');
+    assert.equal(peek.winner, 'hero');
+    // Crucially read-only: the live victory state is untouched until finalizeRound.
+    assert.equal(state.winner, null, 'peek did not write winner');
+    assert.equal(state.gameOver, false, 'peek did not flip gameOver');
+  });
+
+  test('detects a mission-logic "all enemies dead" win shape (prologue golem, no witch leader)', () => {
+    // The prologue has hasWitch:false (no witch leader) and wins via the
+    // mission-logic graph when every witch-owned unit (3 zombies → golem) dies.
+    // checkVictory() can't see that win (it's graph-driven), but peekVictory()
+    // must still recognise the round as game-ending so the replay auto-completes
+    // rather than gating on a manual NEXT the player may never press.
+    const state = new GameState(true, true);
+    // Mirror hasWitch:false — drop the witch leader.
+    state.entities = state.entities.filter(e => !(e.owner === 'witch' && e.type === EntityType.WITCH));
+    state.witch = null;
+    // The mission-logic proxy only runs for graph missions — attach a marker
+    // engine (the prologue has one; a plain game does not, and must NOT auto-win
+    // just because a side happens to have no units mid-game).
+    state.logicEngine = {};
+    // One lone witch-owned enemy (the golem). With it still on the board, the
+    // round hasn't sealed a win even though hadWitchUnits is true.
+    const golem = createMinion(2, 2, 'witch', state);
+    state.entities.push(golem);
+    assert.equal(state.peekVictory({ hadWitchUnits: true }), null, 'enemy still alive → not over yet');
+
+    // The resolver REMOVES dead entities, so a wipe shows up as zero witch units
+    // present (not a corpse with alive=false). Drop the golem to mirror that.
+    state.entities = state.entities.filter(e => e !== golem);
+    // Without the hadWitchUnits hint it's indistinguishable from a hero-only
+    // mission, so the proxy must stay silent.
+    assert.equal(state.peekVictory(), null, 'no hint → no false auto-win on an empty witch side');
+    // With the hint (the side fielded the golem this round) the wipe is a win.
+    const peek = state.peekVictory({ hadWitchUnits: true });
+    assert.ok(peek, 'witch side wiped after fielding a unit → the round sealed a win');
+    assert.equal(peek.winner, 'hero');
+    assert.equal(state.winner, null, 'peek stays read-only');
+  });
+});
+
 describe('Victory — node scoring', () => {
   // Helper: put `count` node hexes under one faction's control (default 2 = majority)
   function holdNodes(state, faction, count = 2) {
@@ -831,11 +890,23 @@ describe('startPlanning — power node bonus', () => {
 
   test('no bonus when no nodes held', () => {
     const state = new GameState(true, true);
-    // Move both leaders away from all nodes
-    state.hero.col = 0;
-    state.hero.row = 0;
-    state.witch.col = 1;
-    state.witch.row = 0;
+    // Move both leaders off ALL nodes. The map is procedural (unseeded), so a
+    // hardcoded hex like (1,0) occasionally lands inside a node's footprint
+    // (~1.5% of maps) and the leader picks up an unexpected +1 node bonus —
+    // a spurious CI failure. Instead, derive guaranteed off-node hexes from the
+    // actual generated map so the "no nodes held" intent holds on every seed.
+    const nodeHexes = new Set(
+      state.witchObjectives.flatMap(o => o.hexes.map(h => hexKey(h.col, h.row)))
+    );
+    const offNode = [...state.tiles.keys()]
+      .filter(k => !nodeHexes.has(k))
+      .map(k => k.split(',').map(Number));
+    const [heroCol, heroRow] = offNode[0];
+    const [witchCol, witchRow] = offNode[1];
+    state.hero.col = heroCol;
+    state.hero.row = heroRow;
+    state.witch.col = witchCol;
+    state.witch.row = witchRow;
 
     state.startPlanning();
 
@@ -1010,7 +1081,7 @@ describe('swapLeaderToFaction', () => {
     const state = new GameState(true, true);
     state.swapLeaderToFaction('night', 'brute');
     assert.equal(state.witch.type,    'brute');
-    assert.equal(state.witch.maxHp,   126);
+    assert.equal(state.witch.maxHp,   100);
     assert.equal(state.witch.attack,   4);
     assert.equal(state.witch.defense,  3);
     assert.equal(state.witch.agility,  3);

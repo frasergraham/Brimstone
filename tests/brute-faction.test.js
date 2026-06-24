@@ -30,18 +30,29 @@ function clearFootprint(tile) {
   return tile;
 }
 
-// Normalize a tile to plain open ground. A procedural map can drop a building
-// (and its fortifyLevel) on any hex; a fortified/building tile under the
-// defender grants a +1 combat defense bonus that silently shifts the combat
-// margin, so fixtures asserting exact margin/splash damage must neutralize it.
-function openTile(state, col, row) {
-  const t = state.tiles.get(hexKey(col, row));
-  if (!t) return t;
-  clearFootprint(t);
-  t.structure = null;   // hasBuilding() also keys off `structure`, not just `building`
-  t.building = null;
-  t.fortifyLevel = 0;
-  return t;
+
+// Isolate a single melee duel so the combat margin is a pure function of the
+// forced dice: remove every entity except `leader` (no stray-ally gang-up) and
+// scrub the surrounding tiles to plain grass (no terrain defence bonus on the
+// target, open knockback destinations). Procedural maps otherwise occasionally
+// shift the margin — flipping a forced non-crush into a crush, or a survivable
+// blow into a kill — which makes margin/crush/kill assertions flaky.
+// Remove every entity except `leader` so the procedural map's stray units
+// (which can occupy a fixture's target/destination hex and fail a move, or add
+// gang-up advantage) can't interfere.
+function soloLeader(state, leader) {
+  state.entities = state.entities.filter(e => e === leader);
+}
+
+function isolateArena(state, leader, radius = 3) {
+  soloLeader(state, leader);
+  for (const [, t] of state.tiles) {
+    if (hexDistance(t.col, t.row, leader.col, leader.row) <= radius) {
+      decomposeTileType(t, TileType.GRASS);
+      t.building = null; t.structure = null; t.fortifyLevel = 0;
+      clearFootprint(t);
+    }
+  }
 }
 
 // Spawn a brute leader at (col, row) by swapping the night-side default.
@@ -75,7 +86,7 @@ describe('BruteFaction — class & registry', () => {
 describe('BruteFaction — leader stats', () => {
   test('brute is a heavy tank: high HP, ATK, DEF; low agility', () => {
     const b = getFaction('brute').createLeader(0, 0, 'p1');
-    assert.equal(b.maxHp,   126);
+    assert.equal(b.maxHp,   100);
     assert.equal(b.attack,   4);
     assert.equal(b.defense,  3);
     assert.equal(b.agility,  3);
@@ -176,12 +187,19 @@ describe('BruteFaction — minions-only summons', () => {
 describe('BruteFaction — onAfterMoveStep auto-zombifies survivors in buildings', () => {
   test('moving onto a building tile with a hidden survivor auto-raises a zombie', () => {
     const { state, brute } = bruteState(3, 3);
+    soloLeader(state, brute); // keep the move's destination/path clear of stray units
     const t = state.tiles.get(hexKey(4, 3));
     decomposeTileType(t, TileType.BUILDING);
     t.building = BuildingType.INN;
     t.hiddenSurvivor = true;
     t.explored = false;
     clearFootprint(t);
+    // Clear stray hidden survivors the random map placed elsewhere, so the
+    // move's phase-random reveal can only fire on the building under test.
+    for (const tile of state.tiles.values()) {
+      if (tile.col === 4 && tile.row === 3) continue;
+      tile.hiddenSurvivor = false;
+    }
 
     const result = executeMove(state, brute, 4, 3);
     assert.equal(result.success, true);
@@ -197,6 +215,7 @@ describe('BruteFaction — onAfterMoveStep auto-zombifies survivors in buildings
 
   test('moving adjacent to a building with a hidden survivor auto-zombifies', () => {
     const { state, brute } = bruteState(3, 3);
+    soloLeader(state, brute); // keep the move's destination/path clear of stray units
     const adj = state.tiles.get(hexKey(5, 3));
     decomposeTileType(adj, TileType.BUILDING);
     adj.building = BuildingType.CHURCH;
@@ -208,6 +227,12 @@ describe('BruteFaction — onAfterMoveStep auto-zombifies survivors in buildings
     dest.building = null;
     dest.hiddenSurvivor = false;
     clearFootprint(dest);
+    // Clear stray hidden survivors elsewhere so the only discovery is the
+    // adjacent building under test.
+    for (const tile of state.tiles.values()) {
+      if (tile.col === 5 && tile.row === 3) continue;
+      tile.hiddenSurvivor = false;
+    }
 
     const result = executeMove(state, brute, 4, 3);
     assert.equal(result.success, true);
@@ -262,16 +287,18 @@ describe('BruteFaction — onAfterMoveStep auto-zombifies survivors in buildings
 describe('BruteFaction — splash blast configuration', () => {
   test('config flags: brute is the only faction with splash extras', () => {
     const b = getFaction('brute');
-    assert.equal(b.crushSplashRadius(),    1);
-    assert.equal(b.splashesOnEveryHit(),   true);
-    assert.equal(b.splashSparesAllies(),   true);
-    assert.equal(b.splashKnockback(),      true);
+    assert.equal(b.crushSplashRadius(),      1);
+    assert.equal(b.splashesOnEveryHit(),     true);
+    assert.equal(b.splashSparesAllies(),     true);
+    assert.equal(b.splashKnockback(),        true);
+    assert.equal(b.splashScalesWithMargin(), true);
     for (const id of ['hero', 'rogue', 'captain', 'witch', 'necromancer']) {
       const f = getFaction(id);
-      assert.equal(f.crushSplashRadius(),  0, `${id} should not splash`);
-      assert.equal(f.splashesOnEveryHit(), false);
-      assert.equal(f.splashSparesAllies(), false);
-      assert.equal(f.splashKnockback(),    false);
+      assert.equal(f.crushSplashRadius(),      0, `${id} should not splash`);
+      assert.equal(f.splashesOnEveryHit(),     false);
+      assert.equal(f.splashSparesAllies(),     false);
+      assert.equal(f.splashKnockback(),        false);
+      assert.equal(f.splashScalesWithMargin(), false);
     }
   });
 });
@@ -299,11 +326,11 @@ function placeNeutralBystander(state, targetPos, actor, hp = 99) {
 describe('BruteFaction — splash splashes on every hit, not just crushes', () => {
   test('a regular (non-crush) hit by the brute still splashes adjacent enemy hexes', () => {
     const { state, brute } = bruteState(5, 5);
+    isolateArena(state, brute);
     const targetPos = getNeighbors(brute.col, brute.row)[0];
-    openTile(state, targetPos.col, targetPos.row); // strip any random building/fort defense bonus
     const target = createMinion(targetPos.col, targetPos.row);
     target.owner = 'hero';
-    target.maxHp = 5; target.hp = 5;
+    target.maxHp = 99; target.hp = 99; // survives, so splash is attributable to the hit, not a kill
     state.entities.push(target);
 
     const bystander = placeNeutralBystander(state, targetPos, brute, 5);
@@ -315,6 +342,7 @@ describe('BruteFaction — splash splashes on every hit, not just crushes', () =
     const r = executeBattle(state, brute, target);
     assert.equal(r.success, true);
     assert.equal(r.hit, true);
+    assert.equal(r.killed, false, 'target survives — this exercises splash-on-every-hit');
     assert.ok(r.attackRoll < 2 * r.defenseRoll, 'should be a regular hit, not a crush');
     assert.ok(bystander.hp < 5,
       `bystander should take splash damage on a non-crush hit, hp=${bystander.hp}`);
@@ -351,46 +379,71 @@ describe('BruteFaction — splash splashes on every hit, not just crushes', () =
   });
 });
 
-describe('BruteFaction — splash damage scales with margin', () => {
-  test('splash dmg = clamp(floor(margin/3), 1, 3)', () => {
-    const place = (atkDie, defDie) => {
-      const { state, brute } = bruteState(5, 5);
-      const targetPos = getNeighbors(brute.col, brute.row)[0];
-      openTile(state, targetPos.col, targetPos.row); // strip any random building/fort defense bonus
-      const target = createMinion(targetPos.col, targetPos.row);
-      target.owner = 'hero';
-      target.maxHp = 99; target.hp = 99;
-      state.entities.push(target);
+describe('BruteFaction — splash damage rolls tier d6 (variable, scales with margin)', () => {
+  // Isolate the duel so the combat margin is fully determined by the forced
+  // dice: clear stray entities (no gang-up advantage) and scrub the area to
+  // grass (no terrain defence bonus). A fresh state is round 1 / DAWN, which
+  // gives neither side a phase advantage. With atkNet = defNet = 0 the dice
+  // order is atkPool(1) → defPool(1) → main 2d6 damage(2) → splash tier×d6, so
+  // forcing the whole sequence pins both the margin and the splash roll.
+  // Brute is unarmed (2d6), ATK 4, target DEF 0 → margin = atkDie + 4 - defDie.
+  function setup() {
+    const { state, brute } = bruteState(5, 5);
+    isolateArena(state, brute);
+    const targetPos = getNeighbors(brute.col, brute.row)[0];
+    const target = createMinion(targetPos.col, targetPos.row);
+    target.owner = 'hero'; target.maxHp = 99; target.hp = 99;
+    state.entities.push(target);
+    const bystander = placeNeutralBystander(state, targetPos, brute, 99);
+    assert.ok(bystander, 'need an open neighbour hex for the bystander');
+    return { state, brute, target, bystander };
+  }
 
-      const bystander = placeNeutralBystander(state, targetPos, brute, 99);
-      state.setForcedDice(atkDie, defDie);
+  test('tier = clamp(floor(margin/3),1,3) d6, rolled — not a fixed 7/14/21', () => {
+    // The two main-damage dice are forced to 1,1 so the 99-HP target always
+    // survives (splash still fires); the trailing dice are the splash roll.
+    const splashOf = (...forced) => {
+      const { state, brute, target, bystander } = setup();
+      state.setForcedDice(...forced);
       const r = executeBattle(state, brute, target);
-      return { r, bystander };
+      assert.equal(r.hit, true);
+      return { margin: r.margin, dmg: 99 - bystander.hp };
     };
 
-    // Brute ATK=4, target DEF=0. Margin = atk + 4 - def. Splash level (1–3)
-    // scales with margin, then ×DAMAGE_SCALE (7).
-    // atk=2,def=5 → margin 1 → level 1 → 7
+    // margin 1 → tier 1 → 1d6 (splash die forced to 4)
     {
-      const { r, bystander } = place(2, 5);
-      assert.equal(r.hit, true);
-      assert.equal(r.margin, 1);
-      assert.equal(99 - bystander.hp, 7, `margin ${r.margin}: expected level 1 ×7 splash dmg`);
+      const { margin, dmg } = splashOf(2, 5, 1, 1, 4);
+      assert.equal(margin, 1);
+      assert.equal(dmg, 4, 'tier 1 → 1d6 (forced 4)');
     }
-    // atk=4,def=1 → margin 7 → floor(7/3)=2 → 14
+    // margin 7 → tier 2 → 2d6 (splash dice forced to 3,5 → 8)
     {
-      const { r, bystander } = place(4, 1);
-      assert.equal(r.hit, true);
-      assert.equal(r.margin, 7);
-      assert.equal(99 - bystander.hp, 14, `margin ${r.margin}: expected level 2 ×7 splash dmg`);
+      const { margin, dmg } = splashOf(4, 1, 1, 1, 3, 5);
+      assert.equal(margin, 7);
+      assert.equal(dmg, 8, 'tier 2 → 2d6 (forced 3+5)');
     }
-    // atk=6,def=1 → margin 9 → cap at level 3 → 21
+    // margin 9 → tier 3 (cap) → 3d6 (splash dice forced to 2,3,6 → 11)
     {
-      const { r, bystander } = place(6, 1);
-      assert.equal(r.hit, true);
+      const { margin, dmg } = splashOf(6, 1, 1, 1, 2, 3, 6);
+      assert.equal(margin, 9);
+      assert.equal(dmg, 11, 'tier 3 → 3d6 (forced 2+3+6)');
+    }
+  });
+
+  test('tier-3 splash is a variable 3d6 (rolls track the dice, 3..18) — not a fixed 21', () => {
+    // margin 9 → tier 3 → 3d6 = sum of the three forced splash dice.
+    const splashOf = (s1, s2, s3) => {
+      const { state, brute, target, bystander } = setup();
+      state.setForcedDice(6, 1, 1, 1, s1, s2, s3);
+      const r = executeBattle(state, brute, target);
       assert.equal(r.margin, 9);
-      assert.equal(99 - bystander.hp, 21, `margin ${r.margin}: expected level 3 ×7 splash dmg (cap)`);
-    }
+      return 99 - bystander.hp;
+    };
+    assert.equal(splashOf(1, 1, 1), 3,  'min 3d6 = 3');
+    assert.equal(splashOf(6, 6, 6), 18, 'max 3d6 = 18');
+    assert.equal(splashOf(2, 3, 6), 11, 'mid 3d6 = 11');
+    // Distinct rolls → distinct damage: it is a variable roll, not a fixed value.
+    assert.equal(new Set([3, 18, 11]).size, 3);
   });
 });
 
@@ -448,12 +501,12 @@ describe('BruteFaction — splash knocks bystanders outward', () => {
     state.entities.push(target);
 
     // Neutral bystander — keeps gang-up math out of it. High HP so it survives
-    // the scaled splash (7) and is knocked back rather than killed.
+    // the splash (≤6) and is knocked back rather than killed.
     const bystander = placeNeutralBystander(state, targetPos, brute, 99);
     assert.ok(bystander, 'need an open neighbour hex of the target');
     const startCol = bystander.col, startRow = bystander.row;
 
-    // Regular hit. Margin 1 → splash level 1 ×7 = 7, bystander survives → knocked back.
+    // Regular hit. Margin 1 → tier 1 → 1d6 (≤6), bystander survives → knocked back.
     state.setForcedDice(2, 5);
 
     const r = executeBattle(state, brute, target);
@@ -482,6 +535,7 @@ describe('Crushing blows wound the target — universal', () => {
     const state = freshState();
     state.hero.col = 5; state.hero.row = 5;
     const paladin = state.hero;
+    isolateArena(state, paladin);
 
     const targetPos = getNeighbors(paladin.col, paladin.row)[0];
     const target = createMinion(targetPos.col, targetPos.row);
@@ -502,6 +556,7 @@ describe('Crushing blows wound the target — universal', () => {
     const state = freshState();
     state.hero.col = 5; state.hero.row = 5;
     const paladin = state.hero;
+    isolateArena(state, paladin);
 
     const targetPos = getNeighbors(paladin.col, paladin.row)[0];
     const target = createMinion(targetPos.col, targetPos.row);
@@ -522,6 +577,7 @@ describe('Crushing blows wound the target — universal', () => {
     const state = freshState();
     state.hero.col = 5; state.hero.row = 5;
     const paladin = state.hero;
+    isolateArena(state, paladin);
 
     const targetPos = getNeighbors(paladin.col, paladin.row)[0];
     const target = createMinion(targetPos.col, targetPos.row);

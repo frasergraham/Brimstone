@@ -13,6 +13,12 @@ import {
   campaignMissionSaveKey, loadCampaignMissionSave, deleteCampaignMissionSave,
 } from '../src/campaign/campaign-ui.js';
 import { getCampaignById } from '../src/campaign/campaign-registry.js';
+import { SAVE_VERSION } from '../src/version.js';
+
+// A version-compatible mid-mission save stub. loadCampaignMissionSave version-gates
+// the save, so these slot-routing tests stamp the current SAVE_VERSION (the gate
+// itself is exercised in tests/campaign-resume-correctness.test.js).
+const _midSave = (over) => JSON.stringify({ saveVersion: SAVE_VERSION, ...over });
 
 // ── localStorage mock for Node ───────────────────────────────────────────────
 const _store = {};
@@ -24,6 +30,10 @@ globalThis.localStorage = {
 };
 
 const hollowDef = getCampaignById('calebs_hollow_prologue');
+// The tutorial is shelved (disabled), so progress totals count only the PLAYABLE
+// missions and a fresh campaign opens on the first playable mission.
+const PLAYABLE_TOTAL = hollowDef.missions.filter(m => !m.disabled).length;
+const FIRST_PLAYABLE = hollowDef.missions.find(m => !m.disabled).id;
 
 // ── Slot-key derivation ───────────────────────────────────────────────────────
 
@@ -207,36 +217,36 @@ describe('mid-mission save slots', () => {
   });
 
   test('mid-mission saves are independent across slots', () => {
-    localStorage.setItem(campaignMissionSaveKey('camp', 'm1', 1), JSON.stringify({ slotIndex: 1, round: 5 }));
-    localStorage.setItem(campaignMissionSaveKey('camp', 'm1', 2), JSON.stringify({ slotIndex: 2, round: 9 }));
+    localStorage.setItem(campaignMissionSaveKey('camp', 'm1', 1), _midSave({ slotIndex: 1, round: 5 }));
+    localStorage.setItem(campaignMissionSaveKey('camp', 'm1', 2), _midSave({ slotIndex: 2, round: 9 }));
     assert.equal(loadCampaignMissionSave('camp', 'm1', 1).round, 5);
     assert.equal(loadCampaignMissionSave('camp', 'm1', 2).round, 9);
   });
 
   test('slot 1 reads through to a legacy unsuffixed mid-mission save', () => {
-    localStorage.setItem('brimstone_campaign_mission_camp_m1', JSON.stringify({ round: 3 }));
+    localStorage.setItem('brimstone_campaign_mission_camp_m1', _midSave({ round: 3 }));
     assert.equal(loadCampaignMissionSave('camp', 'm1', 1).round, 3);
     // Other slots do not see the legacy mid-mission save.
     assert.equal(loadCampaignMissionSave('camp', 'm1', 2), null);
   });
 
   test('slot-1 save takes precedence over the legacy key', () => {
-    localStorage.setItem('brimstone_campaign_mission_camp_m1', JSON.stringify({ round: 3 }));
-    localStorage.setItem(campaignMissionSaveKey('camp', 'm1', 1), JSON.stringify({ round: 8 }));
+    localStorage.setItem('brimstone_campaign_mission_camp_m1', _midSave({ round: 3 }));
+    localStorage.setItem(campaignMissionSaveKey('camp', 'm1', 1), _midSave({ round: 8 }));
     assert.equal(loadCampaignMissionSave('camp', 'm1', 1).round, 8);
   });
 
   test('delete on slot 1 clears both the slot key and the legacy key', () => {
-    localStorage.setItem('brimstone_campaign_mission_camp_m1', JSON.stringify({ round: 3 }));
-    localStorage.setItem(campaignMissionSaveKey('camp', 'm1', 1), JSON.stringify({ round: 8 }));
+    localStorage.setItem('brimstone_campaign_mission_camp_m1', _midSave({ round: 3 }));
+    localStorage.setItem(campaignMissionSaveKey('camp', 'm1', 1), _midSave({ round: 8 }));
     deleteCampaignMissionSave('camp', 'm1', 1);
     assert.equal(loadCampaignMissionSave('camp', 'm1', 1), null);
     assert.equal(localStorage.getItem('brimstone_campaign_mission_camp_m1'), null);
   });
 
   test('delete on slot 2 leaves the legacy key alone', () => {
-    localStorage.setItem('brimstone_campaign_mission_camp_m1', JSON.stringify({ round: 3 }));
-    localStorage.setItem(campaignMissionSaveKey('camp', 'm1', 2), JSON.stringify({ round: 9 }));
+    localStorage.setItem('brimstone_campaign_mission_camp_m1', _midSave({ round: 3 }));
+    localStorage.setItem(campaignMissionSaveKey('camp', 'm1', 2), _midSave({ round: 9 }));
     deleteCampaignMissionSave('camp', 'm1', 2);
     assert.equal(loadCampaignMissionSave('camp', 'm1', 2), null);
     assert.equal(localStorage.getItem('brimstone_campaign_mission_camp_m1') !== null, true);
@@ -252,22 +262,22 @@ describe('getSlotSummary', () => {
     const info = Campaign.getSlotSummary(hollowDef, 2);
     assert.equal(info.used, false);
     assert.equal(info.slotIndex, 2);
-    assert.equal(info.total, hollowDef.missions.length);
+    assert.equal(info.total, PLAYABLE_TOTAL);            // disabled tutorial excluded
   });
 
   test('reports a used slot with the next mission to resume', () => {
-    // Post tutorial-fold (Phase E), `tutorial` is Chapter 1's first mission and
-    // `prologue` (The Awakening) requires it — so "one mission done, resume next"
-    // is: tutorial completed, resume at prologue.
+    // The tutorial is disabled, so progress starts at the first playable mission
+    // (prologue). "One mission done, resume next" is: prologue completed, resume
+    // at the mission after it.
     const c = new Campaign(hollowDef, 1);
-    c.completedMissions.add('tutorial');
-    c.currentMission = 'prologue';
+    c.completedMissions.add('prologue');
+    c.currentMission = 'gathering_survivors';
     c.save();
     const info = Campaign.getSlotSummary(hollowDef, 1);
     assert.equal(info.used, true);
     assert.equal(info.status, 'in-progress');
     assert.equal(info.completed, 1);
-    assert.equal(info.currentMission, 'prologue');
+    assert.equal(info.currentMission, 'gathering_survivors');
     assert.ok(info.currentMissionTitle);
     assert.equal(typeof info.updatedAt, 'number');
   });
@@ -278,7 +288,9 @@ describe('getSlotSummary', () => {
     assert.equal(info.used, true);
     assert.equal(info.status, 'new');
     assert.equal(info.completed, 0);
-    assert.equal(info.currentMission, hollowDef.firstMission);
+    // firstMission is the (disabled) tutorial; a fresh slot resolves to the first
+    // playable mission instead.
+    assert.equal(info.currentMission, FIRST_PLAYABLE);
   });
 });
 
@@ -289,7 +301,7 @@ describe('getAggregateProgress', () => {
     const p = Campaign.getAggregateProgress(hollowDef);
     assert.equal(p.status, 'new');
     assert.equal(p.completed, 0);
-    assert.equal(p.total, hollowDef.missions.length);
+    assert.equal(p.total, PLAYABLE_TOTAL);               // disabled tutorial excluded
   });
 
   test('reports the furthest-along slot', () => {

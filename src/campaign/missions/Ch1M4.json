@@ -18,7 +18,7 @@
   "disableScoring": true,
   "aiPersonality": "aggressive",
   "aiBudgetBonus": 2,
-  "maxSurvivorsFromRoster": 2,
+  "maxSurvivorsFromRoster": 3,
   "minSurvivors": 2,
   "missionSurvivors": 1,
   "maxDiscoverableSurvivors": 1,
@@ -339,6 +339,78 @@
         },
         "x": 280,
         "y": 920
+      },
+      {
+        "id": "objStart0",
+        "type": "onMissionStart",
+        "params": {},
+        "x": 40,
+        "y": 900
+      },
+      {
+        "id": "set_bridge",
+        "type": "setObjective",
+        "params": {
+          "id": "bridge",
+          "label": "Cross the river bridges"
+        },
+        "x": 300,
+        "y": 900
+      },
+      {
+        "id": "set_church",
+        "type": "setObjective",
+        "params": {
+          "id": "church",
+          "label": "Get the whole party inside the river church"
+        },
+        "x": 300,
+        "y": 980
+      },
+      {
+        "id": "set_keep",
+        "type": "setObjective",
+        "params": {
+          "id": "keep",
+          "label": "Leave no companion behind"
+        },
+        "x": 300,
+        "y": 1060
+      },
+      {
+        "id": "objArea_bridge",
+        "type": "onAreaEnter",
+        "params": {
+          "hexes": [
+            {
+              "col": 10,
+              "row": 3
+            },
+            {
+              "col": 10,
+              "row": 4
+            },
+            {
+              "col": 10,
+              "row": 5
+            },
+            {
+              "col": 11,
+              "row": 4
+            }
+          ]
+        },
+        "x": 40,
+        "y": 1160
+      },
+      {
+        "id": "objDone_bridge",
+        "type": "completeObjective",
+        "params": {
+          "id": "bridge"
+        },
+        "x": 300,
+        "y": 1160
       }
     ],
     "edges": [
@@ -481,6 +553,50 @@
         },
         "to": {
           "node": "n20",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "objStart0",
+          "pin": "out"
+        },
+        "to": {
+          "node": "set_bridge",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "objStart0",
+          "pin": "out"
+        },
+        "to": {
+          "node": "set_church",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "objStart0",
+          "pin": "out"
+        },
+        "to": {
+          "node": "set_keep",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "objArea_bridge",
+          "pin": "onEnter"
+        },
+        "to": {
+          "node": "objDone_bridge",
           "pin": "in"
         },
         "kind": "exec"

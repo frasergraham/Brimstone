@@ -23,6 +23,11 @@ export const playback = {
   atRoundStart:  false,  // true while paused at the pre-animation point of a round
   speedMult:     0.5,    // playback speed multiplier (full-game replay)
   jumpToEnd:     false,  // skip to final game state
+  autoFinish:    false,  // force this round's replay to auto-run to completion
+                         // (no manual NEXT gate) — set when the round sealed a
+                         // game-over so the player can't be stranded mid-replay
+                         // before the terminal Victory/Defeat modal. One-shot:
+                         // cleared by _animateResolutionSteps after it reads it.
 };
 
 export function resetPlayback() {
@@ -35,6 +40,7 @@ export function resetPlayback() {
   playback.atRoundStart = false;
   playback.speedMult = 0.5;
   playback.jumpToEnd = false;
+  playback.autoFinish = false;
 }
 
 /**

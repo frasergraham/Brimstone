@@ -52,7 +52,7 @@ export const UNIT_TYPES = Object.freeze({
     tags: ['living', 'leader', 'night-leader'],
   },
   brute: {
-    baseStats: { maxHp: 126, attack: 4, defense: 3 },
+    baseStats: { maxHp: 100, attack: 4, defense: 3 },
     agility: 3,
     color: '#b075c8',
     tags: ['living', 'leader', 'night-leader'],

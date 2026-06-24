@@ -7,14 +7,22 @@
 // AI personalities, and unit roster within a side. See `src/sides.js`.
 
 import { Phase } from './game.js';
+import { ICON } from './icons.js';
 import { EntityType, SurvivorAbility, createHero, createWitch, createSurvivor, createZombie, createMinion, createWoodGolem, createIronGolem, createRogue, createCaptain, createNecromancer, createBrute, isLeaderType, getItemCountOf, totalItemCount } from './entities.js';
 import { ResourceType, BuildingType, rollLoot, hasBuilding, isRiver, isBuildingTile, isFortWall, tileCapacityRemaining } from './tiles.js';
 import { hexKey, getNeighbors } from './hex.js';
+import { pickUnitSlot } from './hex-slots.js';
 import { AI_HERO_NAMES, AI_WITCH_NAMES } from './ai-names.js';
 import { Side, getOpposingSide as _opposingSide } from './sides.js';
 import { ITEMS } from './items.js';
 import { DAMAGE_SCALE } from './balance.js';
 import { triggerSurvivorEncounter } from './survivor-discovery.js';
+
+/** Valid "Starting Resources" config levels (none/low/med/high) — the single
+ *  source of truth shared by the skirmish + online-lobby UI and the server's
+ *  config validation. Each faction maps a level to a bonus cache via
+ *  getStartingResourceBonus(level). */
+export const STARTING_RESOURCE_LEVELS = Object.freeze(['none', 'low', 'med', 'high']);
 
 // ── Base Class ──────────────────────────────────────────────────────────────
 
@@ -63,11 +71,34 @@ export class Faction {
    * @returns {number}
    */
   computeBudget(phase, unitCount, nodeBonus) {
+    return this.computeBudgetBreakdown(phase, unitCount, nodeBonus).total;
+  }
+
+  /**
+   * Itemized action-budget breakdown — the same math as {@link computeBudget},
+   * but returning the contributing parts so the UI can show and colour where
+   * each action came from. `parts` always sum to `total` (the capped budget):
+   * when the action cap trims the budget, later parts (node, then unit, …) are
+   * reduced first so the visible parts never add up to more than the total.
+   * @returns {{ parts: Array<{key:'base'|'phase'|'unit'|'node', value:number, count?:number}>, total:number }}
+   */
+  computeBudgetBreakdown(phase, unitCount, nodeBonus) {
     const timeBonus = this.isFavorablePhase(phase) ? 1 : 0;
-    return Math.min(
-      this.baseBudget + timeBonus + Math.min(unitCount, this.unitBonusCap) + nodeBonus,
-      this.actionCap
-    );
+    const parts = [
+      { key: 'base',  value: this.baseBudget },
+      { key: 'phase', value: timeBonus },
+      { key: 'unit',  value: Math.min(unitCount, this.unitBonusCap), count: unitCount },
+      { key: 'node',  value: nodeBonus },
+    ];
+    // Apply the action cap by trimming the last contributing parts first, so the
+    // parts always sum to the actual (capped) total.
+    let over = Math.max(0, parts.reduce((s, p) => s + p.value, 0) - this.actionCap);
+    for (let i = parts.length - 1; i >= 0 && over > 0; i--) {
+      const cut = Math.min(parts[i].value, over);
+      parts[i].value -= cut;
+      over -= cut;
+    }
+    return { parts, total: parts.reduce((s, p) => s + p.value, 0) };
   }
 
   // ── Available Actions ──
@@ -108,6 +139,15 @@ export class Faction {
    * the target (when the push destination is open terrain).
    */
   splashKnockback() { return false; }
+
+  /**
+   * If true, splash damage scales with the attacker's roll margin
+   * (1–3 points ×DAMAGE_SCALE) — the brute's signature. Default vanilla
+   * rule: splash is a flat 2d6 chip (≈7, never lethal to a >12-HP unit)
+   * that does NOT scale with margin, so crushing a weak unit can't be
+   * used to delete the strong units stacked alongside it.
+   */
+  splashScalesWithMargin() { return false; }
 
   /**
    * Resource cost for summoning a Minion. Defaults to 2 (witch's value)
@@ -231,6 +271,13 @@ export class Faction {
 
   /** Starting resources for this faction's inventory at game start */
   getStartingResources() { return {}; }
+
+  /** Bonus starting resources for the chosen "Starting Resources" level
+   *  (none/low/med/high) — a faction-tuned cache ADDED on top of
+   *  getStartingResources(). 'none' (the default) returns {} so the legacy
+   *  balance baseline and every existing game stay unchanged. Keyed by
+   *  ResourceType; overridden per-faction (hero: sustain; witch: summon stock). */
+  getStartingResourceBonus(_level) { return {}; }
 
   /** Log message when this faction finds a resource */
   getResourceFoundLog(_actor, _lootType) { return ''; }
@@ -415,15 +462,15 @@ export class HeroFaction extends Faction {
         if (b === BuildingType.INN) {
           const amt = 3 * DAMAGE_SCALE;
           hero.heal(amt);
-          state.addLog(`🏨 ${hero.displayName} rests at the inn. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
+          state.addLog(`${ICON.inn} ${hero.displayName} rests at the inn. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
         } else if (b === BuildingType.CHURCH) {
           const amt = 3 * DAMAGE_SCALE;
           hero.heal(amt);
-          state.addLog(`⛪ ${hero.displayName} prays at the chapel. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
+          state.addLog(`${ICON.church} ${hero.displayName} prays at the chapel. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
         } else {
           const amt = 1 * DAMAGE_SCALE;
           hero.heal(amt);
-          state.addLog(`🏠 ${hero.displayName} rests in shelter. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
+          state.addLog(`${ICON.shelter} ${hero.displayName} rests in shelter. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
         }
       }
     }
@@ -441,7 +488,7 @@ export class HeroFaction extends Faction {
         if (onNode) {
           const amt = 1 * DAMAGE_SCALE;
           hero.heal(amt);
-          state.addLog(`✨ ${hero.displayName} draws power from the node. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
+          state.addLog(`${ICON.sparkle} ${hero.displayName} draws power from the node. (+${amt} HP, now ${hero.hp}/${hero.maxHp})`, 'hero', state.playerColorFor(hero));
         }
       }
     }
@@ -484,8 +531,9 @@ export class HeroFaction extends Faction {
               s.owner = 'hero';
               if (Math.random() < 0.5) s.addItem('horse');
               state.entities.push(s);
+              assignSpawnSlot(state, s);
               const horseNote = s.hasItem('horse') ? ' (arrives on horseback!)' : '';
-              state.addLog(`✨ The node calls to the living — a survivor emerges!${horseNote}`, 'hero', state.playerColorFor(hero));
+              state.addLog(`${ICON.sparkle} The node calls to the living — a survivor emerges!${horseNote}`, 'hero', state.playerColorFor(hero));
               state.nodeSpawnedSurvivors.push({
                 id: s.id,
                 type: 'survivor',
@@ -503,10 +551,10 @@ export class HeroFaction extends Faction {
             } else {
               // No passable, unoccupied hex around the node — fail loudly
               // rather than place a survivor on impassable terrain.
-              state.addLog(`✨ The node calls to the living… but there is no safe ground for one to emerge.`, 'hero', state.playerColorFor(hero));
+              state.addLog(`${ICON.sparkle} The node calls to the living… but there is no safe ground for one to emerge.`, 'hero', state.playerColorFor(hero));
             }
           } else {
-            state.addLog(`✨ The node pulses faintly… no one answers the call tonight.`, 'hero');
+            state.addLog(`${ICON.sparkle} The node pulses faintly… no one answers the call tonight.`, 'hero');
           }
         }
       }
@@ -524,7 +572,7 @@ export class HeroFaction extends Faction {
     const abilityNote = entity.abilityLabel ? ` · ${entity.abilityLabel}` : '';
     return {
       encounterLog: [
-        `☺ ${entity.name} the ${entity.title} steps out of hiding and joins the party! (HP ${entity.hp}/${entity.maxHp} · ATK ${entity.getAttack()} · DEF ${entity.getDefense()}${abilityNote})`
+        `${ICON.survivor} ${entity.name} the ${entity.title} steps out of hiding and joins the party! (HP ${entity.hp}/${entity.maxHp} · ATK ${entity.getAttack()} · DEF ${entity.getDefense()}${abilityNote})`
       ],
       encounterSurvivor: {
         id: entity.id,
@@ -544,6 +592,17 @@ export class HeroFaction extends Faction {
   canDiscoverNPCs() { return true; }
 
   getStartingResources() { return { [ResourceType.FOOD]: 2 }; }
+
+  // Hero cache favours sustain + action economy (herbs heal, food = extra
+  // actions, silver = +ATK, scripture = ward). Added on top of the base food.
+  getStartingResourceBonus(level) {
+    switch (level) {
+      case 'low':  return { [ResourceType.HERBS]: 2, [ResourceType.FOOD]: 2 };
+      case 'med':  return { [ResourceType.HERBS]: 4, [ResourceType.FOOD]: 3, [ResourceType.SILVER]: 2 };
+      case 'high': return { [ResourceType.HERBS]: 6, [ResourceType.FOOD]: 5, [ResourceType.SILVER]: 3, [ResourceType.SCRIPTURE]: 2 };
+      default:     return {};
+    }
+  }
 
   getResourceFoundLog(actor, _lootType) {
     return `Found ${_lootType}! Added to shared supplies.`;
@@ -635,7 +694,8 @@ export class WitchFaction extends Faction {
       });
       const zombie = createZombie(spawn.col, spawn.row, leader.ownerId, state);
       state.entities.push(zombie);
-      state.addLog('🪦 The graveyard stirs — a zombie claws free of the earth!', 'witch');
+      assignSpawnSlot(state, zombie);
+      state.addLog('\uE034 The graveyard stirs — a zombie claws free of the earth!', 'witch');
     }
   }
 
@@ -702,7 +762,7 @@ export class WitchFaction extends Faction {
   buildDiscoveryResult(entity) {
     return {
       encounterLog: [
-        `† A cowering survivor is found… raised as a zombie! (HP ${entity.hp}/${entity.maxHp} · ATK ${entity.getAttack()} · DEF ${entity.getDefense()})`
+        `${ICON.zombie} A cowering survivor is found… raised as a zombie! (HP ${entity.hp}/${entity.maxHp} · ATK ${entity.getAttack()} · DEF ${entity.getDefense()})`
       ],
       encounterSurvivor: {
         id: entity.id,
@@ -716,6 +776,17 @@ export class WitchFaction extends Faction {
   }
 
   getStartingResources() { return { [ResourceType.WOOD]: 2, [ResourceType.METAL]: 2 }; }
+
+  // Witch cache favours the summon economy (wood → Wood Golem, metal → Iron
+  // Golem) plus some herbs to sustain raised units. Added on top of the base.
+  getStartingResourceBonus(level) {
+    switch (level) {
+      case 'low':  return { [ResourceType.WOOD]: 2, [ResourceType.METAL]: 2 };
+      case 'med':  return { [ResourceType.WOOD]: 4, [ResourceType.METAL]: 3, [ResourceType.HERBS]: 2 };
+      case 'high': return { [ResourceType.WOOD]: 6, [ResourceType.METAL]: 5, [ResourceType.HERBS]: 3 };
+      default:     return {};
+    }
+  }
 
   getResourceFoundLog(actor, lootType) {
     return `${actor.displayName} secures ${lootType} for dark rituals.`;
@@ -827,7 +898,7 @@ export class RogueFaction extends HeroFaction {
     for (const h of hits) {
       const enc = triggerSurvivorEncounter(state, actor, h.col, h.row);
       if (enc) {
-        encounterLog.push(`👁 ${actor.displayName} senses someone hiding nearby!`);
+        encounterLog.push(`${ICON.eye} ${actor.displayName} senses someone hiding nearby!`);
         encounterLog.push(...enc.encounterLog);
         encounterSurvivor = enc.encounterSurvivor;
       }
@@ -891,6 +962,10 @@ export class BruteFaction extends WitchFaction {
   // tactical effect — the damage tax is secondary.
   splashKnockback() { return true; }
 
+  // The brute's blast scales with the roll margin (1–3 points ×7) —
+  // unlike vanilla splash, which is a flat 2d6 chip.
+  splashScalesWithMargin() { return true; }
+
   // Brute summons only minions, and at a discount — 1 of any resource
   // instead of the witch's 2. Cheap chaff so she has bodies to soak
   // gang-up advantage while she swings her cleaver.
@@ -923,7 +998,7 @@ export class BruteFaction extends WitchFaction {
     for (const h of hits) {
       const enc = triggerSurvivorEncounter(state, actor, h.col, h.row);
       if (enc) {
-        encounterLog.push(`👹 ${actor.displayName} drags a cowering survivor from hiding!`);
+        encounterLog.push(`${ICON.ogre} ${actor.displayName} drags a cowering survivor from hiding!`);
         encounterLog.push(...enc.encounterLog);
         encounterSurvivor = enc.encounterSurvivor;
       }
@@ -1003,6 +1078,23 @@ export function isPlaceableTile(state, col, row, owner = null) {
   ).length;
   if (tileCapacityRemaining(t, units) <= 0) return false; // no free slot
   return true;
+}
+
+// Assign a freshly-spawned entity a sub-hex slot on its current tile — the same
+// "lowest free, non-blocked slot (centre preferred)" rule the move/summon paths
+// use (actions.js `assignSlotOnTile`) and the discovered-survivor path uses
+// (survivor-discovery.js). Mirrored here with `pickUnitSlot` directly rather
+// than importing `assignSlotOnTile`, because actions.js imports factions.js and
+// the reverse would be a circular import (same constraint survivor-discovery.js
+// notes). Call AFTER pushing the entity to `state.entities`. Pure (reads only
+// state) so it stays inside the sealed resolution. Without this, endRound()
+// spawns defaulted to slot 0 (hex centre) instead of picking around occupants.
+function assignSpawnSlot(state, entity) {
+  const t = state.tiles.get(hexKey(entity.col, entity.row));
+  const occupied = state.entities
+    .filter(e => e.alive && e.id !== entity.id && e.col === entity.col && e.row === entity.row)
+    .map(e => e.slot ?? 0);
+  entity.slot = pickUnitSlot(t?.blockedSlots ?? [], occupied);
 }
 
 /** Return all registered factions. */

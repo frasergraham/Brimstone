@@ -295,15 +295,49 @@ describe('playbackDelay respects flags in RESOLVING mode', () => {
   test('does NOT freeze mid-step on paused outside PLAYBACK (gating is boundary-based)', async () => {
     // Pausing in the inline replay is handled at the step boundary (the manual-
     // step gate), NOT inside playbackDelay — so a step's animation always plays
-    // through once started, even while paused.
+    // through once started, even while paused. In other words: `paused` must NOT
+    // engage the skip fast-path; a paused delay still waits out its full duration.
+    //
+    // This is asserted as a RELATIVE relationship rather than an absolute
+    // wall-clock bound. The old check (`elapsed < 200ms`) flaked under concurrent
+    // test load: a real setTimeout(40) can balloon to 200ms+ when the event loop
+    // is starved (seen at 232ms), even though pause-gating behaviour is unchanged.
+    // Here we time a paused delay against the skip fast-path (jumpToEnd, which
+    // resolves synchronously). Both measurements ride the same event loop, so load
+    // inflates both equally and the ORDERING — paused waits, skip doesn't — holds
+    // regardless of absolute timing. The load-bearing claim is exactly that
+    // ordering: pause must not shortcut the delay the way skip does.
+    const DELAY = 40;
+
+    // Baseline: the skip fast-path collapses the delay to ~0 (no real timer wait).
+    resetPlayback();
+    setMode(AppMode.RESOLVING);
+    playback.jumpToEnd = true;
+    let t = Date.now();
+    await playbackDelay(DELAY);
+    const skipElapsed = Date.now() - t;
+
+    // Paused outside PLAYBACK: must run the full delay (NOT the skip path).
     resetPlayback();
     setMode(AppMode.RESOLVING);
     playback.paused = true;
-    const start = Date.now();
-    await playbackDelay(40);
-    const elapsed = Date.now() - start;
-    assert.ok(elapsed >= 30 && elapsed < 200,
-      `delay should run normally (~40ms) while paused, got ${elapsed}ms`);
+    t = Date.now();
+    await playbackDelay(DELAY);
+    const pausedElapsed = Date.now() - t;
+
+    // Lower bound (load-bearing): the paused delay actually waited — it was not
+    // collapsed to zero like the skip path. A real timer can only fire LATE, never
+    // early, so a generous floor never flakes; the flake source was the (removed)
+    // upper bound.
+    assert.ok(pausedElapsed >= 30,
+      `paused delay should run its full ~${DELAY}ms, got ${pausedElapsed}ms`);
+    // Relative (load-tolerant): paused waits meaningfully longer than a skip.
+    // Skip resolves synchronously (~0ms); a clear margin proves pause did not
+    // engage the fast-path, without pinning a brittle absolute upper bound.
+    assert.ok(pausedElapsed >= skipElapsed + 20,
+      `paused delay (${pausedElapsed}ms) should be meaningfully longer than the ` +
+      `skip fast-path (${skipElapsed}ms) — pause must not shortcut the delay`);
+
     resetPlayback();
     setMode(AppMode.MENU);
   });

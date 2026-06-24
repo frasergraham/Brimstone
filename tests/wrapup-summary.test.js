@@ -5,6 +5,7 @@
 // end-of-turn wrap-up card (ui.js) and the admin Combat tester log.
 
 import { describe, test } from 'node:test';
+import { ICON } from '../src/icons.js';
 import assert from 'node:assert/strict';
 
 import {
@@ -50,7 +51,7 @@ describe('wrapup-summary — wrapupUnitCellHtml', () => {
   test('killed unit shows the skull badge with DIED label', () => {
     const html = wrapupUnitCellHtml(unit({ killed: true, hpLost: 3 }), '<i/>');
     assert.ok(html.includes('wrapup-dmg kill'));
-    assert.ok(html.includes('☠ DIED'));
+    assert.ok(html.includes(ICON.defeat + ' DIED'));
   });
 
   test('hurt unit shows −N', () => {
@@ -99,7 +100,7 @@ describe('wrapup-summary — buildWrapupCombatsHtml', () => {
     assert.ok(html.includes('>−3<'));
     // Kill skull for unit 5; unhurt units (2,3,4,6,7) are dropped entirely.
     assert.equal((html.match(/wrapup-unit"/g) ?? []).length, 2);
-    assert.ok(html.includes('☠'));
+    assert.ok(html.includes(ICON.defeat));
   });
 
   test('>3 pairs with no damage report bloodless skirmishes', () => {
@@ -182,8 +183,9 @@ describe('wrapup-summary — splash row', () => {
     }];
     const html = buildWrapupCombatsHtml(combats, glyphIcon);
     assert.ok(html.includes('wrapup-splash'), 'splash sub-row rendered');
-    assert.ok(html.includes('💢'), 'splash glyph present');
-    assert.ok(html.includes('☠'), 'splash kill skull shown');
+    assert.ok(html.includes(ICON.splash), 'splash glyph present (icon font, not color emoji)');
+    assert.ok(!html.includes('\u{1F4A2}'), 'no 💢 color emoji in the splash label');
+    assert.ok(html.includes(ICON.defeat), 'splash kill skull shown');
   });
 
   test('no splash → no splash row', () => {

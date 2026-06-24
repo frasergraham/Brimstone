@@ -168,7 +168,7 @@ describe('road terminus cap — _buildNetworkMesh integration', () => {
     assert.ok(through.pathArray[0].length > 2);
   });
 
-  test('river termini are NOT capped (no extra samples on a 1-neighbour river)', () => {
+  test('river is no longer drawn as a network ribbon (per-tile cut-channel meshes now)', () => {
     const created = [];
     const r = newInst();
     // River line A–B–C: endpoints have one water neighbour.
@@ -182,12 +182,11 @@ describe('road terminus cap — _buildNetworkMesh integration', () => {
     r.state = { tiles };
     r._buildRoadRiverNetworks();
 
-    const riverEnd = created.find(m => m.name === 'river_0_0_0');
-    assert.ok(riverEnd, 'expected a river ribbon for the endpoint tile');
-    // River 1-neighbour stroke is the off-tile through-bezier — its centre path
-    // is opaque at every vertex (no terminus fade).
-    for (const a of centrePathAlphas(riverEnd)) {
-      assert.ok(Math.abs(a - 1) < 1e-9, `river terminus centre path should be opaque, got ${a}`);
-    }
+    // The transparent water ribbon is retired — rivers are standalone solid
+    // cut-channel meshes built by `_buildRiverChannelMeshes` (see
+    // tests/river-channel-mesh.test.js). `_buildRoadRiverNetworks` only does roads now.
+    assert.ok(!created.some(m => /^river_/.test(m.name)),
+      'no river ribbon mesh should be built');
+    assert.equal(r._riverNetworkMesh, null);
   });
 });

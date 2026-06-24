@@ -99,9 +99,11 @@ describe('_ensureBabylonLoaders — script injection', () => {
     // Script must be injected immediately (synchronously, before the await).
     assert.equal(scripts.length, 1);
     const s = scripts[0];
-    // Pin: loaders bundle MUST come from the local `assets/vendor/` path so
-    // the packaged Electron / iOS build has zero runtime CDN dependencies.
-    assert.equal(s.src, '/assets/vendor/babylonjs/babylonjs.loaders.min.js');
+    // Pin: loaders bundle MUST come from the local `assets/vendor/` path so the
+    // packaged Electron / iOS build has zero runtime CDN dependencies — and the
+    // path is RELATIVE (no leading slash) so it also resolves under the static
+    // itch.io zip sub-path root (a leading slash 404s on html.itch.zone/html/<id>/).
+    assert.equal(s.src, 'assets/vendor/babylonjs/babylonjs.loaders.min.js');
     assert.equal(s.async, true);
     assert.equal(s.dataset.babylonLoaders, 'true');
 

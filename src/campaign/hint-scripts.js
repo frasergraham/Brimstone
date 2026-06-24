@@ -185,7 +185,7 @@ const CH1M4_STEPS = [
     title: 'March in Order',
     body: 'Four travellers, one action budget. Spend it on whoever is most exposed — stragglers can wait a round.',
     trigger: 'click',
-    spotlight: { type: 'element', selector: '#plan-budget-badge', arrow: 'right' },
+    spotlight: { type: 'element', selector: '#turn-info', arrow: 'up' },
     tooltipPos: 'center',
   },
 ];
@@ -231,7 +231,7 @@ const CH1M6_STEPS = [
     title: 'Power Flows to You',
     body: 'Holding a Power Node grants +1 action every round — your budget just grew. More nodes, more moves.',
     trigger: 'click',
-    spotlight: { type: 'element', selector: '#plan-budget-badge', arrow: 'right' },
+    spotlight: { type: 'element', selector: '#turn-info', arrow: 'up' },
     tooltipPos: 'center',
     when: (state) => !!state?.witchObjectives?.some(o =>
       _isPlayerSide(nodeController(o, state.entities))),

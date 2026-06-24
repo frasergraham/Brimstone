@@ -1,5 +1,6 @@
 // Lobby: room lifecycle, server-side AI, action dispatch
 import { randomUUID } from 'crypto';
+import { ICON } from '../src/icons.js';
 import { GameState, Player, GameMode, computeActionsForPlayer, countHeldNodes } from '../src/game.js';
 import { HERO_PERSONALITIES, WITCH_PERSONALITIES, AI_DIFFICULTIES } from '../src/ai.js';
 import { WitchAIEngine } from '../src/ai-engine.js';
@@ -39,7 +40,7 @@ import { VERSION, SAVE_VERSION }            from '../src/version.js';
 import { generateMultipleStarts, generateBattleStarts } from '../src/map.js';
 import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS, EntityType, isLeaderType } from '../src/entities.js';
 import { pickAIName }                              from '../src/ai-names.js';
-import { sideOf, getFactionsForSide }              from '../src/factions.js';
+import { sideOf, getFactionsForSide, STARTING_RESOURCE_LEVELS } from '../src/factions.js';
 
 // ── Room phase enum ─────────────────────────────────────────────────────────
 // Single source of truth for where a room is in its lifecycle.
@@ -476,6 +477,24 @@ function wsFor(room, playerId) {
 // ── Room ─────────────────────────────────────────────────────────────────────
 
 /**
+ * Coerce an untrusted nodeCount config value to a finite integer, or null.
+ * Only a genuine number or a numeric string is honored — `null`, `undefined`,
+ * `[]`, `{}`, `false`, `true`, `""`, `"banana"`, `NaN`, `Infinity` all map to
+ * null (→ the map size's default node count). Finite values are floored.
+ * The actual range clamp happens in generateMap() against the size's band.
+ * @param {*} v
+ * @returns {number|null}
+ */
+function coerceNodeCount(v) {
+  if (typeof v === 'number') return Number.isFinite(v) ? Math.floor(v) : null;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.floor(n) : null;
+  }
+  return null;
+}
+
+/**
  * Create an empty room shell in lobby state.
  * GameState is deferred — created when the host calls startGame().
  * @param {object} [config]
@@ -499,12 +518,20 @@ function createRoom(config = {}) {
     config: {
       fog:              config.fog ?? 'partial',
       mapSize:          config.mapSize ?? 'standard',
-      nodeCount:        config.nodeCount ?? null,
+      // Coerce an untrusted client-supplied nodeCount to a finite integer or null.
+      // null falls through to the map size's default node count (the safe behavior).
+      // A non-numeric value (e.g. "banana", {}, [], NaN) would otherwise reach
+      // generateMap's clamp as NaN, bypassing _pickNodesAcrossRiver's guards and
+      // maxing out the node count instead of using the size default. We only honor a
+      // genuine number or numeric string — `+null`/`+[]`/`+false` all coerce to 0, so
+      // a bare `Number.isFinite(+x)` would wrongly accept those empty/nullish shapes.
+      nodeCount:        coerceNodeCount(config.nodeCount),
       playersPerSide:   Math.max(1, Math.min(config.isBattle ? 10 : 4, (config.playersPerSide | 0) || 1)),
       turnIntervalMs:   Math.max(Math.min(TURN_TIMEOUT_MS, 30_000), Math.min(259_200_000, Number(config.turnIntervalMs) || TURN_TIMEOUT_MS)),
       isAsync:          !!config.isAsync,
       isBattle:         !!config.isBattle,
       aiDifficulty:     AI_DIFFICULTIES.includes(config.aiDifficulty) ? config.aiDifficulty : 'normal',
+      startingResources: STARTING_RESOURCE_LEVELS.includes(config.startingResources) ? config.startingResources : 'none',
     },
     consecutiveTimeouts: {},  // playerId → consecutive empty-plan timeout count
     slots:            [],
@@ -1283,7 +1310,7 @@ function _checkTimeoutTakeovers(room) {
       room.state.players = room.state.players.filter(p => p.id !== playerId);
       room.players = room.players.filter(s => s.playerId !== playerId);
 
-      room.state.addLog(`💨 ${playerName} was removed from the battle for inactivity.`);
+      room.state.addLog(`${ICON.wind} ${playerName} was removed from the battle for inactivity.`);
       _appendChronicle(room, {
         round: room.state.round, phase: room.state.phase,
         event: 'playerKicked', playerName, faction, timestamp: Date.now(),
@@ -1371,6 +1398,15 @@ export function _serializeEvents(events) {
       faction: ev.faction,
       action:  ev.action,
       reason:  ev.reason ?? null,
+      // resOrder: true cross-faction resolution order within the step. The
+      // replay reads it to defer a fleeing unit's move past an earlier-resolved
+      // strike (src/main.js deferredMoveEntityIds) — drop it and online replay
+      // falls back to the position heuristic. whiffTarget / targetFled describe
+      // a swing at a fled/empty hex (ACTION_SKIP); without them online replay
+      // can't animate the whiff lunge or render the TARGET FLED card.
+      ...(ev.resOrder   != null ? { resOrder:   ev.resOrder }   : {}),
+      ...(ev.whiffTarget        ? { whiffTarget: ev.whiffTarget } : {}),
+      ...(ev.targetFled != null ? { targetFled: ev.targetFled } : {}),
     };
     if (ev.result) {
       out.result = {
@@ -1705,6 +1741,7 @@ export function createLobby(playerId, playerName, ws, config = {}) {
     isAsync:        config.isAsync ?? false,
     isBattle,
     aiDifficulty:   config.aiDifficulty,
+    startingResources: config.startingResources,
   });
   room.isPrivate    = config.isPrivate ?? false;
   room.hostPlayerId = playerId;
@@ -1982,8 +2019,9 @@ export function startGame(playerId, roomId) {
   const anyWitchAI = room.slots.some(s => s.faction === 'witch' && s.status !== 'human');
   const anyHeroAI  = room.slots.some(s => s.faction === 'hero'  && s.status !== 'human');
 
-  // Initialize GameState
-  const state      = new GameState(anyWitchAI, anyHeroAI, room.config.mapSize, room.config.nodeCount);
+  // Initialize GameState — startingResources (validated in createRoom) bakes a
+  // faction-tuned bonus cache into the inventory; 'none' is a no-op.
+  const state      = new GameState(anyWitchAI, anyHeroAI, room.config.mapSize, room.config.nodeCount, null, room.config.startingResources);
   // Legacy 'full' fog (retired) degrades to 'partial'.
   state.fogOfWar   = room.config.fog === 'full' ? 'partial' : room.config.fog;
   // AI difficulty (validated in createRoom) — persisted via state-sync so
@@ -2314,7 +2352,7 @@ export function resignGame(playerId, roomId, ws) {
     broadcastState(room, 'resign');
     _broadcastPresence(room);
 
-    room.state.addLog(`💨 ${playerName} has left the battle.`);
+    room.state.addLog(`${ICON.wind} ${playerName} has left the battle.`);
     _appendChronicle(room, {
       round:    room.state.round,
       phase:    room.state.phase,
@@ -3200,7 +3238,7 @@ export function adminKickPlayer(roomId, playerId) {
 
   room.players = room.players.filter(s => s.playerId !== playerId);
 
-  room.state.addLog(`💨 ${playerName} was removed from the battle by an admin.`);
+  room.state.addLog(`${ICON.wind} ${playerName} was removed from the battle by an admin.`);
   _appendChronicle(room, {
     round: room.state.round, phase: room.state.phase,
     event: 'playerKicked', playerName, faction, timestamp: Date.now(),
@@ -3584,7 +3622,7 @@ export function joinBattle(playerId, playerName, ws, roomId) {
 
   // Log and chronicle the join
   const factionLabel = faction === 'hero' ? 'Hero' : 'Witch';
-  room.state.addLog(`⚡ ${playerName} has joined the battle as ${factionLabel}!`);
+  room.state.addLog(`${ICON.join} ${playerName} has joined the battle as ${factionLabel}!`);
   _appendChronicle(room, {
     round:    room.state.round,
     phase:    room.state.phase,

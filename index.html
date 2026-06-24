@@ -8,6 +8,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Caleb's Hollow">
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.svg">
+  <link rel="preload" href="assets/fonts/brimstone-icons.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="styles-ledger.css">
 </head>
@@ -18,7 +19,7 @@
 
   <!-- Update notification — Electron desktop app only -->
   <div id="electron-update-bar" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;
-    background:var(--accent,#c9a227);color:#000;text-align:center;padding:6px 12px;font-size:0.85rem;cursor:pointer">
+    background:var(--accent,#c9a227);color:#000;text-align:center;padding:6px 12px;font-size:var(--fs-xs);cursor:pointer">
     <span id="electron-update-msg">A new version is available.</span>
     <b style="margin-left:8px">Click to restart and update.</b>
   </div>
@@ -31,6 +32,10 @@
     <div class="ledger-scrim"></div>
     <div class="ledger-vignette"></div>
     <div class="ledger-frame">
+      <!-- Mobile-only brand header: the rail (which carries the wordmark) drops to a
+           bottom bar on phones, so the game title would vanish — surface it here at
+           the top of the pane instead. Hidden on desktop. -->
+      <div class="ledger-mobrand" aria-hidden="true">Caleb's Hollow</div>
       <nav class="ledger-rail">
         <div class="ledger-wordmark">CALEB'S<br>HOLLOW</div>
         <div class="ledger-sub"></div>
@@ -58,7 +63,7 @@
     </div>
 
     <header id="game-header">
-      <button id="menu-btn" class="header-icon-btn" title="Menu">☰</button>
+      <button id="menu-btn" class="header-icon-btn" title="Menu">&#xE072;</button>
       <div id="turn-info"></div>
       <div class="header-buttons">
         <button id="replay-turn-btn" class="header-icon-btn replay-last-btn" title="Replay last turn" style="display:none">↺<span class="rt-label">Last Turn</span></button>
@@ -70,7 +75,7 @@
     <div id="game-menu-backdrop" class="game-menu-backdrop" style="display:none">
       <div id="game-menu-modal" class="game-menu-modal">
         <h2 class="game-menu-title">Menu</h2>
-        <button id="menu-sound-btn" class="game-menu-btn">🔊 Sound: On</button>
+        <button id="menu-sound-btn" class="game-menu-btn">&#xE076; Sound: On</button>
         <button id="menu-replay-turn-btn" class="game-menu-btn" style="display:none">Replay Last Turn</button>
         <button id="menu-quit-btn" class="game-menu-btn">Return to Main Menu</button>
         <button id="menu-resign-btn" class="game-menu-btn menu-resign" style="display:none">Resign from Game</button>
@@ -92,7 +97,7 @@
         </button>
         <div id="mission-log-section" class="mission-log-section" style="display:none">
           <div class="chronicle-panel-header">
-            <span class="chronicle-title">🗒 Mission Log</span>
+            <span class="chronicle-title">&#xE07A; Mission Log</span>
           </div>
           <!-- Mission briefing/description — header block above the objectives.
                Hidden (no markup) when the mission carries no description. -->
@@ -100,7 +105,7 @@
           <ul id="mission-log-list" class="mission-log-list"></ul>
         </div>
         <div class="chronicle-panel-header">
-          <span class="chronicle-title">📜 Chronicle</span>
+          <span class="chronicle-title">&#xE079; Chronicle</span>
         </div>
         <div id="chronicle-sidebar-log"></div>
       </div>
@@ -137,7 +142,7 @@
         <!-- Off-screen conversation indicator: edge-clamped arrow pointing at
              a conversation happening outside the viewport (fixed-camera mode
              only). Positioned/rotated by ui.showOffscreenArrow(). -->
-        <div id="offscreen-arrow" hidden aria-hidden="true">➤</div>
+        <div id="offscreen-arrow" hidden aria-hidden="true">&#xE073;</div>
         <!-- Replay timeline overlay: transparent step-by-step sequence of the
              round being replayed. Slides left as steps advance. -->
         <div id="replay-timeline">
@@ -146,9 +151,9 @@
         <!-- Replay progress: one dot per card (active filled). The < > scrub
              arrows flank the dots, appearing only in end-of-turn review. -->
         <div id="replay-progress">
-          <button id="replay-review-prev" class="replay-arrow" data-tip="Previous turn card">◀</button>
+          <button id="replay-review-prev" class="replay-arrow" data-tip="Previous turn card">&#xE0B8;</button>
           <div id="replay-dots"></div>
-          <button id="replay-review-next" class="replay-arrow" data-tip="Next turn card">▶</button>
+          <button id="replay-review-next" class="replay-arrow" data-tip="Next turn card">&#xE0B8;</button>
         </div>
         <!-- Unified replay control bar (bottom-center): used for both the
              post-turn resolution replay and full-game replay. Back/Stop are
@@ -201,10 +206,10 @@
           <button id="zoom-out" class="zoom-btn" title="Zoom out (−)">－</button>
           <button id="rotate-left"  class="zoom-btn" title="Rotate left (3D)">↶</button>
           <button id="rotate-right" class="zoom-btn" title="Rotate right (3D)">↷</button>
-          <button id="zoom-fit" class="zoom-btn" title="Fit map">⛶</button>
+          <button id="zoom-fit" class="zoom-btn" title="Fit map">&#xE075;</button>
           <button id="zoom-me"  class="zoom-btn" title="Focus on my units">⊙</button>
           <!-- Map options button hidden — kept for future debug use -->
-          <button id="map-options-toggle" class="zoom-btn" title="Map options" style="display:none">⚙</button>
+          <button id="map-options-toggle" class="zoom-btn" title="Map options" style="display:none">&#xE0A1;</button>
           <div id="map-options-popup" class="speed-popup" style="display:none">
             <label class="map-option-row">
               <input type="checkbox" id="opt-tile-images" checked>
@@ -216,7 +221,7 @@
 
       <!-- Spectator ready panel (shown during planning phase) -->
       <div id="sp-ready-panel" style="display:none">
-        <div class="sp-ready-header">📋 Planning</div>
+        <div class="sp-ready-header">&#xE078; Planning</div>
         <div id="sp-ready-list"></div>
       </div>
 
@@ -239,20 +244,15 @@
       <div id="plan-panel" class="plan-panel" style="display:none">
         <!-- Collapse tab — always visible so the panel can be reopened -->
         <button id="plan-tab" class="plan-tab" title="Toggle plan panel">
-          <span class="plan-tab-label">Action Plan</span><span id="plan-tab-toggle" class="plan-tab-toggle">+</span><span id="plan-tab-count" class="plan-tab-count"></span>
+          <span class="plan-tab-label">Action Plan</span><span id="plan-tab-toggle" class="plan-tab-toggle">+</span>
         </button>
-        <div class="plan-panel-header">
-          <span class="plan-panel-title">📋 Your Plan</span>
-          <span id="plan-budget-badge" class="plan-budget-badge"></span>
-          <button id="plan-toggle-btn" class="plan-toggle-btn" title="Hide panel">◀</button>
-        </div>
         <div id="plan-steps" class="plan-steps"></div>
         <div id="plan-food-row" class="plan-food-row"></div>
         <div class="plan-panel-footer">
-          <button id="plan-clear-btn" class="plan-btn secondary" data-tip="Discard every queued action and plan this round again">✕ Clear</button>
-          <button id="plan-autoguard-btn" class="plan-btn secondary" data-tip="Fill the remaining action budget with Guard, leader first">🛡 Auto-Guard</button>
-          <button id="plan-aiassist-btn" class="plan-btn secondary" style="display:none" data-tip="Let the AI generate this round's plan for you to review, then Submit">🤖 AI Plan</button>
-          <button id="plan-submit-btn" class="plan-btn primary" data-tip="Lock in your plan — it resolves alongside your opponent's">✓ Submit</button>
+          <button id="plan-clear-btn" class="plan-btn secondary" data-tip="Discard every queued action and plan this round again">&#xE070; Clear</button>
+          <button id="plan-autoguard-btn" class="plan-btn secondary" data-tip="Fill the remaining action budget with Guard, leader first">&#xE042; Auto-Guard</button>
+          <button id="plan-aiassist-btn" class="plan-btn secondary" style="display:none" data-tip="Let the AI generate this round's plan for you to review, then Submit">&#xE07F; AI Plan</button>
+          <button id="plan-submit-btn" class="plan-btn primary" data-tip="Lock in your plan — it resolves alongside your opponent's">&#xE071; Submit</button>
           <button id="plan-menu-btn" class="plan-btn secondary" style="display:none">← Return to Menu</button>
         </div>
         <div id="plan-players" class="plan-players" style="display:none"></div>
@@ -280,10 +280,15 @@
       <div id="cycle-bump" title="">
         <img id="cycle-bump-icon" alt="">
         <span id="cycle-bump-label"></span>
+        <!-- Deadline countdown — populated only for non-looping (fixed-end) missions -->
+        <span id="cycle-deadline" hidden>
+          <span id="cycle-deadline-count"></span>
+          <span id="cycle-deadline-track" aria-hidden="true"></span>
+        </span>
       </div>
-      <span class="score-bar-faction hero-faction">⚔ Hero</span>
+      <span class="score-bar-faction hero-faction">&#xE000; Hero</span>
       <div id="score-bar-content"></div>
-      <span class="score-bar-faction witch-faction">Witch ✦</span>
+      <span class="score-bar-faction witch-faction">Witch &#xE001;</span>
     </div>
 
     <!-- Battle mode countdown — visible only during Battle for Caleb's Hollow -->
@@ -292,7 +297,7 @@
     <!-- Floating cancel pill — appears during battle/summon targeting -->
     <div id="cancel-wrap">
       <span id="target-hint"></span>
-      <button id="cancel-action-btn">✕ Cancel</button>
+      <button id="cancel-action-btn">&#xE070; Cancel</button>
     </div>
 
   </div>
@@ -301,8 +306,8 @@
   <div id="chronicle-overlay">
     <div id="chronicle-panel">
       <div class="chronicle-header">
-        <span class="chronicle-title">📜 Chronicle</span>
-        <button id="chronicle-close">✕</button>
+        <span class="chronicle-title">&#xE079; Chronicle</span>
+        <button id="chronicle-close">&#xE070;</button>
       </div>
       <div id="event-log"></div>
     </div>
@@ -311,7 +316,7 @@
   <!-- ── Tile zoom overlay (click-any-hex detail view) ─────────────── -->
   <div id="tile-zoom-overlay">
     <div id="tile-zoom-card">
-      <button id="tile-zoom-close">✕</button>
+      <button id="tile-zoom-close">&#xE070;</button>
       <div id="tile-zoom-hex-wrap">
         <!-- SVG hex rendered at ~3× game size (R≈100 vs game R≈30) -->
         <svg id="tile-zoom-svg" viewBox="-112 -112 224 224" xmlns="http://www.w3.org/2000/svg">
@@ -353,8 +358,6 @@
   <!-- ── Battle toast container ───────────────────────────────────── -->
   <div id="battle-toast-container" class="battle-toast-container"></div>
 
-  <!-- ── Budget breakdown popup (triggered by tapping action pips) ── -->
-  <div id="budget-breakdown"></div>
 
   <!-- ── Story modal (campaign narrative triggers) ────────────────── -->
   <div id="story-modal">
@@ -393,7 +396,7 @@
   <!-- ── Reconnect overlay ─────────────────────────────────────────── -->
   <div id="reconnect-overlay" style="display:none">
     <div class="reconnect-card">
-      <div id="reconnect-spinner" class="waiting-spinner">⏳</div>
+      <div id="reconnect-spinner" class="waiting-spinner">&#xE0B5;</div>
       <p id="reconnect-message">Reconnecting…</p>
       <button id="reconnect-back" class="setup-btn" style="display:none">Back to Menu</button>
     </div>
@@ -403,14 +406,14 @@
   <div id="battle-dialog">
     <div class="battle-card">
       <div class="battle-controls">
-        <button id="battle-pause-btn" class="battle-ctrl-btn" type="button" title="Pause" aria-label="Pause">⏸</button>
+        <button id="battle-pause-btn" class="battle-ctrl-btn" type="button" title="Pause" aria-label="Pause">&#xE0B7;</button>
         <button id="battle-redo-btn"  class="battle-ctrl-btn" type="button" title="Replay" aria-label="Replay">↻</button>
       </div>
-      <div class="battle-critical-badge">⚔ Critical Battle</div>
+      <div class="battle-critical-badge">&#xE09E; Critical Battle</div>
       <div id="battle-summary" class="battle-summary"></div>
       <div class="battle-combatants">
         <div id="battle-attacker" class="combatant-panel"></div>
-        <div class="battle-versus">⚔</div>
+        <div class="battle-versus">&#xE09E;</div>
         <div id="battle-defender" class="combatant-panel"></div>
       </div>
       <!-- Roll breakdown: pool + modifier rows + total per side -->
@@ -472,6 +475,9 @@
 
   <!-- Directional arrow for tutorial UI element highlighting -->
   <div id="tutorial-arrow" class="tutorial-arrow" style="display:none"></div>
+
+  <!-- Pulsing red ring spotlight (Learn-to-Play strict guidance) -->
+  <div id="tutorial-pulse-circle" style="display:none"></div>
 
   <script type="module" src="src/main.js"></script>
 </body>

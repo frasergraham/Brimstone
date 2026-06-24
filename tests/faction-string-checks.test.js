@@ -58,7 +58,14 @@ const ALLOWLIST = Object.freeze({
   // already in _renderReplaysList (the 3 `g.winner === 'hero'` / `faction ===
   // 'hero'` checks). Temporary duplication — at cutover _renderReplaysList
   // delegates to _collectReplayRows and this ratchets back to 47.
-  'src/main.js':                 50,
+  // src/main.js bumped 50 → 51 (2026-06-22, Mission 1 stuck-replay fix):
+  // _runLocalResolution reads the PRE-resolution snapshot for whether the witch
+  // side fielded any unit this round (`e.owner === 'witch'`), so peekVictory()'s
+  // mission-logic "all enemies dead" proxy can tell a real wipe (the prologue
+  // golem) from a hero-only mission. A genuine night-side count on a plain JSON
+  // snapshot (no Entity/Faction methods available there). Ratchet down if a
+  // snapshot-side helper is adopted.
+  'src/main.js':                 51,
   'src/ui.js':                   25,
 
   // Pre-existing core modules — generalized in Finding 1, residual checks

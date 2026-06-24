@@ -15,6 +15,12 @@ import {
   entityHasWeapon,
   entityIsMounted,
   weaponStandInTransform,
+  weaponModelForId,
+  weaponGripLocalTransform,
+  weaponModelLongSpan,
+  WEAPON_ID_TO_MODEL,
+  WEAPON_MODEL_FILES,
+  WEAPON_GRIP_TRANSFORMS,
   classifyLegBone,
   ridingLegPose,
   WEAPON_BONE_NAME_RE,
@@ -23,6 +29,7 @@ import {
   HORSE_ITEM_KEY,
   MOUNTED_RIDER_LIFT,
 } from '../src/renderer-3d.js';
+import { ITEMS } from '../src/items.js';
 
 // ── pure helpers ─────────────────────────────────────────────────────────────
 
@@ -112,6 +119,143 @@ describe('weaponStandInTransform', () => {
   });
 });
 
+describe('weaponModelForId (weapon → GLB mapping)', () => {
+  test('bladed melee → sword model', () => {
+    assert.equal(weaponModelForId('sword'), 'sword');
+    assert.equal(weaponModelForId('greatsword'), 'sword');
+  });
+  test('chopping / blunt → axe model', () => {
+    assert.equal(weaponModelForId('axe'), 'axe');
+    assert.equal(weaponModelForId('warhammer'), 'axe');
+  });
+  test('the knife → dagger model', () => {
+    assert.equal(weaponModelForId('dagger'), 'dagger');
+  });
+  test('ranged (firearm / bow / sling) → rifle model', () => {
+    for (const id of ['musket', 'pistol', 'longrifle', 'bow', 'crossbow', 'sling']) {
+      assert.equal(weaponModelForId(id), 'rifle', `${id} → rifle`);
+    }
+  });
+  test('weapons with no GLB analogue → null (cylinder fallback)', () => {
+    for (const id of ['shield', 'staff', 'magic_bolt']) {
+      assert.equal(weaponModelForId(id), null, `${id} has no model`);
+    }
+  });
+  test('null / unknown / non-string → null', () => {
+    assert.equal(weaponModelForId(null), null);
+    assert.equal(weaponModelForId(undefined), null);
+    assert.equal(weaponModelForId('not_a_weapon'), null);
+    assert.equal(weaponModelForId(42), null);
+  });
+  test('every mapped model name has a GLB file', () => {
+    for (const model of Object.values(WEAPON_ID_TO_MODEL)) {
+      assert.ok(WEAPON_MODEL_FILES[model], `model '${model}' has a GLB file`);
+      assert.ok(WEAPON_GRIP_TRANSFORMS[model], `model '${model}' has a grip transform`);
+    }
+  });
+  test('every ITEMS weapon is either mapped or an intentional cylinder fallback', () => {
+    // Guards against a new weapon silently dropping to the cylinder unnoticed.
+    const FALLBACK_OK = new Set(['shield', 'staff', 'magic_bolt']);
+    for (const [id, item] of Object.entries(ITEMS)) {
+      if (item?.kind !== 'weapon') continue;
+      const model = weaponModelForId(id);
+      assert.ok(model !== null || FALLBACK_OK.has(id),
+        `weapon '${id}' must map to a GLB model or be a known cylinder fallback`);
+    }
+  });
+});
+
+describe('weaponGripLocalTransform', () => {
+  test('scale recovers the target on-screen length: span × scale × rigScale ≈ worldLength', () => {
+    const rigScale = 0.35;
+    const span = 2.735; // measured sword long-span (example)
+    const g = weaponGripLocalTransform('sword', span, rigScale);
+    const worldLen = WEAPON_GRIP_TRANSFORMS.sword.worldLength;
+    assert.ok(Math.abs(span * g.scale * rigScale - worldLen) < 1e-9,
+      'span × scale × rigScale recovers the configured worldLength');
+  });
+  test('larger natural span → smaller clone scale (constant on-screen size)', () => {
+    const big = weaponGripLocalTransform('rifle', 4, 0.35);
+    const small = weaponGripLocalTransform('rifle', 2, 0.35);
+    assert.ok(big.scale < small.scale);
+  });
+  test('larger rig scale → smaller clone scale (attachToBone restores it)', () => {
+    const a = weaponGripLocalTransform('axe', 4, 0.5);
+    const b = weaponGripLocalTransform('axe', 4, 0.25);
+    assert.ok(a.scale < b.scale);
+  });
+  test('copies the configured rotation + offset (gripped, not at the bbox centre)', () => {
+    const g = weaponGripLocalTransform('sword', 2.735, 0.35);
+    assert.deepEqual(g.rotation, WEAPON_GRIP_TRANSFORMS.sword.rotation);
+    assert.deepEqual(g.offset, WEAPON_GRIP_TRANSFORMS.sword.offset);
+    // Returned objects are copies, not the frozen config (safe to mutate).
+    assert.notEqual(g.rotation, WEAPON_GRIP_TRANSFORMS.sword.rotation);
+  });
+  test('bad input is handled gracefully', () => {
+    assert.equal(weaponGripLocalTransform('nope', 2, 0.35), null, 'unknown model → null');
+    // span ≤ 0 / rigScale ≤ 0 fall back to 1 (no divide-by-zero / NaN).
+    const g = weaponGripLocalTransform('sword', 0, 0);
+    assert.ok(Number.isFinite(g.scale) && g.scale > 0);
+  });
+});
+
+describe('weaponModelLongSpan — scale-independent local-bbox measurement', () => {
+  // A stub mesh whose bounding box exposes both local (minimum/maximum) and
+  // world (minimumWorld/maximumWorld) corners — mirrors Babylon's BoundingBox.
+  const meshWithBox = (localExtent, worldScale = 1) => {
+    const half = localExtent / 2;
+    const wHalf = half * worldScale;
+    return {
+      getBoundingInfo: () => ({
+        boundingBox: {
+          minimum:      { x: -half,  y: -half * 0.1, z: -half * 0.05 },
+          maximum:      { x:  half,  y:  half * 0.1, z:  half * 0.05 },
+          minimumWorld: { x: -wHalf, y: -wHalf * 0.1, z: -wHalf * 0.05 },
+          maximumWorld: { x:  wHalf, y:  wHalf * 0.1, z:  wHalf * 0.05 },
+        },
+      }),
+    };
+  };
+
+  test('measures the LOCAL long axis (largest dimension)', () => {
+    assert.ok(Math.abs(weaponModelLongSpan(meshWithBox(0.6)) - 0.6) < 1e-9);
+  });
+
+  test('a single-primitive mesh with an un-baked node scale 100 (world bbox ≈100× '
+     + 'local) measures the SAME local span as a merged mesh with identical geometry', () => {
+    // This is the rifle case: Rifle.glb skips MergeMeshes, so its WORLD bbox is
+    // ~100× its true geometry. Measuring local makes it agree with the merged
+    // weapons (whose world matrix is baked to identity), so no magic worldLength.
+    const merged   = weaponModelLongSpan(meshWithBox(0.029, 1));     // world == local
+    const unbaked  = weaponModelLongSpan(meshWithBox(0.029, 100));   // world == 100× local
+    assert.ok(Math.abs(merged - unbaked) < 1e-9,
+      'local span is scale-independent — node scale does not leak in');
+    assert.ok(Math.abs(unbaked - 0.029) < 1e-9,
+      'reads the true ≈0.029 geometry extent, not the ≈2.9 world extent');
+  });
+
+  test('falls back to 1 on missing / stubbed bounding info', () => {
+    assert.equal(weaponModelLongSpan(null), 1);
+    assert.equal(weaponModelLongSpan({}), 1);
+    assert.equal(weaponModelLongSpan({ getBoundingInfo: () => ({}) }), 1);
+    assert.equal(weaponModelLongSpan({ getBoundingInfo: () => { throw new Error('boom'); } }), 1);
+  });
+});
+
+describe('WEAPON_GRIP_TRANSFORMS — worldLength sanity', () => {
+  test('every weapon (incl. the rifle) has a sane ~world-unit worldLength', () => {
+    // Regression guard for the rifle fix: it used to be 70 (a magic ~100× to
+    // cancel the world-bbox measurement quirk). With local-bbox measurement
+    // every weapon shares the same world-unit scale band.
+    for (const [model, cfg] of Object.entries(WEAPON_GRIP_TRANSFORMS)) {
+      assert.ok(cfg.worldLength > 0.1 && cfg.worldLength < 1.5,
+        `${model} worldLength ${cfg.worldLength} should be a sane ~world-unit size`);
+    }
+    assert.ok(WEAPON_GRIP_TRANSFORMS.rifle.worldLength < 1.5,
+      'rifle no longer needs the magic ~100× worldLength');
+  });
+});
+
 describe('classifyLegBone', () => {
   test('classifies Mixamo leg bones', () => {
     assert.equal(classifyLegBone('mixamorig:LeftUpLeg'), 'thigh');
@@ -158,16 +302,19 @@ function makeFakeMesh(name) {
     material: null,
     position: fakeVec3(),
     rotation: fakeVec3(),
+    scaling: fakeVec3(1, 1, 1),
     parent: null,
     _disposed: false,
     _attachedBone: null,
     _affector: null,
     _enabled: true,
+    _clonedFrom: null,
     attachToBone(bone, affector) { this._attachedBone = bone; this._affector = affector; },
     detachFromBone() { this._attachedBone = null; },
     setEnabled(v) { this._enabled = !!v; },
     isEnabled() { return this._enabled; },
     dispose() { this._disposed = true; },
+    clone(cloneName) { const c = makeFakeMesh(cloneName); c._clonedFrom = this; return c; },
   };
 }
 
@@ -283,6 +430,88 @@ describe('_syncStandeeWeapon (G6)', () => {
     const standee = { paladinClone: paladinCloneStub(), plane: visiblePlane };
     inst._syncStandeeWeapon(standee, { id: 7, items: { sword: { count: 1, equipped: true } } });
     assert.equal(standee.weaponMesh.isEnabled(), true);
+  });
+
+  test('no GLB template loaded → cylinder stand-in (weaponKey cylinder)', () => {
+    const inst = makeInst(); // _weaponTemplates is empty
+    const standee = { paladinClone: paladinCloneStub() };
+    inst._syncStandeeWeapon(standee, { id: 7, items: { sword: { count: 1, equipped: true } } });
+    assert.ok(standee.weaponMesh);
+    assert.equal(standee.weaponKey, 'cylinder');
+    assert.equal(standee.weaponMesh._clonedFrom, null, 'cylinder is built, not cloned');
+    assert.ok(standee.weaponMat, 'cylinder owns a fresh material');
+  });
+
+  test('GLB template loaded → clones the real model, gripped on the hand bone', () => {
+    const inst = makeInst();
+    const tplMesh = makeFakeMesh('sword_template');
+    tplMesh.setEnabled(false); // templates are hidden
+    inst._weaponTemplates.set('sword', { mesh: tplMesh, longSpan: 2.735 });
+    const standee = { paladinClone: paladinCloneStub() };
+    inst._syncStandeeWeapon(standee, { id: 7, items: { sword: { count: 1, equipped: true } } });
+    assert.equal(standee.weaponKey, 'glb:sword');
+    assert.equal(standee.weaponMesh._clonedFrom, tplMesh, 'real model cloned from the template');
+    assert.equal(standee.weaponMesh._attachedBone.name, 'mixamorig:RightHand');
+    assert.equal(standee.weaponMesh._affector, standee.paladinClone.skinnedMesh);
+    assert.equal(standee.weaponMesh.isEnabled(), true, 're-enabled despite hidden template');
+    // Gripped, not at the origin / floating: a grip scale + pose were applied.
+    assert.ok(standee.weaponMesh.scaling.x > 0);
+    assert.ok(standee.weaponMesh.rotation.x < 0, 'tilted forward out of the fist');
+    assert.ok(!standee.weaponMat, 'GLB clone shares the template material (none created)');
+  });
+
+  test('swapping to a different weapon model rebuilds the held mesh', () => {
+    const inst = makeInst();
+    inst._weaponTemplates.set('sword', { mesh: makeFakeMesh('sword_tpl'), longSpan: 2.735 });
+    inst._weaponTemplates.set('axe',   { mesh: makeFakeMesh('axe_tpl'),   longSpan: 4.319 });
+    const standee = { paladinClone: paladinCloneStub() };
+    inst._syncStandeeWeapon(standee, { id: 7, items: { sword: { count: 1, equipped: true } } });
+    const swordMesh = standee.weaponMesh;
+    assert.equal(standee.weaponKey, 'glb:sword');
+    // Equip an axe instead → the sword clone is disposed and an axe clone built.
+    inst._syncStandeeWeapon(standee, { id: 7, items: { sword: { count: 1 }, axe: { count: 1, equipped: true } } });
+    assert.equal(swordMesh._disposed, true, 'old model disposed on swap');
+    assert.equal(standee.weaponKey, 'glb:axe');
+    assert.notEqual(standee.weaponMesh, swordMesh);
+  });
+
+  test('cylinder upgrades to the GLB clone once the template loads', () => {
+    const inst = makeInst();
+    const standee = { paladinClone: paladinCloneStub() };
+    // First pass: no template → cylinder.
+    inst._syncStandeeWeapon(standee, { id: 7, items: { sword: { count: 1, equipped: true } } });
+    const cyl = standee.weaponMesh;
+    const cylMat = standee.weaponMat;
+    assert.equal(standee.weaponKey, 'cylinder');
+    // Template arrives; next sync pass upgrades to the real model.
+    inst._weaponTemplates.set('sword', { mesh: makeFakeMesh('sword_tpl'), longSpan: 2.735 });
+    inst._syncStandeeWeapon(standee, { id: 7, items: { sword: { count: 1, equipped: true } } });
+    assert.equal(cyl._disposed, true, 'cylinder disposed on upgrade');
+    assert.equal(cylMat._disposed, true, 'cylinder material disposed on upgrade');
+    assert.equal(standee.weaponKey, 'glb:sword');
+  });
+
+  test('disposing a GLB clone does NOT dispose the shared template material', () => {
+    const inst = makeInst();
+    const tplMesh = makeFakeMesh('sword_tpl');
+    const sharedMat = { _disposed: false, dispose() { this._disposed = true; } };
+    tplMesh.material = sharedMat;
+    inst._weaponTemplates.set('sword', { mesh: tplMesh, longSpan: 2.735 });
+    const standee = { paladinClone: paladinCloneStub() };
+    inst._syncStandeeWeapon(standee, { id: 7, items: { sword: { count: 1, equipped: true } } });
+    // Unequip → dispose the clone. The template material must survive.
+    inst._syncStandeeWeapon(standee, { id: 7, items: {} });
+    assert.equal(standee.weaponMesh, null);
+    assert.equal(sharedMat._disposed, false, 'shared template material untouched');
+  });
+
+  test('a weapon with no GLB analogue (staff) uses the cylinder even with templates loaded', () => {
+    const inst = makeInst();
+    inst._weaponTemplates.set('sword', { mesh: makeFakeMesh('sword_tpl'), longSpan: 2.735 });
+    const standee = { paladinClone: paladinCloneStub() };
+    inst._syncStandeeWeapon(standee, { id: 7, items: { staff: { count: 1, equipped: true } } });
+    assert.equal(standee.weaponKey, 'cylinder');
+    assert.equal(standee.weaponMesh._clonedFrom, null);
   });
 });
 

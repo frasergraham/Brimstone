@@ -24,7 +24,7 @@
   "disableScoring": true,
   "aiPersonality": "aggressive",
   "aiBudgetBonus": 2,
-  "maxSurvivorsFromRoster": 2,
+  "maxSurvivorsFromRoster": 3,
   "missionSurvivors": 0,
   "maxDiscoverableSurvivors": 0,
   "minSurvivors": 2,
@@ -411,10 +411,7 @@
       },
       {
         "id": "n18",
-        "type": "onRoundStart",
-        "params": {
-          "round": "any"
-        },
+        "type": "onCycleEnd",
         "x": 40,
         "y": 920
       },
@@ -436,10 +433,7 @@
       },
       {
         "id": "n20",
-        "type": "onRoundStart",
-        "params": {
-          "round": "any"
-        },
+        "type": "onCycleEnd",
         "x": 40,
         "y": 1030
       },
@@ -458,6 +452,33 @@
         },
         "x": 280,
         "y": 1030
+      },
+      {
+        "id": "objStart0",
+        "type": "onMissionStart",
+        "params": {},
+        "x": 40,
+        "y": 900
+      },
+      {
+        "id": "set_hold",
+        "type": "setObjective",
+        "params": {
+          "id": "hold",
+          "label": "Hold the inn, church and house until dawn"
+        },
+        "x": 300,
+        "y": 900
+      },
+      {
+        "id": "set_survive_party",
+        "type": "setObjective",
+        "params": {
+          "id": "survive_party",
+          "label": "Keep at least 2 survivors alive"
+        },
+        "x": 300,
+        "y": 980
       }
     ],
     "edges": [
@@ -589,6 +610,28 @@
         },
         "to": {
           "node": "n21",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "objStart0",
+          "pin": "out"
+        },
+        "to": {
+          "node": "set_hold",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "objStart0",
+          "pin": "out"
+        },
+        "to": {
+          "node": "set_survive_party",
           "pin": "in"
         },
         "kind": "exec"

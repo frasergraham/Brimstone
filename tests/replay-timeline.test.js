@@ -4,6 +4,7 @@
 // and that the injected isVisible predicate filters fogged actors/targets out.
 
 import { describe, test } from 'node:test';
+import { ICON } from '../src/icons.js';
 import assert from 'node:assert/strict';
 import { buildStepDigest, buildConversationDigest, buildStoryBeatDigest, buildRollTip, buildRollRows, buildOutcomeSummary, isEventVisible, isDiscoveryVisible, OutcomeKind, buildTurnCardHoverOverlays, TURN_CARD_HOVER_COLOR, battleOutcomeWord } from '../src/replay-timeline.js';
 import { ResEventType } from '../server/resolver.js';
@@ -122,7 +123,7 @@ describe('buildStepDigest — explore card loot is per-action (t-4e9b1bf0)', () 
     ev.result.lootItemIds = ['sword'];
     const digest = buildStepDigest([step([ev], [a])], [], DEPS);
     const entry = digest[0].entries.find(e => e.entityId === 'h1');
-    assert.equal(entry.note.text, '⚔ Sword (+2 ATK)');
+    assert.equal(entry.note.text, `${ICON.sword} Sword (+2 ATK)`);
     assert.equal(entry.note.kind, 'gain loot');
   });
 
@@ -132,7 +133,7 @@ describe('buildStepDigest — explore card loot is per-action (t-4e9b1bf0)', () 
     ev.result.lootItemIds = ['sword', 'wood'];
     const digest = buildStepDigest([step([ev], [a])], [], DEPS);
     const entry = digest[0].entries.find(e => e.entityId === 'h1');
-    assert.equal(entry.note.text, '⚔ Sword (+2 ATK) · 🪵 Wood');
+    assert.equal(entry.note.text, `${ICON.sword} Sword (+2 ATK) · ${ICON.wood} Wood`);
     // Legacy (no lootItemIds) still falls back to the bare emoji.
     const legacy = exploreEvent('h1', 'hero', ['+🪵']);
     const d2 = buildStepDigest([step([legacy], [a])], [], DEPS);

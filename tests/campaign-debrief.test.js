@@ -5,6 +5,7 @@
 // data here is what unit tests can guard against regression.
 
 import { describe, test } from 'node:test';
+import { ICON } from '../src/icons.js';
 import assert from 'node:assert/strict';
 import {
   buildDebriefHeader, campaignPartyHTML, fallenSectionHTML,
@@ -222,7 +223,7 @@ describe('campaign debrief — rewards use the party-management card', () => {
 
   test('resource gains keep the chip line + ✦ Rewards heading', () => {
     const html = debriefRewardsSectionHTML({ survivors: [], resources: { herbs: 2, food: 1 } });
-    assert.match(html, /✦ Rewards/);
+    assert.match(html, new RegExp(`${ICON.reward} Rewards`));
     assert.match(html, /\+2 herbs/);
     assert.match(html, /\+1 food/);
     assert.match(html, /reward-resource/);

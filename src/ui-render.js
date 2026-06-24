@@ -3,6 +3,7 @@
 // Imported by UIController to keep rendering logic separate from DOM wiring.
 
 import { PlanActionType } from './planner.js';
+import { ICON, coloredResourceIcon, coloredResourceLabel, tintResourceGlyphs } from './icons.js';
 import { ITEMS } from './items.js';
 import { EntityType, ENTITY_COLOR, getEquippedWeaponIdOf, getItemCountOf, removeItemInItems, normalizeItems, isLeaderType } from './entities.js';
 import { ResourceType, WEAPON_LABEL, RESOURCE_LABEL } from './tiles.js';
@@ -16,6 +17,19 @@ import { buildOutcomeSummary } from './replay-timeline.js';
 // it (green pip). Anything not listed renders neutral.
 const _BAD_EFFECTS  = new Set(['wounded', 'poisoned', 'bleeding', 'stunned', 'slowed', 'marked', 'cursed']);
 const _GOOD_EFFECTS = new Set(['frenzied', 'inspired', 'fortified', 'eagle_eyed']);
+
+/**
+ * Render the veterancy level pill — a small gold rounded badge carrying the
+ * level number, drawn beside a unit's name. Replaces the old "Name L2" string
+ * suffix. Returns '' for level 1 / null (the bare default), so callers can
+ * unconditionally append it. Shared by the Unit Stats Bar, the action-popup
+ * arc portrait and the battle dialog combatant card. Pure (no DOM).
+ */
+export function levelPillHtml(level) {
+  const n = Number(level);
+  if (!Number.isFinite(n) || n <= 1) return '';
+  return `<span class="level-pill" title="Veterancy level ${n}">${n}</span>`;
+}
 
 /**
  * Render the active effects pip strip for an entity. Each pip shows the
@@ -98,11 +112,114 @@ export function describePlanAction(action, entities, index = 0) {
         ? entities.find(e => e.ownerId === action.destOwnerId && isLeaderType(e.type))
         : null;
       const destName = destLeader?.displayName ?? 'another leader';
-      return `📤 Send ${survivorName} to ${destName}`;
+      return `\uE08F Send ${survivorName} to ${destName}`;
     }
     default:
       return `Step ${index + 1}`;
   }
+}
+
+/**
+ * Compact plan-step label split into a verb line and an optional target line.
+ *
+ * The plan panel groups steps under a per-unit header, so the actor name and
+ * hex coordinates are redundant — a step reads as just its action (MOVE, GUARD,
+ * EXPLORE…). Only actions aimed at something carry a `target` (attacks, sends),
+ * which the panel renders on a second line so a long target name wraps instead
+ * of truncating. `entity` (the actor) drives melee-vs-ranged attack wording.
+ *
+ * Distinct from {@link describePlanAction}, which keeps the verbose, actor-
+ * prefixed phrasing used by the AI-debug overlay.
+ *
+ * @param {{ type: string, entityId: string, [key: string]: * }} action
+ * @param {Array<{ id: string, displayName?: string }>} entities
+ * @param {number} index  Zero-based step index (fallback label only).
+ * @returns {{ verb: string, target: string|null }}
+ */
+export function describePlanActionParts(action, entities, index = 0) {
+  const entity = entities.find(e => e.id === action.entityId);
+  // Mirror planner.js: range is weapon-derived (getRange) with a plain `range`
+  // fallback for snapshot entities that don't carry the method.
+  const rangeOf = e => (typeof e?.getRange === 'function' ? e.getRange() : (e?.range ?? 1));
+  switch (action.type) {
+    case PlanActionType.MOVE:         return { verb: 'Move',       target: null };
+    case PlanActionType.EXPLORE:      return { verb: 'Explore',    target: null };
+    case PlanActionType.FORTIFY:      return { verb: 'Fortify',    target: null };
+    case PlanActionType.GUARD:        return { verb: 'Guard',      target: null };
+    case PlanActionType.SUMMON:       return { verb: 'Summon',     target: null };
+    case PlanActionType.HEAL:         return { verb: 'Heal',       target: null };
+    case PlanActionType.SOUND_HORN:   return { verb: 'Sound Horn', target: null };
+    case PlanActionType.USE_ABILITY:  return { verb: 'Use Ability', target: null };
+    case PlanActionType.USE_ITEM:     return { verb: `Use ${RESOURCE_LABEL[action.item] || action.item}`, target: null };
+    case PlanActionType.EQUIP_WEAPON: return { verb: `Equip ${WEAPON_LABEL[action.weapon] || action.weapon}`, target: null };
+    case PlanActionType.BATTLE_UNIT: {
+      const target = entities.find(e => e.id === action.targetId);
+      return { verb: rangeOf(entity) > 1 ? 'Ranged Attack' : 'Attack', target: target?.displayName ?? '?' };
+    }
+    case PlanActionType.BATTLE_HEX:
+      return {
+        verb: rangeOf(entity) > 1 ? 'Ranged Attack' : 'Attack',
+        target: `(${action.targetCol},${action.targetRow})`,
+      };
+    case PlanActionType.SENT_TO: {
+      const destLeader = action.destOwnerId
+        ? entities.find(e => e.ownerId === action.destOwnerId && isLeaderType(e.type))
+        : null;
+      return { verb: 'Send', target: destLeader?.displayName ?? 'another leader' };
+    }
+    default:
+      return { verb: `Step ${index + 1}`, target: null };
+  }
+}
+
+// ── Action budget pips + breakdown ────────────────────────────────────────────
+//
+// The top-bar ACTION BUDGET shows one diamond per earned action, tinted by where
+// it came from (shades of yellow — see .act-pip--* in styles.css). The same
+// shades colour the breakdown tooltip. `parts` is the faction's budget breakdown
+// ({ key:'base'|'phase'|'unit'|'node', value }); `used` is how many budget
+// actions are queued; `foodOverflow` is actions taken beyond the budget (each
+// powered by a spare ration).
+
+/**
+ * Flatten budget `parts` into colour-coded pips. The first `total - used` pips
+ * render filled (◆, available); the rest render hollow (◇, spent). Food-powered
+ * actions taken beyond the budget append as spent food-shade pips.
+ */
+export function buildActionPipsHtml(parts, used = 0) {
+  const keys = [];
+  for (const p of (parts || [])) for (let i = 0; i < p.value; i++) keys.push(p.key);
+  const total = keys.length;
+  const remaining = Math.max(0, total - Math.min(used, total));
+  let html = keys.map((key, i) => {
+    const spent = i >= remaining;
+    return `<span class="act-pip act-pip--${key}${spent ? ' act-pip--spent' : ''}">${spent ? '◇' : '◆'}</span>`;
+  }).join('');
+  for (let i = 0; i < Math.max(0, used - total); i++) {
+    html += `<span class="act-pip act-pip--food act-pip--spent">◇</span>`;
+  }
+  return html;
+}
+
+/**
+ * Breakdown tooltip — each source row tinted with its pip shade. `rows` is
+ * [{ key, label, value }] (only positive rows); `foodLabel` (optional) adds a
+ * trailing food row.
+ */
+export function buildActionBudgetTooltipHtml(rows, total, foodLabel = '') {
+  let html = '<div class="action-breakdown-table">';
+  for (const r of (rows || [])) {
+    html += `<div class="abkd-row act-src--${r.key}"><span class="abkd-label">${r.label}</span>`
+          + `<span class="abkd-val">+${r.value}</span></div>`;
+  }
+  html += `<hr class="abkd-divider">`;
+  html += `<div class="abkd-row abkd-total"><span class="abkd-label">Total</span><span class="abkd-val">${total}</span></div>`;
+  if (foodLabel) {
+    html += `<div class="abkd-row act-src--food abkd-food"><span class="abkd-label">${foodLabel}</span>`
+          + `<span class="abkd-val">extra</span></div>`;
+  }
+  html += '</div>';
+  return html;
 }
 
 // ── Turn-card auto-scroll (replay timeline) ───────────────────────────────────
@@ -205,15 +322,6 @@ export function computeFadeFlags({ scrollTop = 0, clientHeight = 0, scrollHeight
 
 // ── Plan steps list HTML ──────────────────────────────────────────────────────
 
-const RES_ICON = {
-  [ResourceType.WOOD]:      '🪵',
-  [ResourceType.METAL]:     '⚙',
-  [ResourceType.HERBS]:     '🌿',
-  [ResourceType.FOOD]:      '🍞',
-  [ResourceType.SILVER]:    '🥈',
-  [ResourceType.SCRIPTURE]: '📜',
-};
-
 /**
  * Return a short cost badge string (e.g. "−2⚙") for a plan action, given the
  * projected inventory AT THAT STEP.  Returns '' for free / action-point-only actions.
@@ -221,23 +329,23 @@ const RES_ICON = {
 function _stepCostLabel(action, projShared, projWitch, projEntityItems) {
   switch (action.type) {
     case PlanActionType.SUMMON: {
-      if (getItemCountOf(projWitch, ResourceType.METAL) >= 2) return `−2${RES_ICON[ResourceType.METAL]}`;
-      if (getItemCountOf(projWitch, ResourceType.WOOD)  >= 2) return `−2${RES_ICON[ResourceType.WOOD]}`;
+      if (getItemCountOf(projWitch, ResourceType.METAL) >= 2) return `−2 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.METAL])}`;
+      if (getItemCountOf(projWitch, ResourceType.WOOD)  >= 2) return `−2 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.WOOD])}`;
       return '−2 res';
     }
     case PlanActionType.FORTIFY:
-      if (getItemCountOf(projShared, ResourceType.METAL) > 0) return `−1${RES_ICON[ResourceType.METAL]}`;
-      if (getItemCountOf(projShared, ResourceType.WOOD)  > 0) return `−1${RES_ICON[ResourceType.WOOD]}`;
+      if (getItemCountOf(projShared, ResourceType.METAL) > 0) return `−1 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.METAL])}`;
+      if (getItemCountOf(projShared, ResourceType.WOOD)  > 0) return `−1 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.WOOD])}`;
       return '';
     case PlanActionType.HEAL:
-      return `−1${RES_ICON[ResourceType.HERBS]}`;
+      return `−1 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.HERBS])}`;
     case PlanActionType.USE_ITEM: {
       const item = action.item;
       if (!item || ITEMS[item]?.kind === 'weapon') return '';
-      return `−1${RES_ICON[item] || item}`;
+      return `−1 ${coloredResourceLabel(RESOURCE_LABEL[item] || item)}`;
     }
     case PlanActionType.SOUND_HORN:
-      return `−1${RES_ICON[ResourceType.FOOD]}`;
+      return `−1 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.FOOD])}`;
     default: return '';
   }
 }
@@ -257,13 +365,13 @@ function _stepCostLabel(action, projShared, projWitch, projEntityItems) {
  */
 export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entities, initialInv) {
   const ENTITY_GLYPH = {
-    [EntityType.HERO]:       '⚔',
-    [EntityType.WITCH]:      '✦',
-    [EntityType.SURVIVOR]:   '☺',
-    [EntityType.ZOMBIE]:     '†',
-    [EntityType.MINION]:     '☠',
-    [EntityType.WOOD_GOLEM]: '🪵',
-    [EntityType.IRON_GOLEM]: '⚙',
+    [EntityType.HERO]:       '\uE000',
+    [EntityType.WITCH]:      '\uE001',
+    [EntityType.SURVIVOR]:   '\uE002',
+    [EntityType.ZOMBIE]:     '\uE005',
+    [EntityType.MINION]:     '\uE004',
+    [EntityType.WOOD_GOLEM]: '\uE006',
+    [EntityType.IRON_GOLEM]: '\uE007',
   };
 
   // Projected inventory — updated as we walk through steps. Deep-clone the
@@ -291,10 +399,10 @@ export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entit
     if (foodPowered) foodUsed++;
 
     const desc      = describePlanAction(a, entities, i);
-    const foodTag   = foodPowered ? ` <span class="plan-food-tag">🍞</span>` : '';
+    const foodTag   = foodPowered ? ` <span class="plan-food-tag">${coloredResourceIcon('food')}</span>` : '';
     const rmBtn     = submitted
       ? ''
-      : `<button class="plan-step-remove" data-plan-idx="${i}" title="Remove">✕</button>`;
+      : `<button class="plan-step-remove" data-plan-idx="${i}" title="Remove">\uE070</button>`;
     const cls       = foodPowered ? ' food-powered' : overBudget ? ' over-budget' : '';
 
     const stepEntity = entities.find(e => e.id === a.entityId);
@@ -325,13 +433,13 @@ export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entit
 // ── Per-unit plan blocks HTML ────────────────────────────────────────────────
 
 const UNIT_GLYPH = {
-  [EntityType.HERO]:       '⚔',
-  [EntityType.WITCH]:      '✦',
-  [EntityType.SURVIVOR]:   '☺',
-  [EntityType.ZOMBIE]:     '†',
-  [EntityType.MINION]:     '☠',
-  [EntityType.WOOD_GOLEM]: '🪵',
-  [EntityType.IRON_GOLEM]: '⚙',
+  [EntityType.HERO]:       '\uE000',
+  [EntityType.WITCH]:      '\uE001',
+  [EntityType.SURVIVOR]:   '\uE002',
+  [EntityType.ZOMBIE]:     '\uE005',
+  [EntityType.MINION]:     '\uE004',
+  [EntityType.WOOD_GOLEM]: '\uE006',
+  [EntityType.IRON_GOLEM]: '\uE007',
 };
 
 /**
@@ -343,7 +451,7 @@ const UNIT_GLYPH = {
  * @param {object} [items] key→count pack map (projected); falls back to entity.items.
  * @returns {string} HTML for the `.plan-unit-detail` block.
  */
-export function buildUnitDetailHtml(entity, items) {
+export function buildUnitDetailHtml(entity, items, expanded = false) {
   if (!entity) return '';
   const pack = items ?? entity.items ?? {};
 
@@ -360,9 +468,9 @@ export function buildUnitDetailHtml(entity, items) {
     : getEquippedWeaponIdOf(entity.items);
   const weaponLabel = equippedId
     ? (WEAPON_LABEL[equippedId] || equippedId)
-    : '👊 Unarmed';
+    : '\uE08C Unarmed';
   const abilityHtml = entity.abilityLabel
-    ? `<span class="usb-ability">✦ ${entity.abilityLabel}</span>`
+    ? `<span class="usb-ability">\uE062 ${entity.abilityLabel}</span>`
     : '';
   const effectsHtml = buildEffectsHtml(entity);
 
@@ -380,7 +488,7 @@ export function buildUnitDetailHtml(entity, items) {
     .map(([k, spare]) => {
       const label = ITEMS[k]?.kind === 'weapon'
         ? (WEAPON_LABEL[k] || k)
-        : (RESOURCE_LABEL[k] || k);
+        : coloredResourceLabel(RESOURCE_LABEL[k] || k);
       return `<div class="inv-resource-row">`
            + `<span class="inv-resource-label">${label}</span>`
            + `<span class="inv-resource-val">×${spare}</span></div>`;
@@ -400,17 +508,23 @@ export function buildUnitDetailHtml(entity, items) {
     ? `<div class="plan-unit-vline">${abilityHtml}${effectsHtml}</div>`
     : '';
 
+  // Compact line mirrors the Unit Stats Bar: HP bar + weapon + the (i) toggle.
+  // The (i) reveals the rest (ATK/DEF/RNG/AGI + abilities + pack), kept ABOVE
+  // the action list so a unit's vitals always sit at the top of its block.
+  const infoBtn = `<button class="usb-info-btn plan-stats-btn ${expanded ? 'usb-info-btn-active' : ''}" `
+    + `title="${expanded ? 'Hide stats & pack' : 'Show stats & pack'}">i</button>`;
+  const expandedHtml = expanded
+    ? `<div class="plan-unit-vline">${statsHtml}</div>`
+      + extraLine
+      + `<div class="plan-unit-pack">`
+      +   (packRows || `<div class="inv-empty">No spare items</div>`)
+      + `</div>`
+    : '';
+
   return `<div class="plan-unit-detail">`
-    + `<div class="plan-unit-vitals">`
-    +   `<div class="plan-unit-vline">${hpHtml}</div>`
-    +   `<div class="plan-unit-vline"><span class="usb-weapon">${weaponLabel}</span></div>`
-    +   `<div class="plan-unit-vline">${statsHtml}</div>`
-    +   extraLine
-    + `</div>`
-    + `<div class="plan-unit-pack">`
-    +   `<div class="plan-unit-pack-title">Pack (spare)</div>`
-    +   (packRows || `<div class="inv-empty">No spare items</div>`)
-    + `</div>`
+    + `<div class="plan-unit-vitalrow">${hpHtml}`
+    +   `<span class="usb-weapon">${weaponLabel}</span>${infoBtn}</div>`
+    + expandedHtml
     + `</div>`;
 }
 
@@ -437,7 +551,7 @@ export function buildUnitDetailHtml(entity, items) {
  */
 export function buildUnitPlanBlocksHtml(
   unitPlans, budget, foodAvailable, submitted, entities, initialInv,
-  controllableUnits, selectedEntityId, portraitMap,
+  controllableUnits, selectedEntityId, portraitMap, statsExpanded = false,
 ) {
   // Pre-compute budget state and cost labels by walking actions in interleaved
   // order (matching resolution execution order).  Store results keyed by
@@ -530,8 +644,18 @@ export function buildUnitPlanBlocksHtml(
     html += `<span class="plan-unit-chevron">${chevron}</span>`;
     html += avatarHtml;
     html += `<span class="plan-unit-name">${name}</span>`;
+    html += levelPillHtml(entity?.level);
     html += `<span class="plan-unit-count">${count} action${count !== 1 ? 's' : ''}</span>`;
     html += `</div>`;
+
+    // Read-only vitals for the selected unit, ABOVE its action list: HP + weapon
+    // + an (i) toggle (mirrors the Unit Stats Bar). Uses projected per-unit items
+    // so queued equips/uses are reflected.
+    if (isSelected && entity) {
+      const items = projEntityItems[entityId] ?? entity.items ?? {};
+      html += buildUnitDetailHtml(entity, items, statsExpanded);
+    }
+
     html += `<div class="plan-unit-steps">`;
 
     if (actions.length === 0) {
@@ -541,30 +665,29 @@ export function buildUnitPlanBlocksHtml(
         const key  = `${entityId}:${idx}`;
         const bst  = budgetState.get(key) ?? 'ok';
         const cls  = bst === 'food' ? ' food-powered' : bst === 'over' ? ' over-budget' : '';
-        const desc = describePlanAction(a, entities, idx);
-        const foodTag = bst === 'food' ? ` <span class="plan-food-tag">🍞</span>` : '';
+        // Compact label: just the verb (the unit name lives in the block header
+        // above, hex coords are noise). Targeted actions (attack/send) carry the
+        // target onto a second line so a long name wraps instead of truncating.
+        const { verb, target } = describePlanActionParts(a, entities, idx);
+        const title   = target ? `${verb} \u2192 ${target}` : verb;
+        const verbHtml   = `<span class="plan-step-verb">${tintResourceGlyphs(verb)}</span>`;
+        const targetHtml = target ? `<span class="plan-step-target">\u2192 ${target}</span>` : '';
+        const foodTag = bst === 'food' ? ` <span class="plan-food-tag">${coloredResourceIcon('food')}</span>` : '';
         const rmBtn   = submitted
           ? ''
-          : `<button class="plan-step-remove" data-entity-id="${entityId}" data-step-idx="${idx}" title="Remove">✕</button>`;
+          : `<button class="plan-step-remove" data-entity-id="${entityId}" data-step-idx="${idx}" title="Remove">\uE070</button>`;
         const costLbl = costLabels.get(key) ?? '';
         const costTag = costLbl ? ` <span class="plan-step-cost">${costLbl}</span>` : '';
 
         html += `<div class="plan-step${cls}">
             <span class="plan-step-num">${idx + 1}</span>
-            <span class="plan-step-desc" title="${desc}">${desc}${foodTag}${costTag}</span>
+            <span class="plan-step-desc" title="${title}">${verbHtml}${foodTag}${costTag}${targetHtml}</span>
             ${rmBtn}
           </div>`;
       });
     }
 
     html += `</div>`; // close .plan-unit-steps
-
-    // Read-only detail for the selected unit (HP/weapon/stats + pack). Uses the
-    // projected per-unit items so queued equips/uses are reflected.
-    if (isSelected && entity) {
-      const items = projEntityItems[entityId] ?? entity.items ?? {};
-      html += buildUnitDetailHtml(entity, items);
-    }
 
     html += `</div>`; // close .plan-unit-block
   }
@@ -629,7 +752,7 @@ export function buildPlayerStatusHtml(players, nudgeCtx) {
   for (const p of players) {
     const pid       = p.playerId ?? p.id;
     const submitted = p._submitted ?? false;
-    const icon      = submitted ? '✓' : '⋯';
+    const icon      = submitted ? '\uE071' : '⋯';
     const cls       = submitted ? 'player-ready' : 'player-waiting';
     const label     = p.name;
     const fCls      = p.faction === 'hero' ? 'faction-hero' : 'faction-witch';
@@ -656,7 +779,7 @@ export function buildPlayerStatusHtml(players, nudgeCtx) {
     }
 
     html += `<div class="plan-player-row ${cls}">
-        <span class="plan-player-icon ${fCls}"${colorStyle}>${p.faction === 'hero' ? '⚔' : '✦'}</span>
+        <span class="plan-player-icon ${fCls}"${colorStyle}>${p.faction === 'hero' ? '\uE000' : '\uE001'}</span>
         ${presenceDot}<span class="plan-player-name"${colorStyle}>${safeName}</span>
         ${nudgeBtn}<span class="plan-player-status">${icon}</span>
       </div>`;
@@ -752,9 +875,9 @@ export function buildMissionLogHtml(objectives) {
   return objs.map((o) => {
     const done = !!o.completed;
     const hasTarget = o.target != null;
-    const marker = done ? '✓'
+    const marker = done ? '\uE071'
       : hasTarget ? `${Math.max(0, o.current ?? 0)}/${o.target}`
-      : '☐';
+      : '\uE09C';
     return `<li class="mission-log-item${done ? ' done' : ''}">`
       + `<span class="mission-log-marker">${marker}</span>`
       + `<span class="mission-log-label">${_escHtml(o.label ?? o.id ?? '')}</span>`
@@ -785,7 +908,7 @@ export function buildNodeBadgeHtml(witchObjectives, entities, col, row) {
 
   const nodeColor = node.color ?? '#c89dff';
   const name = node.label ?? 'Power Node';
-  return `<span class="usb-terrain-node" style="color:${nodeColor}">⬡ ${name}</span>` +
+  return `<span class="usb-terrain-node" style="color:${nodeColor}">\uE08E ${name}</span>` +
     ` · <span style="color:${disp.color}">${disp.label}</span>`;
 }
 
@@ -810,6 +933,54 @@ const PHASE_DESC_NO_SCORING = Object.freeze({
   dawn: 'Hero +1 action · attrition rises',
   dusk: 'Seek cover before night',
 });
+
+/**
+ * Deadline-countdown data + track HTML for a fixed-end (non-looping) mission's
+ * cycle bar. Returns null for normal/looping games so they render unchanged.
+ *
+ * The track is one segment per round of the cycle: rounds already played are
+ * filled, the current round pulses, and the final round (the deadline) is
+ * marked. Pure — the HUD passes the rendered string straight into the DOM.
+ *
+ * @returns {{ total:number, current:number, remaining:number, deadlinePhase:string,
+ *             countLabel:string, trackHtml:string } | null}
+ */
+export function buildCycleDeadlineHtml(state) {
+  const cfg = state.cycleConfig;
+  if (!cfg || cfg.loop || !Array.isArray(cfg.phases) || cfg.phases.length === 0) return null;
+
+  const total = cfg.phases.length;
+  // Clamp the displayed round into the cycle: the final turn (and any clamped
+  // overflow) reads as the deadline round, never N+1 (see phaseForRound clamp).
+  const current   = Math.min(Math.max(state.round, 1), total);
+  const remaining = Math.max(0, total - current);   // full rounds left AFTER this one
+  const deadlinePhase = cfg.phases[total - 1];
+
+  // Segmented track: past = filled, current = active, future = empty; the final
+  // (deadline) segment carries a marker class regardless of state.
+  let trackHtml = '';
+  for (let i = 0; i < total; i++) {
+    const phase = cfg.phases[i];
+    const cls = ['cd-seg', `phase-${phase}`];
+    if (i + 1 < current)  cls.push('past');
+    else if (i + 1 === current) cls.push('active');
+    else cls.push('future');
+    if (i === total - 1) cls.push('deadline');
+    trackHtml += `<span class="${cls.join(' ')}"></span>`;
+  }
+
+  return {
+    total,
+    current,
+    remaining,
+    deadlinePhase,
+    // The cycle-bump label already states "<Phase> — Round N of N"; the countdown
+    // names the DEADLINE instead (the segmented track shows per-round progress)
+    // so the round isn't stated twice in the same bar.
+    countLabel: `${ICON.hourglass} Ends ${PHASE_META[deadlinePhase]?.label ?? deadlinePhase}`,
+    trackHtml,
+  };
+}
 
 export function buildCycleInfoHtml(state, icons = {}) {
   const phases   = state.cycleConfig?.phases ?? DEFAULT_CYCLE_PHASES;
@@ -863,7 +1034,7 @@ export function buildCycleInfoHtml(state, icons = {}) {
   };
   const nodes = (state.witchObjectives ?? []).map(o => {
     const c = CTRL[nodeController(o, state.entities ?? [])] ?? CTRL.neutral;
-    return `<div class="cip-node"><span class="cip-node-name" style="color:${o.color ?? '#c89dff'}">⬡ ${o.label ?? 'Power Node'}</span>`
+    return `<div class="cip-node"><span class="cip-node-name" style="color:${o.color ?? '#c89dff'}">\uE08E ${o.label ?? 'Power Node'}</span>`
       + `<span class="cip-node-ctrl ${c.cls}">${c.label}</span></div>`;
   }).join('');
   if (nodes) {
@@ -874,14 +1045,14 @@ export function buildCycleInfoHtml(state, icons = {}) {
   if (scoringOn) {
     const score = state.nodeScore ?? { hero: 0, witch: 0 };
     if (state.gameMode === 'battle') {
-      html += `<div class="cip-score">⚔ ${score.hero} — ${score.witch} ✦</div>`;
+      html += `<div class="cip-score">\uE000 ${score.hero} — ${score.witch} \uE001</div>`;
     } else {
       const pips = (cls, n) => Array.from({ length: threshold }, (_, i) =>
         `<span class="score-pip ${cls}${i < n ? ' filled' : ''}"></span>`).join('');
       html += `<div class="cip-score">`
-        + `<span class="cip-score-glyph">⚔</span>${pips('hero', score.hero)}`
+        + `<span class="cip-score-glyph">\uE000</span>${pips('hero', score.hero)}`
         + `<span class="cip-score-sep">—</span>`
-        + `${pips('witch', score.witch)}<span class="cip-score-glyph">✦</span></div>`;
+        + `${pips('witch', score.witch)}<span class="cip-score-glyph">\uE001</span></div>`;
     }
   }
   return html;
@@ -953,8 +1124,8 @@ export function buildRollRowsTipHtml(rows, entry = {}, { portraitFor = null } = 
   const padTo = Math.max(rows.atk.terms.length, rows.def.terms.length);
   let html = `<div class="gtt-bkd">`;
   html += `<div class="gtt-cols">`
-    + column('⚔ ATTACK', 'gtt-atk', rows.atk, padTo, combatantHead(entry.actor))
-    + column('🛡 DEFENSE', 'gtt-def', rows.def, padTo, combatantHead(entry.target))
+    + column('\uE000 ATTACK', 'gtt-atk', rows.atk, padTo, combatantHead(entry.actor))
+    + column('\uE042 DEFENSE', 'gtt-def', rows.def, padTo, combatantHead(entry.target))
     + `</div>`;
 
   // Outcome: what happened, why, and the damage dealt.

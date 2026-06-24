@@ -20,6 +20,7 @@
 // driven by integration testing in a real browser session (out of scope here).
 
 import { describe, test } from 'node:test';
+import { ICON } from '../src/icons.js';
 import assert from 'node:assert/strict';
 
 import {
@@ -1259,7 +1260,7 @@ describe('Renderer3D — paintAttackCountMarker', () => {
   test('single attack shows the ⚔ glyph, stacks show ×N', () => {
     const one = makeTextStubCtx();
     paintAttackCountMarker(one, 48, 48, 40, 1);
-    assert.ok(one.calls.find(c => c.name === 'fillText' && c.args[0] === '⚔'));
+    assert.ok(one.calls.find(c => c.name === 'fillText' && c.args[0] === ICON.hero));
 
     const three = makeTextStubCtx();
     paintAttackCountMarker(three, 48, 48, 40, 3);

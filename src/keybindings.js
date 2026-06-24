@@ -17,6 +17,7 @@
  */
 
 import { MAP_SIZES } from './map.js';
+import { ICON } from './icons.js';
 import { toggleAllyLunge } from './debug-flags.js';
 
 // AppModes during which the camera / unit controls are meaningful. MENU is
@@ -73,6 +74,21 @@ export const COMMANDS = Object.freeze({
     describe: 'Show/hide the on-canvas FPS counter',
     run: (ctx) => ctx.renderer?._toggleFpsCounter?.(),
   },
+  freecam: {
+    describe: 'Unlock the camera to orbit/zoom/pan from any angle (/freecam off to relock)',
+    run: (ctx) => {
+      if (!ctx.renderer?.toggleFreeCamera) {
+        return 'Free camera unavailable — start a mission first.';
+      }
+      const arg = (ctx.args?.[0] || '').toLowerCase();
+      const lock = arg === 'off' || arg === 'false' || arg === '0' || arg === 'stop' || arg === 'lock';
+      const on = ctx.renderer.toggleFreeCamera(!lock);
+      if (!lock && !on) return 'Free camera unavailable — the 3D scene is still loading.';
+      return on
+        ? `${ICON.eye} Free camera ON — drag to orbit (any angle), wheel to zoom, ctrl/right-drag to pan. /freecam off to relock.`
+        : `${ICON.eye} Free camera OFF — camera relocked to the board view.`;
+    },
+  },
   aiassist: {
     describe: 'Watch an AI play: /aiassist (manual button) · /aiassist auto · /aiassist off',
     run: (ctx) => {
@@ -84,9 +100,9 @@ export const COMMANDS = Object.freeze({
                  : (arg === 'auto' || arg === 'autorun') ? 'auto'
                  : true;
       const { enabled, autorun } = ctx.ui.setAIAssistMode(mode);
-      if (autorun) return '🤖 Autorun ON — the AI plans & submits every round. /aiassist off to stop.';
-      if (enabled) return '🤖 AI-assist ON — each round, click the "🤖 AI Plan" button then Submit. (/aiassist auto to autorun.)';
-      return '🤖 AI-assist off.';
+      if (autorun) return '\uE07F Autorun ON — the AI plans & submits every round. /aiassist off to stop.';
+      if (enabled) return '\uE07F AI-assist ON — each round, click the "\uE07F AI Plan" button then Submit. (/aiassist auto to autorun.)';
+      return '\uE07F AI-assist off.';
     },
   },
   seed: {
@@ -98,8 +114,8 @@ export const COMMANDS = Object.freeze({
     run: () => {
       const on = toggleAllyLunge();
       return on
-        ? '🤺 Ally lunge ON — gang-up allies slide in during battle replays.'
-        : '🚫 Ally lunge OFF — gang-up allies stay put (presentation only).';
+        ? '\uE093 Ally lunge ON — gang-up allies slide in during battle replays.'
+        : '\uE092 Ally lunge OFF — gang-up allies stay put (presentation only).';
     },
   },
 });
@@ -119,7 +135,7 @@ export function formatSeedLine(state) {
   const seed = (state.mapSeed === null || state.mapSeed === undefined)
     ? 'n/a (pre-built map)'
     : state.mapSeed;
-  return `🌱 seed: ${seed} · size: ${size} (${dims})`;
+  return `${ICON.seed} seed: ${seed} · size: ${size} (${dims})`;
 }
 
 /**

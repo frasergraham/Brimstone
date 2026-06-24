@@ -34,15 +34,66 @@ fs.mkdirSync(TEMP, { recursive: true });
 
 // ── Copy files ──────────────────────────────────────────────────────────────
 
+// Whitelist of everything the itch.io web build needs at runtime. The `assets`
+// entry is copied WHOLESALE (minus the dev-only excludes below) — same approach
+// as scripts/cap-copy-web.js (the iOS/Android copy). An explicit per-file
+// allowlist drifted every time the 3D renderer learned to load a new asset dir
+// (models, textures, voice, portraits, mission-maps) and shipped a menu that
+// styled fine but couldn't actually render/play a game. Copying the dir is the
+// robust fix: every LOCAL runtime asset rides along automatically. Guarded by
+// tests/cap-web-assets.test.js. Any new top-level <link rel="stylesheet"> or
+// <script> added to index.html must still be added here (assets ride along).
 const COPY = [
   'index.html',
   'styles.css',
+  // The ledger-menu redesign (front-of-app) lives in a second stylesheet linked
+  // from index.html. It MUST ship — otherwise the menu loads unstyled. It also
+  // @imports assets/fonts/ledger-fonts.css and references assets/bg.png.
+  'styles-ledger.css',
   'src',
   'server/resolver.js',
   'server/state-sync.js',
-  'assets/tilemap.png',
-  'assets/bg.png',
+  // Wholesale assets copy: fonts (brimstone-icons + ledger Cormorant/EB
+  // Garamond), bg.png, tilemap.png, the 3D-renderer GLB models + terrain
+  // textures + Babylon vendor bundle, char portraits, mission-map thumbnails,
+  // and voice MP3s. The ASSET_EXCLUDE filter (below) drops dev-only source art.
+  // (Keep this comment free of apostrophes and square brackets: the
+  // cap-web-assets test parses the COPY array string literals with a regex.)
+  'assets',
 ];
+
+// Dev-only asset dirs/files that are NEVER fetched at runtime — excluded to keep
+// the itch zip reasonable. Each is console-documented at copy time (no silent
+// drops). Correctness (game plays) beats size; only things verified unreferenced
+// by src/ are excluded here:
+//   • assets/generated  — baked sprite/tpose/building/tile/icon source art used
+//                          only by the offline asset-generation scripts (~590 MB).
+//   • assets/source     — raw character art + animation sources for the model
+//                          pipeline (~280 MB); the runtime loads the baked .glb
+//                          under assets/models/ instead.
+//   • the 4K PBR texture SOURCE sets (Grass001_4K-JPG / forest_leaves_04 /
+//                          brown_dirt_1-4K, ~190 MB) — these bake down to the
+//                          small assets/textures/terrain/*-detail.jpg the
+//                          renderer actually loads (verified: no src/ ref to the
+//                          4K dirs). assets/textures/terrain itself IS shipped.
+//   • *.pxd             — Pixelmator editable source docs kept beside exported
+//                          runtime PNGs (e.g. cobblestone_large_01_diff_4k.pxd).
+//   • .DS_Store         — macOS Finder cruft.
+// Mirrors cap-copy-web.js's filter (generated + .pxd) and extends it: the iOS
+// bundle currently over-ships the source/4K-PBR art, but the itch zip is hosted
+// (download size matters), so we trim the verified-unused dirs here.
+const ASSET_EXCLUDE = [
+  'assets/generated',
+  'assets/source',
+  'assets/textures/Grass001_4K-JPG',
+  'assets/textures/forest_leaves_04',
+  'assets/textures/brown_dirt_1-4K',
+];
+function isExcludedAsset(relPath) {
+  const p = relPath.split(path.sep).join('/'); // normalise to posix for matching
+  if (p.endsWith('.pxd') || p.endsWith('.DS_Store')) return true;
+  return ASSET_EXCLUDE.some((ex) => p === ex || p.startsWith(ex + '/'));
+}
 
 for (const entry of COPY) {
   const src = path.join(ROOT, entry);
@@ -59,6 +110,13 @@ for (const entry of COPY) {
   }
 }
 
+// Log what we intentionally skipped under assets/ (no silent drops — see DoD).
+for (const ex of ASSET_EXCLUDE) {
+  if (fs.existsSync(path.join(ROOT, ex))) {
+    console.log(`  [skip] ${ex} — dev-only source art, not loaded at runtime`);
+  }
+}
+
 // Copy campaign subdir
 const campaignSrc = path.join(ROOT, 'src', 'campaign');
 if (fs.existsSync(campaignSrc)) {
@@ -70,6 +128,8 @@ function cpDir(src, dest) {
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
     const s = path.join(src, entry.name);
     const d = path.join(dest, entry.name);
+    // Skip dev-only asset paths (relative to ROOT so the exclude list matches).
+    if (isExcludedAsset(path.relative(ROOT, s))) continue;
     if (entry.isDirectory()) cpDir(s, d);
     else fs.copyFileSync(s, d);
   }
@@ -110,8 +170,12 @@ fs.writeFileSync(path.join(TEMP, 'src', 'platform.js'), platformStub);
 
 // ── Stub out server-selector.js (dev-only feature, needs /api/environments) ─
 
+// The ledger menu (src/menu/ledger.js) imports { mountServerSelector } — the
+// stub MUST export that exact symbol or the ES-module load throws a SyntaxError
+// and the entire ledger fails to render (blank menu). Keep the export name in
+// sync with src/server-selector.js.
 const selectorStub = `// Stub for itch.io build — no server selector
-export function initServerSelector() {}
+export async function mountServerSelector() {}
 `;
 fs.writeFileSync(path.join(TEMP, 'src', 'server-selector.js'), selectorStub);
 

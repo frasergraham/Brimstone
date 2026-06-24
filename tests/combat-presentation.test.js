@@ -3,7 +3,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planCombatFrames, DEFAULT_CLUSTER_RADIUS } from '../src/combat-presentation.js';
+import { planCombatFrames, DEFAULT_CLUSTER_RADIUS, resolveLungeTargetWorld } from '../src/combat-presentation.js';
 
 // Build a battle event with the shape main.js reads: battleSnaps.{actorSnap,targetSnap}.
 function battle(actorId, ac, ar, targetId, tc, tr) {
@@ -111,5 +111,60 @@ describe('planCombatFrames', () => {
     ]);
     assert.equal(frames.length, 1);
     assert.deepEqual(frames[0].eventIndices, [0, 1, 2]);
+  });
+});
+
+// ── Regression: replay crash when a unit's attack whiffs (null targetSnap) ────
+//
+// Repro of the operator-reported crash: a unit's intended target died / fled the
+// SAME turn it attacked, so the resolver resolves the attack as a WHIFF
+// (ACTION_SKIP with battleSnaps `{ actorSnap, ranged }`, a `whiffTarget` hex,
+// and NO targetSnap — see server/resolver.js targetFled / empty-hex BATTLE_HEX).
+// The replay layer (_playAttackIntroAnim in src/main.js) then drives the lunge.
+// The combat-defender-slot change (commit eb7364b9) made the melee branch read
+// `renderer.entityWorldPos(targetSnap.id)` UNCONDITIONALLY, so a whiff's null
+// targetSnap threw `TypeError: Cannot read properties of null (reading 'id')`.
+//
+// resolveLungeTargetWorld is that exact dereference, extracted DOM-free. These
+// assertions are RED against the pre-fix unconditional `targetSnap.id` read and
+// GREEN with the null guard. The lunge must fall back to the hex centre (null
+// world anchor) for a whiff, never throw.
+describe('resolveLungeTargetWorld — null-safe whiff aiming', () => {
+  // entityWorldPos mirrors renderer-3d.js: resolves a slot for known ids,
+  // returns null for an id with no standee/entity.
+  const renderer = {
+    entityWorldPos(id) {
+      return id === 'defender' ? { x: 4.2, z: 1.7 } : null;
+    },
+  };
+
+  test('null targetSnap (whiff) → null, does NOT throw', () => {
+    // This is the operator's crash: the dead/fled-target whiff passes targetSnap=null.
+    assert.doesNotThrow(() => resolveLungeTargetWorld(renderer, null));
+    assert.equal(resolveLungeTargetWorld(renderer, null), null);
+    assert.equal(resolveLungeTargetWorld(renderer, undefined), null);
+  });
+
+  test('targetSnap without an id → null, does NOT throw', () => {
+    assert.doesNotThrow(() => resolveLungeTargetWorld(renderer, {}));
+    assert.equal(resolveLungeTargetWorld(renderer, {}), null);
+    assert.equal(resolveLungeTargetWorld(renderer, { id: null }), null);
+  });
+
+  test('live defender → aims at its standee slot', () => {
+    assert.deepEqual(
+      resolveLungeTargetWorld(renderer, { id: 'defender', col: 3, row: 4 }),
+      { x: 4.2, z: 1.7 },
+    );
+  });
+
+  test('defender id with no resolvable standee → null (hex-centre fallback)', () => {
+    assert.equal(resolveLungeTargetWorld(renderer, { id: 'ghost' }), null);
+  });
+
+  test('renderer without entityWorldPos (2D editor) → null, never throws', () => {
+    assert.doesNotThrow(() => resolveLungeTargetWorld({}, { id: 'defender' }));
+    assert.equal(resolveLungeTargetWorld({}, { id: 'defender' }), null);
+    assert.equal(resolveLungeTargetWorld(null, { id: 'defender' }), null);
   });
 });

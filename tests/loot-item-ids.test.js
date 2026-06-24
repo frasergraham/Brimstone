@@ -10,6 +10,7 @@ import { createSurvivor } from '../src/entities.js';
 import { hexKey, getNeighbors } from '../src/hex.js';
 import { TileType, legacyTileType, isBuildingFootprint } from '../src/tiles.js';
 import { lootDisplayLabel } from '../src/items.js';
+import { ICON } from '../src/icons.js';
 
 function freshState() { return new GameState(true, true); }
 
@@ -30,14 +31,14 @@ function freeNeighbourTile(state) {
 
 describe('lootDisplayLabel', () => {
   test('weapons reuse their authored label (name + stats)', () => {
-    assert.equal(lootDisplayLabel('sword'), '⚔ Sword (+2 ATK)');
+    assert.equal(lootDisplayLabel('sword'), `${ICON.sword} Sword (+2 ATK)`);
     assert.match(lootDisplayLabel('musket'), /Musket.*\+2 ATK.*range 2/);
   });
   test('key items use their label; horse + resources use the fallback table', () => {
-    assert.equal(lootDisplayLabel('horn'), '📯 Horn');
+    assert.equal(lootDisplayLabel('horn'), `${ICON.horn} Horn`);
     assert.match(lootDisplayLabel('horse'), /Horse/);
-    assert.equal(lootDisplayLabel('wood'), '🪵 Wood');
-    assert.equal(lootDisplayLabel('herbs'), '🌿 Herbs');
+    assert.equal(lootDisplayLabel('wood'), `${ICON.wood} Wood`);
+    assert.equal(lootDisplayLabel('herbs'), `${ICON.herb} Herbs`);
   });
   test('unknown id degrades to the raw id, never blank', () => {
     assert.equal(lootDisplayLabel('mystery'), 'mystery');
@@ -60,7 +61,7 @@ describe('executeExplore carries lootItemIds index-aligned with lootItems', () =
     assert.ok(res.success);
     assert.equal(res.lootItems.length, res.lootItemIds.length, 'arrays aligned');
     assert.deepEqual(res.lootItemIds, ['wood', 'wood']);
-    assert.equal(lootDisplayLabel(res.lootItemIds[0]), '🪵 Wood');
+    assert.equal(lootDisplayLabel(res.lootItemIds[0]), `${ICON.wood} Wood`);
   });
 
   test('a forced weapon override yields the concrete weapon id (→ name + stats)', () => {
@@ -80,7 +81,7 @@ describe('executeExplore carries lootItemIds index-aligned with lootItems', () =
     if (res.lootItems.length) {
       assert.equal(res.lootItems.length, res.lootItemIds.length);
       assert.equal(res.lootItemIds[0], 'sword');
-      assert.equal(lootDisplayLabel(res.lootItemIds[0]), '⚔ Sword (+2 ATK)');
+      assert.equal(lootDisplayLabel(res.lootItemIds[0]), `${ICON.sword} Sword (+2 ATK)`);
     }
   });
 

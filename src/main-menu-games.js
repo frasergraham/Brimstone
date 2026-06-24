@@ -126,10 +126,10 @@ export function mmIsCampaignRow(row) {
 }
 
 const PHASE_LABELS = {
-  dawn:  '🌅 Dawn',
-  day:   '☀ Day',
-  dusk:  '🌇 Dusk',
-  night: '🌙 Night',
+  dawn:  '\uE020 Dawn',
+  day:   '\uE021 Day',
+  dusk:  '\uE022 Dusk',
+  night: '\uE023 Night',
 };
 
 function capitalize(s) {

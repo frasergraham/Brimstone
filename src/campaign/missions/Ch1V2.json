@@ -13,17 +13,93 @@
   "nodeScoreThreshold": 3,
   "disableScoring": false,
   "healBonus": 25,
-  "requires": ["dark_ritual"],
-  "rewards": { "wood": 2, "herbs": 1 },
-  "map": { "mode": "procedural", "seed": 31112, "mapSize": "skirmish", "nodeCount": 3 },
+  "requires": [
+    "dark_ritual"
+  ],
+  "rewards": {
+    "wood": 2,
+    "herbs": 1
+  },
+  "map": {
+    "mode": "procedural",
+    "seed": 31112,
+    "mapSize": "skirmish",
+    "nodeCount": 3
+  },
   "objectives": {
     "win": [
-      { "type": "slay_witch" },
-      { "type": "control_nodes" }
+      {
+        "type": "slay_witch"
+      },
+      {
+        "type": "control_nodes"
+      }
     ],
     "lose": [
-      { "type": "hero_killed" },
-      { "type": "witch_score_threshold", "points": 3 }
+      {
+        "type": "hero_killed"
+      },
+      {
+        "type": "witch_score_threshold",
+        "points": 3
+      }
+    ]
+  },
+  "logic": {
+    "version": 1,
+    "variables": [],
+    "nodes": [
+      {
+        "id": "objStart0",
+        "type": "onMissionStart",
+        "params": {},
+        "x": 40,
+        "y": 900
+      },
+      {
+        "id": "set_hold_nodes",
+        "type": "setObjective",
+        "params": {
+          "id": "hold_nodes",
+          "label": "Take and hold the village's 3 Power Nodes"
+        },
+        "x": 300,
+        "y": 900
+      },
+      {
+        "id": "set_break_witch",
+        "type": "setObjective",
+        "params": {
+          "id": "break_witch",
+          "label": "Break the witch's hold (slay her, or win on nodes)"
+        },
+        "x": 300,
+        "y": 980
+      }
+    ],
+    "edges": [
+      {
+        "from": {
+          "node": "objStart0",
+          "pin": "out"
+        },
+        "to": {
+          "node": "set_hold_nodes",
+          "pin": "in"
+        },
+        "kind": "exec"
+      },
+      {
+        "from": {
+          "node": "objStart0",
+          "pin": "out"
+        },
+        "to": {
+          "node": "set_break_witch",
+          "pin": "in"
+        },
+        "kind": "exec"
+      }
     ]
   }
 }

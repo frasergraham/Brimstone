@@ -8,7 +8,7 @@ import { EntityType, createMinion, createZombie, createWoodGolem, createSurvivor
 import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import {
   Campaign, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves,
-  reconcileRosterAfterMission, applyCarriedHeroLoadout, rosterSnapshotFromName,
+  reconcileRosterAfterMission, applyCarriedHeroLoadout, rosterSnapshotFromName, deploySpots,
 } from '../src/campaign/campaign.js';
 import { getFaction } from '../src/factions.js';
 import { hasLineOfSight } from '../src/actions.js';
@@ -641,9 +641,11 @@ describe('Campaign class', () => {
     localStorage.clear();
   });
 
-  test('new campaign starts at firstMission with empty roster', () => {
+  test('new campaign starts at the first playable mission with empty roster', () => {
     const c = new Campaign(hollowDef);
-    assert.equal(c.currentMission, 'tutorial');
+    // firstMission is `tutorial`, but the tutorial is disabled (shelved), so a
+    // fresh campaign opens on the first PLAYABLE mission (prologue) instead.
+    assert.equal(c.currentMission, 'prologue');
     assert.equal(c.roster.length, 0);
     assert.equal(c.completedMissions.size, 0);
   });
@@ -767,11 +769,11 @@ describe('Campaign class', () => {
   test('getMissionList returns correct statuses', () => {
     const c = new Campaign(hollowDef);
     const list = c.getMissionList();
-    assert.equal(list.length, 13);     // tutorial + 7 story + 5 villages
-    // On a fresh save only the two prereq-free openers are playable.
-    assert.ok(list[0].available);      // tutorial — no prereqs
-    assert.ok(list[1].available);      // prologue (The Awakening) — no prereqs either
-    for (let i = 2; i < list.length; i++) {
+    assert.equal(list.length, 12);     // 7 story + 5 villages (tutorial is disabled ⇒ DROPPED)
+    assert.ok(!list.some(m => m.id === 'tutorial'), 'disabled tutorial never appears in the list');
+    // On a fresh save only the prereq-free opener (prologue) is playable.
+    assert.ok(list[0].available);      // prologue (The Awakening) — no prereqs, first listed
+    for (let i = 1; i < list.length; i++) {
       assert.ok(!list[i].available, `${list[i].id} should be locked on a fresh save`);
     }
   });
@@ -779,10 +781,9 @@ describe('Campaign class', () => {
   test('getMissionList visibility shows only completed + playable + immediate-next', () => {
     const c = new Campaign(hollowDef);
     const list = c.getMissionList();
-    assert.ok(list[0].visible);        // tutorial — playable now
-    assert.ok(list[1].visible);        // prologue — also playable now (no prereqs)
-    assert.ok(list[2].visible);        // gathering_survivors — one step away from prologue
-    for (let i = 3; i < list.length; i++) {
+    assert.ok(list[0].visible);        // prologue — playable now (no prereqs)
+    assert.ok(list[1].visible);        // gathering_survivors — one step away from prologue
+    for (let i = 2; i < list.length; i++) {
       assert.ok(!list[i].visible, `${list[i].id} should be hidden on a fresh save`);
     }
 
@@ -790,11 +791,10 @@ describe('Campaign class', () => {
     // reveals the next mission after it.
     c.completedMissions.add('prologue');
     const list2 = c.getMissionList();
-    assert.ok(list2[0].visible && list2[0].available); // tutorial — still playable
-    assert.ok(list2[1].visible && list2[1].completed); // prologue — completed
-    assert.ok(list2[2].visible && list2[2].available); // gathering_survivors — now playable
-    assert.ok(list2[3].visible && !list2[3].available);// first_night — now one step away
-    assert.ok(!list2[4].visible);                      // river_crossing — still hidden
+    assert.ok(list2[0].visible && list2[0].completed); // prologue — completed
+    assert.ok(list2[1].visible && list2[1].available); // gathering_survivors — now playable
+    assert.ok(list2[2].visible && !list2[2].available);// first_night — now one step away
+    assert.ok(!list2[3].visible);                      // river_crossing — still hidden
   });
 
   test('getMissionDef looks up from campaignDef missions', () => {
@@ -1067,25 +1067,29 @@ describe('Campaign class', () => {
     localStorage.clear();
   });
 
+  // The live campaign shelves the tutorial (disabled), so progress totals count
+  // only the PLAYABLE missions — 12 of the 13 listed.
+  const PLAYABLE_TOTAL = hollowDef.missions.filter(m => !m.disabled).length;
+
   test('getStatus returns "new" for a fresh campaign', () => {
     const c = new Campaign(hollowDef);
     assert.equal(c.getStatus(), 'new');
     assert.equal(c.getCompletedCount(), 0);
-    assert.equal(c.getMissionCount(), hollowDef.missions.length);
+    assert.equal(c.getMissionCount(), PLAYABLE_TOTAL);   // disabled tutorial excluded
   });
 
   test('getStatus returns "in-progress" with some missions completed', () => {
     const c = new Campaign(hollowDef);
-    c.completedMissions.add(hollowDef.missions[0].id);
+    c.completedMissions.add('prologue');                 // a PLAYABLE mission
     assert.equal(c.getStatus(), 'in-progress');
     assert.equal(c.getCompletedCount(), 1);
   });
 
-  test('getStatus returns "completed" when all missions are completed', () => {
+  test('getStatus returns "completed" when all playable missions are completed', () => {
     const c = new Campaign(hollowDef);
     for (const m of hollowDef.missions) c.completedMissions.add(m.id);
     assert.equal(c.getStatus(), 'completed');
-    assert.equal(c.getCompletedCount(), hollowDef.missions.length);
+    assert.equal(c.getCompletedCount(), PLAYABLE_TOTAL); // disabled tutorial never counts
   });
 
   test('static getCampaignProgress returns "new" with no save', () => {
@@ -1093,18 +1097,18 @@ describe('Campaign class', () => {
     const p = Campaign.getCampaignProgress(hollowDef);
     assert.equal(p.status, 'new');
     assert.equal(p.completed, 0);
-    assert.equal(p.total, hollowDef.missions.length);
+    assert.equal(p.total, PLAYABLE_TOTAL);               // disabled tutorial excluded
   });
 
   test('static getCampaignProgress reports in-progress from saved state', () => {
     localStorage.clear();
     const c = new Campaign(hollowDef);
-    c.completedMissions.add(hollowDef.missions[0].id);
+    c.completedMissions.add('prologue');                 // a PLAYABLE mission
     c.save();
     const p = Campaign.getCampaignProgress(hollowDef);
     assert.equal(p.status, 'in-progress');
     assert.equal(p.completed, 1);
-    assert.equal(p.total, hollowDef.missions.length);
+    assert.equal(p.total, PLAYABLE_TOTAL);
     localStorage.clear();
   });
 
@@ -1115,8 +1119,8 @@ describe('Campaign class', () => {
     c.save();
     const p = Campaign.getCampaignProgress(hollowDef);
     assert.equal(p.status, 'completed');
-    assert.equal(p.completed, hollowDef.missions.length);
-    assert.equal(p.total, hollowDef.missions.length);
+    assert.equal(p.completed, PLAYABLE_TOTAL);           // disabled tutorial never counts
+    assert.equal(p.total, PLAYABLE_TOTAL);
     localStorage.clear();
   });
 
@@ -1568,6 +1572,40 @@ describe('Roster balancing config', () => {
           `${m.id}: minSurvivors (${m.minSurvivors}) exceeds the start cap of 3`);
       }
     }
+  });
+
+  test('every mission allows the full ≤4-total start party (no cap below PARTY_CAP)', () => {
+    // Every campaign mission must let the player field up to 4 total units
+    // (hero + 3 survivors). An unset cap defaults to PARTY_CAP (3); a set cap
+    // must therefore be >= 3 so no mission silently caps the party lower.
+    for (const m of hollowDef.missions) {
+      assert.ok((m.maxSurvivorsFromRoster ?? 3) >= 3,
+        `${m.id}: maxSurvivorsFromRoster (${m.maxSurvivorsFromRoster}) caps the start party below 4 total units`);
+      assert.ok((m.maxSurvivors ?? 3) >= 3,
+        `${m.id}: maxSurvivors (${m.maxSurvivors}) caps the start party below 4 total units`);
+    }
+  });
+
+  test('deploySpots: no authored positions → hero-neighbours (unchanged fallback)', () => {
+    const neighbors = [{ col: 1, row: 0 }, { col: 0, row: 1 }];
+    assert.deepEqual(deploySpots(null, neighbors), neighbors);
+    assert.deepEqual(deploySpots([], neighbors), neighbors);
+  });
+
+  test('deploySpots: authored positions first, then hero-neighbours as overflow', () => {
+    const explicit  = [{ col: 3, row: 6 }, { col: 1, row: 6 }];
+    const neighbors = [{ col: 5, row: 5 }, { col: 6, row: 5 }];
+    const spots = deploySpots(explicit, neighbors);
+    assert.deepEqual(spots.slice(0, 2), explicit);       // authored placements first
+    // A 3rd selected survivor (beyond the 2 authored spots) overflows to a neighbour.
+    assert.deepEqual(spots[2], { col: 5, row: 5 });
+    assert.equal(spots.length, 4);
+  });
+
+  test('deploySpots: overflow neighbours dedupe against authored positions', () => {
+    const explicit  = [{ col: 5, row: 5 }];
+    const neighbors = [{ col: 5, row: 5 }, { col: 6, row: 5 }]; // first coincides with authored
+    assert.deepEqual(deploySpots(explicit, neighbors), [{ col: 5, row: 5 }, { col: 6, row: 5 }]);
   });
 
   test('minSurvivors <= maxSurvivors when both set', () => {
@@ -2569,9 +2607,10 @@ describe('Mission 3 (The First Night) balance', () => {
     assert.equal(pws.survivors, 2);
   });
 
-  test('guarantees a party of two via minSurvivors and maxSurvivorsFromRoster', () => {
+  test('guarantees a party of two (min) and allows up to the full ≤4-total party', () => {
     assert.equal(mission3.minSurvivors, 2);
-    assert.equal(mission3.maxSurvivorsFromRoster, 2);
+    // Start cap raised so every mission can field up to 4 total units (hero + 3).
+    assert.equal(mission3.maxSurvivorsFromRoster, 3);
     // No hidden-survivor discovery — the night is a fixed-party defense.
     assert.equal(mission3.missionSurvivors, 0);
     assert.equal(mission3.maxDiscoverableSurvivors, 0);
@@ -2670,9 +2709,13 @@ describe('Mission 4 (The River Crossing) balance', () => {
     assert.equal(mission4.phaseCycle.loop, true);
   });
 
-  test('starts with a guaranteed party of two survivors', () => {
-    assert.equal(mission4.maxSurvivorsFromRoster, 2);
+  test('guarantees two survivors (min) and allows up to the full ≤4-total party', () => {
+    // Start cap raised so the player can field up to 4 total units (hero + 3);
+    // the minimum of two is preserved (the river crossing needs a party).
+    assert.equal(mission4.maxSurvivorsFromRoster, 3);
     assert.equal(mission4.minSurvivors, 2);
+    // Two authored start positions remain; a 3rd selected survivor overflows to
+    // a hero-neighbour at deploy time (see main.js roster deploy).
     assert.ok(Array.isArray(mission4.survivorStartPositions));
     assert.equal(mission4.survivorStartPositions.length, 2);
   });
