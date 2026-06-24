@@ -5999,7 +5999,14 @@ export class Renderer3D {
     if (!camera || this.viewLocked || !(factor > 0)) return;
     const lower = camera.lowerRadiusLimit ?? CAMERA_MIN_ZOOM_RADIUS;
     const upper = camera.upperRadiusLimit ?? CAMERA_MAX_ZOOM_RADIUS;
-    camera.radius = Math.max(lower, Math.min(upper, camera.radius / factor));
+    const before = camera.radius;
+    camera.radius = Math.max(lower, Math.min(upper, before / factor));
+    // Deliberate zoom (Shift+↑/↓ keyboard zoom) — like wheel/pinch, mark the
+    // user's distance as established so the next auto-refocus pans only and
+    // preserves it. Guard on a real radius change so a clamped no-op at a limit
+    // (mirrors the pinch handler's `if (radiusDelta !== 0)` precedent) doesn't
+    // flip the flag.
+    if (camera.radius !== before) this._userZoomEstablished = true;
   }
 
   /** Set the 3D drag-mode toggle: 'pan' or 'rotate'. UI calls this when the
@@ -6547,6 +6554,13 @@ export class Renderer3D {
     // cap that fits THEIR footprint, not the standard 13×13.
     this._buildMap();
     this._recomputeMaxZoomCap();
+    // NOTE: `_frameFullMap` always frames with `fit: true`, so this init framing
+    // sets `_userZoomEstablished = true`. In live play the flag is therefore
+    // already true before the first auto-focus — `frameHexes`'s "fresh game,
+    // flag false → zoom-in fallback" branch is effectively pre-empted here. The
+    // intended initial zoom-in is handled explicitly by `_focusInitialView(…,
+    // fit: true)` in `src/main.js`, not by that fallback (which mainly matters
+    // for headless/test paths that never run this init).
     this._frameFullMap({ instant: true });
     // Initial standee population so the first frame already has units.
     this._syncEntityStandees();
