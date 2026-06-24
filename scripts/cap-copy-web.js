@@ -70,6 +70,12 @@ for (const dir of dirs) {
 const files = [
   'index.html',
   'styles.css',
+  // The ledger-menu redesign lives in a second stylesheet linked from
+  // index.html. It MUST be copied too — otherwise the menu loads unstyled
+  // under capacitor://localhost (the file 404s in the webview). Any new
+  // top-level <link rel="stylesheet"> or <script> added to index.html must
+  // be added here as well — assets under assets/ ride along via the dirs copy.
+  'styles-ledger.css',
   'server/resolver.js',
   'server/state-sync.js',
 ];
