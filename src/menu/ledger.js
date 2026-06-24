@@ -14,6 +14,8 @@ import { mountServerSelector } from '../server-selector.js';
 import { MAP_SIZES } from '../map.js';
 import { loadThumb, missionThumb, campaignMissionRowId } from './thumbnails.js';
 import { isModeAvailable, isFactionAvailable, COMING_SOON_LABEL } from '../demo-config.js';
+import { getCampaignPortrait } from '../campaign/campaign-ui.js';
+import { levelPillHtml } from '../ui-render.js';
 
 /** The six rail destinations, top to bottom (mirrors the mock). */
 const DESTINATIONS = [
@@ -32,7 +34,9 @@ let _renderToken = 0;            // guards against out-of-order async panel rend
 let _campSlot = null;            // selected campaign slot (Campaign destination)
 let _campView = 'missions';      // Campaign sub-view: 'missions' | 'party'
 let _campBriefing = null;        // active mission briefing ({slot,missionId,resume,title,briefing,index})
+let _campBriefingReturn = null;  // briefing stashed while editing the party (so we can return)
 let _campConfirmDelete = null;   // slot index awaiting delete confirmation
+let _campConfirmAbandon = false; // briefing's Abandon-save confirm awaiting yes/no
 let _skFaction = null;           // selected Skirmish champion
 const _skOpts = { mapSize: 'standard', nodeCount: 3, aiDifficulty: 'normal', startingResources: 'none' };
 let _othersView = 'landing';     // Play With Others sub-view: 'landing'|'find'|'lobby'|'battle'
@@ -121,7 +125,10 @@ function _renderRail() {
     item.innerHTML = `<span class="ic">${d.icon}</span><span class="lb">${d.label}</span>` +
       (available ? '' : `<span class="lg-soon-badge">${COMING_SOON_LABEL}</span>`);
     if (available) {
-      item.addEventListener('click', () => { _campBriefing = null; _campConfirmDelete = null; select(d.id); });
+      item.addEventListener('click', () => {
+        _campBriefing = null; _campBriefingReturn = null; _campConfirmDelete = null; _campConfirmAbandon = false;
+        select(d.id);
+      });
     } else {
       item.setAttribute('aria-disabled', 'true');
       item.title = `${d.label} — ${COMING_SOON_LABEL}`;
@@ -274,7 +281,7 @@ function _panelCampaign(body) {
         `<div class="lg-slot-title gthc">New</div>` +
         `<div class="lg-slot-sub">begin a playthrough</div>`;
     card.addEventListener('click', () => {
-      _campSlot = s.slot; _campBriefing = null;
+      _campSlot = s.slot; _campBriefing = null; _campBriefingReturn = null; _campConfirmAbandon = false;
       _data?.setActiveCampaignSlot?.(s.slot);   // persist so Continue tracks this slot
       select('campaign');
     });
@@ -297,7 +304,9 @@ function _panelCampaign(body) {
   const tabs = document.createElement('div');
   tabs.className = 'lg-camp-tabs';
   tabs.appendChild(_button('Choose Next Mission', _campView === 'missions' ? 'gold' : 'ghost',
-    () => { _campView = 'missions'; select('campaign'); }));
+    // Switching to the chronicle abandons any pending "edit party → back to
+    // briefing" round-trip (the player chose a different destination).
+    () => { _campView = 'missions'; _campBriefingReturn = null; select('campaign'); }));
   tabs.appendChild(_button('Manage the Party', _campView === 'party' ? 'gold' : 'ghost',
     () => { _campView = 'party'; select('campaign'); }));
   body.appendChild(tabs);
@@ -370,7 +379,9 @@ function _chapterHeading(chapter) {
 /** Mission briefing — shown before a mission launches (title, briefing, Begin). */
 function _campaignBriefing(body) {
   const b = _campBriefing;
-  body.appendChild(_backRow('‹ Back to the chronicle', () => { _campBriefing = null; select('campaign'); }));
+  body.appendChild(_backRow('‹ Back to the chronicle', () => {
+    _campBriefing = null; _campBriefingReturn = null; _campConfirmAbandon = false; select('campaign');
+  }));
 
   // Two-column briefing: the map image on the LEFT, the mission text (kicker +
   // title + briefing copy) on the RIGHT. The columns stack on narrow widths
@@ -387,8 +398,12 @@ function _campaignBriefing(body) {
   head.className = 'lg-brief-head';
   // Mission number is 0-based from the tutorial — Mission 0 is the tutorial.
   const kicker = `Mission ${b.index ?? 0}`;
+  // NEW vs RESUMED is the load-bearing distinction here: a resumed save drops the
+  // player back mid-mission, a new start regenerates the board. Badge it plainly.
+  const badge = b.resume ? 'RESUMING SAVE' : 'NEW MISSION';
   head.innerHTML =
-    `<div class="lg-brief-kicker">${esc(kicker)}</div>` +
+    `<div class="lg-brief-kicker">${esc(kicker)} ` +
+      `<span class="lg-brief-badge${b.resume ? ' is-resume' : ''}">${esc(badge)}</span></div>` +
     `<div class="lg-brief-title gthc">${esc(b.title)}</div>`;
   textCol.appendChild(head);
   const rule = document.createElement('div'); rule.className = 'ledger-rule'; textCol.appendChild(rule);
@@ -400,10 +415,94 @@ function _campaignBriefing(body) {
 
   body.appendChild(cols);
 
-  const begin = _button(b.resume ? `${ICON.play} Resume Mission` : `${ICON.play} Begin Mission`, 'gold',
-    () => _data?.startMission?.(b.slot, b.missionId, b.resume));
-  begin.style.marginTop = '20px';
-  body.appendChild(begin);
+  // ── Deploying party strip — the EXACT set that will deploy (hero + survivors),
+  //    sourced from beginMissionParty which resolves through the same
+  //    resolveDeployIndices the launch path uses (display == deploy). Portraits
+  //    load lazily; preload then render so glyphs don't flash as tofu.
+  _appendDeployingStrip(body, b);
+
+  // Begin/Resume + Edit Party live on one row, with Abandon (resume only) below.
+  const btnRow = document.createElement('div');
+  btnRow.className = 'lg-brief-actions';
+  btnRow.appendChild(_button(b.resume ? `${ICON.play} Resume Mission` : `${ICON.play} Begin Mission`, 'gold',
+    () => _data?.startMission?.(b.slot, b.missionId, b.resume)));
+  btnRow.appendChild(_button('Edit Party', 'ghost', () => {
+    // Stash the pending briefing so the party view can return to it, then open
+    // the party sub-view of the campaign panel.
+    _campBriefingReturn = b;
+    _campBriefing = null;
+    _campConfirmAbandon = false;
+    _campView = 'party';
+    _campSlot = b.slot;
+    select('campaign');
+  }));
+  body.appendChild(btnRow);
+
+  // Resumed saves can be abandoned (delete the mid-mission save → start fresh).
+  // INLINE confirm; on confirm we delete ONLY the mission save (never the
+  // playthrough) and flip the screen to "NEW MISSION".
+  if (b.resume) _appendAbandonControl(body, b);
+}
+
+/** Build + append the "Deploying" party strip for a briefing. Async portrait
+ *  load is awaited before paint (preloadPortraits) so icons render as art. */
+function _appendDeployingStrip(body, b) {
+  const strip = document.createElement('div');
+  strip.className = 'lg-brief-party';
+  body.appendChild(strip);
+  const render = () => {
+    // Guard against a stale render after the player left the briefing.
+    if (_campBriefing !== b || !strip.isConnected) return;
+    const party = _data?.beginMissionParty?.(b.slot, b.missionId);
+    if (!Array.isArray(party) || party.length === 0) { strip.remove(); return; }
+    strip.innerHTML =
+      `<div class="lg-brief-party-label">Deploying</div>` +
+      `<div class="lg-brief-party-row">` +
+        party.map(_deployChipHtml).join('') +
+      `</div>`;
+  };
+  Promise.resolve(_data?.preloadPortraits?.()).then(render).catch(render);
+}
+
+/** One portrait + name (+ level pill if veteran) chip in the deploying strip. */
+function _deployChipHtml(u) {
+  const portrait = getCampaignPortrait(u.assetId, 44);
+  const icon = portrait
+    ? `<img class="lg-deploy-portrait" src="${portrait}" alt="">`
+    : `<span class="lg-deploy-glyph">${u.isHero ? '' : ''}</span>`;
+  return `<div class="lg-deploy-chip${u.isHero ? ' is-hero' : ''}">` +
+    icon +
+    `<span class="lg-deploy-name">${esc(u.name)}${levelPillHtml(u.level)}</span>` +
+  `</div>`;
+}
+
+/** The "Abandon save & restart mission" control for a resumed briefing. Inline
+ *  confirm (mirrors the slot-delete / row-abandon patterns). On confirm it deletes
+ *  ONLY the mid-mission save (abandonMissionSave), then flips the briefing to a
+ *  fresh NEW MISSION start — the whole playthrough/roster is untouched. */
+function _appendAbandonControl(body, b) {
+  const wrap = document.createElement('div');
+  wrap.className = 'lg-brief-abandon';
+  if (_campConfirmAbandon) {
+    const q = document.createElement('span');
+    q.className = 'lg-confirm-q';
+    q.textContent = 'Abandon this save and restart the mission from the beginning?';
+    wrap.append(
+      q,
+      _button('Abandon save', 'danger', () => {
+        _data?.abandonMissionSave?.(b.slot, b.missionId);
+        b.resume = false;               // the save is gone — this is now a fresh start
+        _campConfirmAbandon = false;
+        select('campaign');             // re-render: now reads "NEW MISSION" / "Begin"
+      }),
+      _button('Keep save', 'ghost', () => { _campConfirmAbandon = false; select('campaign'); }),
+    );
+  } else {
+    wrap.appendChild(_button('Abandon save & restart mission', 'danger', () => {
+      _campConfirmAbandon = true; select('campaign');
+    }));
+  }
+  body.appendChild(wrap);
 }
 
 /** Displayed mission number label for a catalog index. The list is 0-based from
@@ -432,6 +531,17 @@ function _briefMapImage(b) {
 /** Warband (Party) view — reuses the existing party-pane renderer + mutations.
  *  Injects the party HTML and wires its controls back to partyAction. */
 function _renderPartyView(body, sel) {
+  // When the player opened the party screen via "Edit Party" on a briefing, give
+  // them a one-tap route back to that briefing so they're never stranded (the
+  // module-level _campBriefingReturn holds the pending briefing).
+  if (_campBriefingReturn) {
+    const ret = _campBriefingReturn;
+    body.appendChild(_backRow('‹ Back to briefing', () => {
+      _campBriefingReturn = null;
+      _campBriefing = ret;        // restore the pending briefing
+      select('campaign');
+    }));
+  }
   const container = document.createElement('div');
   container.className = 'lg-party';
   body.appendChild(container);
@@ -1516,6 +1626,7 @@ function _missionRow(slot, m, status, index, campaignId) {
   if (playable) {
     const go = (e) => {
       e?.stopPropagation?.();
+      _campBriefingReturn = null; _campConfirmAbandon = false;   // fresh briefing entry
       _campBriefing = { slot: slot.slot, missionId: m.id, resume, title: m.title || m.id, briefing: m.briefing || '', index, campaignId };
       select('campaign');
     };

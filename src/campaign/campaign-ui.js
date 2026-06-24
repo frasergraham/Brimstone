@@ -598,6 +598,41 @@ export function heroStatsToUnit(heroStats) {
   };
 }
 
+/**
+ * Lightweight "who actually deploys this mission" preview list for the Begin
+ * Mission screen — the fixed campaign hero (Paladin) first, then one entry per
+ * roster survivor at the given deploy indices, in deploy order.
+ *
+ * THE CONTRACT: `deployIndices` MUST be the output of
+ * {@link resolveDeployIndices} (the same call the launch/deploy loop makes), so
+ * the previewed party can never drift from what actually deploys — "what you see
+ * is what deploys". This helper only MAPS those indices into a display shape; it
+ * does no selection of its own. Pure: reads only its arguments + the roster.
+ *
+ * @param {object} heroStats        Campaign.heroStats ({ hp, maxHp, level, ... }).
+ * @param {object[]} roster         Campaign.roster (snapshotSurvivor entries).
+ * @param {number[]} deployIndices  resolveDeployIndices() output (validated indices).
+ * @returns {{name,title,assetId,hp,maxHp,level,isHero}[]}
+ */
+export function buildDeployPartyPreview(heroStats, roster, deployIndices) {
+  const hero = heroStatsToUnit(heroStats || {});
+  const out = [{
+    name: hero.name, title: hero.title, assetId: hero.assetId,
+    hp: hero.hp, maxHp: hero.maxHp, level: hero.level ?? 1, isHero: true,
+  }];
+  const list = Array.isArray(roster) ? roster : [];
+  for (const i of (Array.isArray(deployIndices) ? deployIndices : [])) {
+    const s = list[i];
+    if (!s) continue;                          // index out of range — skip defensively
+    const u = survivorToUnit(s);
+    out.push({
+      name: u.name, title: u.title, assetId: u.assetId,
+      hp: u.hp, maxHp: u.maxHp, level: u.level ?? 1, isHero: false,
+    });
+  }
+  return out;
+}
+
 // ── Debrief party + rewards (party-management card UX) ──────────────────────
 //
 // The post-mission debrief renders its surviving roster and its reward survivors
