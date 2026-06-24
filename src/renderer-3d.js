@@ -919,12 +919,28 @@ export const WEAPON_GRIP_TRANSFORMS = Object.freeze({
   axe:    { worldLength: 0.58, rotation: { x: -Math.PI * 0.14, y: 0, z: 0 },     offset: { x: 0.02, y: 0.04, z: 0 } },
   // Dagger: long axis = +Y, short. Slight forward tilt; small lift.
   dagger: { worldLength: 0.30, rotation: { x: -Math.PI * 0.18, y: 0, z: 0 },     offset: { x: 0, y: 0.01, z: 0 } },
-  // Rifle: long axis = +X (barrel forward). Yaw +90° about Y swings the barrel
-  // into the unit's FORWARD direction so it's carried across the body and reads
-  // as a held long-gun from the high gameplay camera (rather than standing
-  // vertical / hidden behind the body). A small forward-up tilt keeps the muzzle
-  // clear of the ground and the body.
-  rifle:  { worldLength: 0.66, rotation: { x: -Math.PI * 0.06, y: Math.PI * 0.5, z: 0 }, offset: { x: -0.02, y: 0.03, z: 0.05 } },
+  // Rifle: long axis = +X (barrel forward in the model). The old pose yawed the
+  // barrel into the unit's FORWARD/DOWN direction — straight along the steep
+  // top-down camera's view axis — so it foreshortened to a near-invisible stub.
+  // Instead carry it ANGLED ACROSS the body (barrel running diagonally up + to
+  // the side, ~perpendicular to the view axis) and lifted to chest height, like
+  // a soldier at high port: ry +0.7π swings the barrel out across the unit, rz
+  // -0.15π tilts it up off the ground plane. Across-and-up length projects at
+  // close to full size on the ~30° isometric gameplay camera, so the long-gun
+  // reads clearly from above. The grip end still sits at the fist (offset slides
+  // the handle onto the bone).
+  //
+  // worldLength is 70, not ~0.7 like the other weapons, because Rifle.glb ships
+  // with a baked node scale of 100 that the others lack: `_loadWeaponModel`
+  // measures `longSpan` from the WORLD-scaled bbox (≈2.9 instead of the true
+  // ≈0.029 vertex extent), so the derived clone scale comes out 100× too small
+  // and the rifle renders microscopically. worldLength × ~100 cancels that and
+  // lands the rifle at the intended ~0.7-world-unit on-screen length. (A cleaner
+  // systemic fix — measuring the LOCAL bbox / baking the node scale in
+  // `_loadWeaponModel` — is out of scope here; worldLength is the per-model knob
+  // meant to absorb exactly this measurement quirk.) Tuned vs gameplay-camera
+  // screenshots.
+  rifle:  { worldLength: 70, rotation: { x: -Math.PI * 0.06, y: Math.PI * 0.7, z: -Math.PI * 0.15 }, offset: { x: -0.02, y: 0.05, z: 0.04 } },
 });
 
 /** Compute the rig-LOCAL grip transform for a weapon model clone, given the
