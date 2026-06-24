@@ -34,14 +34,28 @@ fs.mkdirSync(TEMP, { recursive: true });
 
 // ── Copy files ──────────────────────────────────────────────────────────────
 
+// Whitelist of everything the itch.io web build needs at runtime. Keep this in
+// sync with the assets index.html (and the CSS it loads) references — a missing
+// stylesheet or font 404s under the itch file:// / zip-root and the menu renders
+// unstyled. This mirrors scripts/cap-copy-web.js (the iOS/Android copy). Guarded
+// by tests/cap-web-assets.test.js. Any new top-level <link rel="stylesheet"> or
+// <script> added to index.html must be added here too.
 const COPY = [
   'index.html',
   'styles.css',
+  // The ledger-menu redesign (front-of-app) lives in a second stylesheet linked
+  // from index.html. It MUST ship — otherwise the menu loads unstyled. It also
+  // @imports assets/fonts/ledger-fonts.css and references assets/bg.png.
+  'styles-ledger.css',
   'src',
   'server/resolver.js',
   'server/state-sync.js',
   'assets/tilemap.png',
   'assets/bg.png',
+  // Fonts: brimstone-icons.woff2 (styles.css @font-face) + the ledger menu's
+  // Cormorant/EB Garamond woff2s loaded via assets/fonts/ledger-fonts.css.
+  // Copy the whole fonts dir — it's small and every file in it is referenced.
+  'assets/fonts',
 ];
 
 for (const entry of COPY) {
@@ -110,8 +124,12 @@ fs.writeFileSync(path.join(TEMP, 'src', 'platform.js'), platformStub);
 
 // ── Stub out server-selector.js (dev-only feature, needs /api/environments) ─
 
+// The ledger menu (src/menu/ledger.js) imports { mountServerSelector } — the
+// stub MUST export that exact symbol or the ES-module load throws a SyntaxError
+// and the entire ledger fails to render (blank menu). Keep the export name in
+// sync with src/server-selector.js.
 const selectorStub = `// Stub for itch.io build — no server selector
-export function initServerSelector() {}
+export async function mountServerSelector() {}
 `;
 fs.writeFileSync(path.join(TEMP, 'src', 'server-selector.js'), selectorStub);
 
