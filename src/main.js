@@ -49,7 +49,6 @@ import * as audio from './audio.js';
 import { playback, resetPlayback, replayFullGame, playbackDelay, swapState, patchAlive, withPinnedPhase } from './playback.js';
 import { ReplayCache } from './replay-cache.js';
 import { makeShowLoadingAndReveal } from './loading-reveal.js';
-import { MAP_SIZES } from './map.js';
 import { nodeController } from './game.js';
 import { MissionConductor, areHintsSuppressed, markHintsSeen, resetAllHintsForCampaign } from './mission-conductor.js';
 import {
@@ -7530,32 +7529,6 @@ async function _showBattleScreen() {
 
 // ── Online flow ───────────────────────────────────────────────────────────────
 
-
-// ── Node count selectors — populate options based on map size ─────────────────
-
-function _populateNodeCountSelect(selectId, mapSizeSelectId) {
-  const mapSizeEl  = document.getElementById(mapSizeSelectId);
-  const nodeEl     = document.getElementById(selectId);
-  if (!mapSizeEl || !nodeEl) return;
-  const cfg        = MAP_SIZES[mapSizeEl.value] ?? MAP_SIZES.standard;
-  const min        = cfg.nodeCountMin ?? 1;
-  const max        = cfg.nodeCountMax ?? cfg.nodeCount ?? 3;
-  const current    = parseInt(nodeEl.value, 10);
-  nodeEl.innerHTML = '';
-  for (let i = min; i <= max; i++) {
-    const opt = document.createElement('option');
-    opt.value = String(i);
-    opt.textContent = String(i);
-    if (i === cfg.nodeCount) opt.selected = true;
-    nodeEl.appendChild(opt);
-  }
-  // Restore previous selection if still in range; otherwise default
-  if (current >= min && current <= max) nodeEl.value = String(current);
-}
-
-// Initialize on load
-_populateNodeCountSelect('select-node-count', 'select-map-size');
-_populateNodeCountSelect('cg-node-count', 'cg-map-size');
 
 // ── Create Game flow ──────────────────────────────────────────────────────────
 

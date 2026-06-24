@@ -322,15 +322,6 @@ export function computeFadeFlags({ scrollTop = 0, clientHeight = 0, scrollHeight
 
 // ── Plan steps list HTML ──────────────────────────────────────────────────────
 
-const RES_ICON = {
-  [ResourceType.WOOD]:      ICON.wood,
-  [ResourceType.METAL]:     ICON.metal,
-  [ResourceType.HERBS]:     ICON.herb,
-  [ResourceType.FOOD]:      ICON.food,
-  [ResourceType.SILVER]:    ICON.silver,
-  [ResourceType.SCRIPTURE]: ICON.scripture,
-};
-
 /**
  * Return a short cost badge string (e.g. "−2⚙") for a plan action, given the
  * projected inventory AT THAT STEP.  Returns '' for free / action-point-only actions.
@@ -653,6 +644,7 @@ export function buildUnitPlanBlocksHtml(
     html += `<span class="plan-unit-chevron">${chevron}</span>`;
     html += avatarHtml;
     html += `<span class="plan-unit-name">${name}</span>`;
+    html += levelPillHtml(entity?.level);
     html += `<span class="plan-unit-count">${count} action${count !== 1 ? 's' : ''}</span>`;
     html += `</div>`;
 

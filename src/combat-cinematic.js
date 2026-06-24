@@ -121,16 +121,17 @@ export async function run3DCombatCardHold({
   getContinueButton,
   playBattleResultAnims,
 }) {
-  // G2 — position the cluster before the strike freezes: defender re-centres
-  // on its hex, the first ADVANTAGE_CAP allies per side slide to the edge they
-  // share with the defender's hex, and allies beyond the cap stay put. The
-  // attacker is excluded — the caller already kicked off its addLungeAnim via
-  // `_playAttackIntroAnim`. Allies are looked up in state by id so the helper
-  // gets accurate current hexes (mid-step moves landed already).
+  // G2 — position the cluster before the strike freezes: the defender HOLDS
+  // its current sub-hex slot (it does NOT re-centre), the first ADVANTAGE_CAP
+  // allies per side slide to the edge they share with the defender's hex, and
+  // allies beyond the cap stay put. The attacker is excluded — the caller
+  // already kicked off its addLungeAnim via `_playAttackIntroAnim`. Allies are
+  // looked up in state by id so the helper gets accurate current hexes
+  // (mid-step moves landed already).
   const bd = result?.breakdown || {};
   // Show-side debug toggle: when the ally lunge is disabled, the gang-up allies
   // stay on their own hexes (empty ally arrays ⇒ no slide). The defender still
-  // re-centres and the attacker still reserves its edge — only the ally
+  // holds its slot and the attacker still reserves its edge — only the ally
   // animation is suppressed; combat resolution is unaffected.
   const allyLunge = isAllyLungeEnabled();
   const atkAllyIds = allyLunge && Array.isArray(bd.atkAllyIds) ? bd.atkAllyIds : [];
@@ -141,10 +142,12 @@ export async function run3DCombatCardHold({
     return ally ? { id, col: ally.col, row: ally.row } : null;
   };
   if (typeof renderer.applyCombatPositioning === 'function') {
-    // Centre the defender cluster on the defender's LIVE hex, not its pre-move
-    // battle snapshot — a unit that moved this turn before being attacked would
-    // otherwise warp back to its turn-start hex for the readout then slide back.
-    // The attacker lunge already tracks the live hex; this keeps them together.
+    // Resolve the defender's LIVE hex (its current sub-hex slot), not its
+    // pre-move battle snapshot — a unit that moved this turn before being
+    // attacked would otherwise warp back to its turn-start hex for the readout
+    // then slide back. The defender HOLDS this slot (applyCombatPositioning does
+    // not re-centre it); the attacker lunge already tracks the live hex, keeping
+    // the pair together.
     const liveDef = state?.entities?.find(e => e.id === targetSnap.id && e.alive);
     // The attacker's live hex reserves its edge of the defender's hex so no
     // ally is assigned the spot the attacker's lunge freezes on.

@@ -6683,10 +6683,6 @@ function _unitCardHTML(entity, { renderer = null, selectable = false, showStats 
   return `<div class="${cls}"${dataId}>${portraitHtml}<span class="tile-unit-card-name" style="color:${color}">${label}</span><span class="tile-unit-card-stats">${statsHtml}</span></div>`;
 }
 
-function _snapEntity(e) {
-  return { id: e.id, name: e.displayName, hp: e.hp, maxHp: e.maxHp, attack: e.getAttack(), defense: e.getDefense(), type: e.type, title: e.title ?? null, level: e.level ?? 1 };
-}
-
 function _combatantHTML(snap, role, portraitSrc = null) {
   const label      = role === 'atk' ? '\uE000 Attacker' : '\uE042 Defender';
   const color      = ENTITY_COLOR[snap.type] || '#888';
