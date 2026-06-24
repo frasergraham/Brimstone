@@ -56,7 +56,7 @@ import {
 } from './learn/learn-config.js';
 import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel, getEquippedWeaponIdOf, normalizeItems, flattenItemCounts } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
-import { Campaign, CAMPAIGN_SLOT_COUNT, getActiveSlot, setActiveSlot, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout, deploySpots } from './campaign/campaign.js';
+import { Campaign, CAMPAIGN_SLOT_COUNT, getActiveSlot, setActiveSlot, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout, deploySpots, resolveDeployIndices } from './campaign/campaign.js';
 import { CAMPAIGNS } from './campaign/campaign-registry.js';
 import { campaignMissionNumber as _campaignMissionNumber, campaignMissionTotal as _campaignMissionTotal, hasCampaignToContinue } from './campaign/continue-resolver.js';
 import { saveThumb, deleteThumb, loadThumb, saveStats, loadStats, campaignMissionRowId } from './menu/thumbnails.js';
@@ -4760,7 +4760,11 @@ function _initCampaignMission(missionDef) {
   // PARTY_CAP (≤3), so no mission can START with more than 3 roster survivors.
   const _maxFromRoster = _effectivePartyCap(missionDef.maxSurvivorsFromRoster, missionDef.id, 'maxSurvivorsFromRoster');
   if (_activeCampaign && _maxFromRoster > 0) {
-    const toDeploy = _activeRosterIndices.slice(0, _maxFromRoster);
+    // Defense-in-depth: when the live working selection is empty (e.g. a caller
+    // launched straight into the mission without visiting the Party screen), fall
+    // back to the player's persisted active party instead of deploying nobody —
+    // otherwise the minSurvivors balancer backfills random generics.
+    const toDeploy = resolveDeployIndices(_activeRosterIndices, _activeCampaign, _maxFromRoster);
     // Place survivors at explicit start positions if the mission specifies
     // them; otherwise fall back to neighbors of the hero's start tile.
     const heroStart = mapData.heroStart;
@@ -9541,6 +9545,13 @@ async function _ledgerStartCampaignMission(slotIndex, missionId, resume = false)
   const id = missionId || _activeCampaign.getNextMission?.();
   const missionDef = id && _activeCampaign.getMissionDef?.(id);
   if (!missionDef) return;
+  // Seed the working active-squad selection from the persisted choice before
+  // launching. The Ledger "Begin Mission" path skips the Party screen (where
+  // _activeRosterIndices is normally populated), so without this the fresh-launch
+  // deploy loop reads an empty selection and the player's chosen party never
+  // deploys — the minSurvivors balancer backfills random generics instead.
+  // Harmless on the resume path (which restores the saved entity list directly).
+  _seedActiveRosterForProgress();
   document.getElementById('ledger-screen')?.classList.remove('is-active'); // hand off to the game
   await _loadCampaignPortraits?.();
   if (resume) _resumeCampaignMission(id);

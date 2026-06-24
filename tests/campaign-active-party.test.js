@@ -6,7 +6,7 @@
 
 import { describe, test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { Campaign } from '../src/campaign/campaign.js';
+import { Campaign, resolveDeployIndices } from '../src/campaign/campaign.js';
 import { getCampaignById } from '../src/campaign/campaign-registry.js';
 
 // ── localStorage mock for Node ───────────────────────────────────────────────
@@ -165,5 +165,84 @@ describe('persisted active-party selection', () => {
     afterReload.roster = _roster(4);
     // Reopening the Party screen restores the CUSTOM squad, not a fresh front-fill.
     assert.deepEqual(afterReload.getActiveParty(MAX), [0, 2, 3]);
+  });
+});
+
+// Regression: the Ledger "Begin Mission" path launches a mission WITHOUT first
+// visiting the Party screen, so the live working selection (_activeRosterIndices)
+// is empty at deploy time. The deploy loop must then fall back to the persisted
+// Campaign.activeParty (the player's chosen NAMED squad) rather than deploying
+// nobody — otherwise the minSurvivors balancer backfills random generics and the
+// player sees "I had 4 units, only 2 showed up". resolveDeployIndices is the pure
+// chokepoint that encodes that fallback; it's what _initCampaignMission now calls.
+describe('fresh-launch deploy index resolution (resolveDeployIndices)', () => {
+  beforeEach(() => localStorage.clear());
+
+  // Ch1M3 (first_night) ships maxSurvivorsFromRoster: 3, minSurvivors: 2.
+  const MAX_FROM_ROSTER = 3;
+
+  test('empty working selection falls back to the persisted 3-named-survivor party (THE BUG)', () => {
+    const c = new Campaign(hollowDef, 1);
+    c.roster = _roster(4);              // S0, S1, S2, S3 available
+    c.setActiveParty([0, 1, 2]);        // player chose a 3-survivor squad and it persisted
+
+    // Fresh launch from the Ledger: the working selection was never seeded.
+    const workingIndices = [];
+
+    const toDeploy = resolveDeployIndices(workingIndices, c, MAX_FROM_ROSTER);
+
+    // Must deploy the 3 PERSISTED roster survivors (their named entries), not [].
+    assert.deepEqual(toDeploy, [0, 1, 2],
+      'empty working selection must fall back to the persisted active party');
+    const names = toDeploy.map(i => c.roster[i].name);
+    assert.deepEqual(names, ['S0', 'S1', 'S2'],
+      'the deployed party must be the player\'s chosen NAMED survivors');
+    assert.ok(toDeploy.length > 2,
+      'must deploy more than the minSurvivors floor (2) — generic backfill would give exactly 2');
+  });
+
+  test('a populated working selection is used as-is (Party-screen path, clamped to cap)', () => {
+    const c = new Campaign(hollowDef, 1);
+    c.roster = _roster(5);
+    c.setActiveParty([0, 1, 2]);        // a different persisted squad
+    // Player customized the squad on the Party screen this session.
+    const working = [1, 3, 4];
+    assert.deepEqual(resolveDeployIndices(working, c, MAX_FROM_ROSTER), [1, 3, 4],
+      'the live working selection wins over the persisted party');
+  });
+
+  test('result is clamped to the mission start cap', () => {
+    const c = new Campaign(hollowDef, 1);
+    c.roster = _roster(5);
+    c.setActiveParty([0, 1, 2, 3, 4]);  // would exceed the cap
+    assert.deepEqual(resolveDeployIndices([], c, 2), [0, 1],
+      'the persisted-party fallback is clamped to maxFromRoster');
+    assert.deepEqual(resolveDeployIndices([0, 1, 2, 3], c, 2), [0, 1],
+      'the working-selection path is clamped to maxFromRoster');
+  });
+
+  test('stale working indices outside the roster are dropped before the cap is applied', () => {
+    const c = new Campaign(hollowDef, 1);
+    c.roster = _roster(3);
+    c.setActiveParty([0, 2]);
+    // Working selection references index 9 (no longer in roster) + valid 0.
+    assert.deepEqual(resolveDeployIndices([9, 0], c, MAX_FROM_ROSTER), [0],
+      'only the still-valid working index survives');
+  });
+
+  test('no persisted party and empty working selection deploys nobody (balancer handles minSurvivors)', () => {
+    const c = new Campaign(hollowDef, 1);
+    c.roster = _roster(3);
+    // activeParty never set — nothing to fall back to.
+    assert.deepEqual(resolveDeployIndices([], c, MAX_FROM_ROSTER), [],
+      'with no chosen party at all, deploy nothing and let minSurvivors backfill');
+  });
+
+  test('a zero start cap deploys nobody regardless of selection', () => {
+    const c = new Campaign(hollowDef, 1);
+    c.roster = _roster(3);
+    c.setActiveParty([0, 1, 2]);
+    assert.deepEqual(resolveDeployIndices([0, 1], c, 0), [],
+      'maxFromRoster 0 → no roster survivors deploy');
   });
 });
