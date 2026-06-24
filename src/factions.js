@@ -11,6 +11,7 @@ import { ICON } from './icons.js';
 import { EntityType, SurvivorAbility, createHero, createWitch, createSurvivor, createZombie, createMinion, createWoodGolem, createIronGolem, createRogue, createCaptain, createNecromancer, createBrute, isLeaderType, getItemCountOf, totalItemCount } from './entities.js';
 import { ResourceType, BuildingType, rollLoot, hasBuilding, isRiver, isBuildingTile, isFortWall, tileCapacityRemaining } from './tiles.js';
 import { hexKey, getNeighbors } from './hex.js';
+import { pickUnitSlot } from './hex-slots.js';
 import { AI_HERO_NAMES, AI_WITCH_NAMES } from './ai-names.js';
 import { Side, getOpposingSide as _opposingSide } from './sides.js';
 import { ITEMS } from './items.js';
@@ -530,6 +531,7 @@ export class HeroFaction extends Faction {
               s.owner = 'hero';
               if (Math.random() < 0.5) s.addItem('horse');
               state.entities.push(s);
+              assignSpawnSlot(state, s);
               const horseNote = s.hasItem('horse') ? ' (arrives on horseback!)' : '';
               state.addLog(`${ICON.sparkle} The node calls to the living — a survivor emerges!${horseNote}`, 'hero', state.playerColorFor(hero));
               state.nodeSpawnedSurvivors.push({
@@ -692,6 +694,7 @@ export class WitchFaction extends Faction {
       });
       const zombie = createZombie(spawn.col, spawn.row, leader.ownerId, state);
       state.entities.push(zombie);
+      assignSpawnSlot(state, zombie);
       state.addLog('\uE034 The graveyard stirs — a zombie claws free of the earth!', 'witch');
     }
   }
@@ -1075,6 +1078,23 @@ export function isPlaceableTile(state, col, row, owner = null) {
   ).length;
   if (tileCapacityRemaining(t, units) <= 0) return false; // no free slot
   return true;
+}
+
+// Assign a freshly-spawned entity a sub-hex slot on its current tile — the same
+// "lowest free, non-blocked slot (centre preferred)" rule the move/summon paths
+// use (actions.js `assignSlotOnTile`) and the discovered-survivor path uses
+// (survivor-discovery.js). Mirrored here with `pickUnitSlot` directly rather
+// than importing `assignSlotOnTile`, because actions.js imports factions.js and
+// the reverse would be a circular import (same constraint survivor-discovery.js
+// notes). Call AFTER pushing the entity to `state.entities`. Pure (reads only
+// state) so it stays inside the sealed resolution. Without this, endRound()
+// spawns defaulted to slot 0 (hex centre) instead of picking around occupants.
+function assignSpawnSlot(state, entity) {
+  const t = state.tiles.get(hexKey(entity.col, entity.row));
+  const occupied = state.entities
+    .filter(e => e.alive && e.id !== entity.id && e.col === entity.col && e.row === entity.row)
+    .map(e => e.slot ?? 0);
+  entity.slot = pickUnitSlot(t?.blockedSlots ?? [], occupied);
 }
 
 /** Return all registered factions. */
