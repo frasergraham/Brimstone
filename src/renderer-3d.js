@@ -13284,6 +13284,7 @@ export class Renderer3D {
         hp:    live?.hp ?? 0,
         maxHp: live?.maxHp ?? 1,
         ownerColor: unitIconOwnerColor(live ?? entity, this.state?.entities ?? null),
+        level: (live ?? entity)?.level ?? 1,
       });
     };
     const repaintIcon = (value, color) => {
@@ -14092,12 +14093,14 @@ export class Renderer3D {
       // identical). Mid-game leader joins/deaths flip the predicate and the
       // signature change forces a repaint.
       const ownerColor = unitIconOwnerColor(e, this.state.entities);
+      const level = e.level ?? 1;
       if (entry.lastHp === e.hp
           && entry.lastMax === e.maxHp
           && entry.lastAssetId === assetId
           && entry.lastHadPortrait === portraitSource.hasPortrait
           && entry.lastInfoSig === infoSig
-          && entry.lastOwnerColor === ownerColor) {
+          && entry.lastOwnerColor === ownerColor
+          && entry.lastLevel === level) {
         continue;
       }
       this._repaintUnitIconBadge(entry, e, portraitSource, info, ownerColor);
@@ -14107,6 +14110,7 @@ export class Renderer3D {
       entry.lastHadPortrait  = portraitSource.hasPortrait;
       entry.lastInfoSig      = infoSig;
       entry.lastOwnerColor   = ownerColor;
+      entry.lastLevel        = level;
     }
     // Dispose badges for entities that no longer exist or just died.
     // G1 v2: skip entities mid-combat-readout — the readout drives the icon
@@ -14190,6 +14194,9 @@ export class Renderer3D {
       // assetId) tuple is unchanged so the diff would otherwise skip the
       // repaint and the badge would stay gray forever.
       lastHadPortrait: false,
+      // Last veterancy level painted. -1 forces the first paint and any
+      // level-up repaints the pill (the signature diff above gates on it).
+      lastLevel: -1,
       leader: standee.leader,
     };
     this._unitIconBadges.set(entity.id, entry);
@@ -14207,6 +14214,7 @@ export class Renderer3D {
       maxHp: entity.maxHp,
       info,
       ownerColor,
+      level: entity.level ?? 1,
     });
     entry.tex.update();
   }
@@ -20847,6 +20855,10 @@ export function paintUnitIconBadge(ctx, opts) {
     //   attackCount — planned attacks targeting this unit; draws the ⚔/×N
     //     marker in the right margin.
     info = null,
+    // Veterancy level. When > 1, a small rounded pill carrying the number is
+    // painted at the bottom of the portrait disc — the over-unit visual that
+    // replaced the old "Name L2" string suffix. Level 1 (or null) draws nothing.
+    level = 1,
   } = opts;
   const W = width;
   const H = size;
@@ -20923,6 +20935,15 @@ export function paintUnitIconBadge(ctx, opts) {
   }
   ctx.restore();
 
+  // ── Veterancy level pill ───────────────────────────────────────────────
+  // Replaces the old "Name L2" string suffix. A small rounded badge with the
+  // level number, anchored at the bottom of the portrait disc so it reads as
+  // the unit's over-head rank marker. Only drawn for level > 1 (level 1 is the
+  // default, intentionally bare).
+  if ((level ?? 1) > 1) {
+    paintLevelPill(ctx, cx, cy + innerR * 0.62, innerR, level);
+  }
+
   // ── Unit info card margins ─────────────────────────────────────────────
   if (!info || W <= H) return;
   const marginW = cx - outerR;  // pixels available either side of the disc
@@ -20985,6 +21006,54 @@ export function paintUnitIconBadge(ctx, opts) {
     const r = Math.min(marginW / 2 - 4, size * 0.2);
     paintAttackCountMarker(ctx, cx + outerR + marginW / 2, cy, r, info.attackCount);
   }
+}
+
+/** Gold-on-dark colours for the veterancy level pill — matches the XP/gold
+ *  accent used elsewhere for veterancy so it reads as "rank" not "damage". */
+export const LEVEL_PILL_BG    = 'rgba(28,22,12,0.92)';
+export const LEVEL_PILL_BORDER = '#d8b14a';
+export const LEVEL_PILL_TEXT   = '#f2d98a';
+
+/**
+ * Paint the veterancy level pill: a small gold-bordered rounded badge carrying
+ * the level number, centred at (cx, cy) and sized relative to `discR` (the
+ * portrait disc inner radius). Pure canvas — drawn with explicit arc/line paths
+ * (no `roundRect`) so it works under the test recording-context mock, and with
+ * `BrimstoneIcons` in the font stack per the canvas icon-font convention.
+ * Caller gates on level > 1; this draws unconditionally.
+ */
+export function paintLevelPill(ctx, cx, cy, discR, level) {
+  const label = String(level);
+  const h = Math.max(10, Math.round(discR * 0.52));   // pill height
+  const r = h / 2;                                     // fully-rounded ends
+  const fontPx = Math.round(h * 0.66);
+  ctx.font = `900 ${fontPx}px BrimstoneIcons, sans-serif`;
+  const textW = ctx.measureText ? ctx.measureText(label).width : label.length * fontPx * 0.6;
+  const padX = Math.round(h * 0.34);
+  const w = Math.max(h, textW + padX * 2);             // never narrower than tall
+  const x = cx - w / 2;
+  const y = cy - h / 2;
+
+  // Rounded-rect path (two arc caps + connecting top/bottom edges).
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.arc(x + w - r, y + r, r, -Math.PI / 2, Math.PI / 2);
+  ctx.lineTo(x + r, y + h);
+  ctx.arc(x + r, y + r, r, Math.PI / 2, -Math.PI / 2);
+  ctx.closePath();
+
+  ctx.fillStyle = LEVEL_PILL_BG;
+  ctx.fill();
+  ctx.lineWidth = Math.max(1.5, Math.round(h * 0.12));
+  ctx.strokeStyle = LEVEL_PILL_BORDER;
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = LEVEL_PILL_TEXT;
+  // Nudge baseline down a hair — middle baseline sits slightly high for digits.
+  ctx.fillText(label, cx, cy + h * 0.04);
 }
 
 /** Odds text colours on the unit info card — red hit %, deep-red crush %. */

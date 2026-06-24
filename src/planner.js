@@ -99,6 +99,10 @@ export function snapEntity(entity) {
     name:        entity.displayName,
     title:       entity.title,
     displayName: entity.displayName,
+    // Veterancy level — rendered as a pill badge beside the name in the battle
+    // dialog combatant card (replaces the old "Name L2" string suffix). Plain
+    // JSON, rides in the event stream / _roundHistory; no state-sync change.
+    level:       entity.level ?? 1,
   };
 }
 

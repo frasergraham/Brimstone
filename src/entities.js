@@ -245,9 +245,20 @@ export class Entity {
 
   get alive() { return this.hp > 0; }
 
+  // The unit's plain display name — NO level suffix. The veterancy level is a
+  // separate, structured signal (`this.level`) that player-visual call sites
+  // render as a distinct pill badge beside the name (3D over-unit icon badge,
+  // Unit Stats Bar, action-popup portrait). It used to be concatenated here
+  // (`Aldous L2`), but that baked presentation into a value also consumed by
+  // canvas labels, plain-text combat logs and TTS — so the suffix is gone and
+  // the badge is drawn at each render site. `baseName` is an explicit alias for
+  // call sites that want to make the "no suffix" intent obvious.
   get displayName() {
-    const base = this.name ?? defaultDisplayName(this.type);
-    return (this.level ?? 1) > 1 ? `${base} L${this.level}` : base;
+    return this.name ?? defaultDisplayName(this.type);
+  }
+
+  get baseName() {
+    return this.name ?? defaultDisplayName(this.type);
   }
 
   // ── Stat accessors (Phase 2 of the units/items/abilities refactor) ──

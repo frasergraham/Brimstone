@@ -91,10 +91,17 @@ describe('applyLevel + entity composition', () => {
     assert.equal(z.maxHp, 14, 'back to L1 base');
   });
 
-  test('displayName gains an L-suffix only above level 1', () => {
+  test('displayName carries NO level suffix at any level (pill replaces it)', () => {
     const z = createZombie(0, 0);
     assert.equal(z.displayName, 'Zombie');
     applyLevel(z, 2);
-    assert.equal(z.displayName, 'Zombie L2');
+    // The old "Zombie L2" suffix is gone — the level is now a separate signal
+    // (z.level) rendered as a pill badge by the visual call sites.
+    assert.equal(z.displayName, 'Zombie', 'no L-suffix baked into the name');
+    assert.equal(z.baseName, 'Zombie', 'baseName is the plain name alias');
+    assert.equal(z.level, 2, 'level is exposed as a structured field');
+    applyLevel(z, 3);
+    assert.equal(z.displayName, 'Zombie', 'still no suffix at L3');
+    assert.equal(z.level, 3);
   });
 });
