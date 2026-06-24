@@ -17,6 +17,7 @@ import {
   weaponStandInTransform,
   weaponModelForId,
   weaponGripLocalTransform,
+  weaponModelLongSpan,
   WEAPON_ID_TO_MODEL,
   WEAPON_MODEL_FILES,
   WEAPON_GRIP_TRANSFORMS,
@@ -195,6 +196,63 @@ describe('weaponGripLocalTransform', () => {
     // span ≤ 0 / rigScale ≤ 0 fall back to 1 (no divide-by-zero / NaN).
     const g = weaponGripLocalTransform('sword', 0, 0);
     assert.ok(Number.isFinite(g.scale) && g.scale > 0);
+  });
+});
+
+describe('weaponModelLongSpan — scale-independent local-bbox measurement', () => {
+  // A stub mesh whose bounding box exposes both local (minimum/maximum) and
+  // world (minimumWorld/maximumWorld) corners — mirrors Babylon's BoundingBox.
+  const meshWithBox = (localExtent, worldScale = 1) => {
+    const half = localExtent / 2;
+    const wHalf = half * worldScale;
+    return {
+      getBoundingInfo: () => ({
+        boundingBox: {
+          minimum:      { x: -half,  y: -half * 0.1, z: -half * 0.05 },
+          maximum:      { x:  half,  y:  half * 0.1, z:  half * 0.05 },
+          minimumWorld: { x: -wHalf, y: -wHalf * 0.1, z: -wHalf * 0.05 },
+          maximumWorld: { x:  wHalf, y:  wHalf * 0.1, z:  wHalf * 0.05 },
+        },
+      }),
+    };
+  };
+
+  test('measures the LOCAL long axis (largest dimension)', () => {
+    assert.ok(Math.abs(weaponModelLongSpan(meshWithBox(0.6)) - 0.6) < 1e-9);
+  });
+
+  test('a single-primitive mesh with an un-baked node scale 100 (world bbox ≈100× '
+     + 'local) measures the SAME local span as a merged mesh with identical geometry', () => {
+    // This is the rifle case: Rifle.glb skips MergeMeshes, so its WORLD bbox is
+    // ~100× its true geometry. Measuring local makes it agree with the merged
+    // weapons (whose world matrix is baked to identity), so no magic worldLength.
+    const merged   = weaponModelLongSpan(meshWithBox(0.029, 1));     // world == local
+    const unbaked  = weaponModelLongSpan(meshWithBox(0.029, 100));   // world == 100× local
+    assert.ok(Math.abs(merged - unbaked) < 1e-9,
+      'local span is scale-independent — node scale does not leak in');
+    assert.ok(Math.abs(unbaked - 0.029) < 1e-9,
+      'reads the true ≈0.029 geometry extent, not the ≈2.9 world extent');
+  });
+
+  test('falls back to 1 on missing / stubbed bounding info', () => {
+    assert.equal(weaponModelLongSpan(null), 1);
+    assert.equal(weaponModelLongSpan({}), 1);
+    assert.equal(weaponModelLongSpan({ getBoundingInfo: () => ({}) }), 1);
+    assert.equal(weaponModelLongSpan({ getBoundingInfo: () => { throw new Error('boom'); } }), 1);
+  });
+});
+
+describe('WEAPON_GRIP_TRANSFORMS — worldLength sanity', () => {
+  test('every weapon (incl. the rifle) has a sane ~world-unit worldLength', () => {
+    // Regression guard for the rifle fix: it used to be 70 (a magic ~100× to
+    // cancel the world-bbox measurement quirk). With local-bbox measurement
+    // every weapon shares the same world-unit scale band.
+    for (const [model, cfg] of Object.entries(WEAPON_GRIP_TRANSFORMS)) {
+      assert.ok(cfg.worldLength > 0.1 && cfg.worldLength < 1.5,
+        `${model} worldLength ${cfg.worldLength} should be a sane ~world-unit size`);
+    }
+    assert.ok(WEAPON_GRIP_TRANSFORMS.rifle.worldLength < 1.5,
+      'rifle no longer needs the magic ~100× worldLength');
   });
 });
 

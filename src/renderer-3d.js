@@ -727,15 +727,32 @@ export function unitUsesPaladinModel(_entity) {
 // owner. Loaded once and cloned for any unit that has no `<type>-idle.glb`.
 export const MANNEQUIN_RIG_FILE = 'mannequin-idle.glb';
 
+/** Entity types that actually ship a `<type>-idle.glb` rig in `assets/models/`.
+ *  Only these are PROBED for their own rig; every other type goes straight to
+ *  the shared mannequin (no doomed 404 request, no network-log noise — see
+ *  `entityTypeRigFile` / `fallbackRigCandidates`). Keep in sync with the rig
+ *  GLBs on disk: today that's `paladin-idle.glb` and `zombie-idle.glb` (the
+ *  universal `mannequin-idle.glb` is the fallback, not a per-type rig). Add a
+ *  type here the moment its `<type>-idle.glb` is committed and the cascade will
+ *  pick it up — no other code change needed. Pure data; exported for tests. */
+export const RIGGED_ENTITY_TYPES = Object.freeze(new Set([
+  EntityType.PALADIN,  // 'paladin' — paladin-idle.glb (hero leader)
+  EntityType.ZOMBIE,   // 'zombie'  — zombie-idle.glb
+]));
+
 /** Convention model filename for an entity's own rig — `<type>-idle.glb`
- *  (e.g. 'zombie-idle.glb'). Returns null when the entity has no usable type.
- *  The slug mirrors EntityType values, which are already lowercase
- *  underscore-safe ('zombie', 'wood_golem', …). Pure; exported for tests. */
+ *  (e.g. 'zombie-idle.glb') — but ONLY for types in `RIGGED_ENTITY_TYPES` that
+ *  actually ship a rig on disk. Returns null for a missing/unusable type AND for
+ *  any type without a committed `<type>-idle.glb`, so callers never probe a file
+ *  that's guaranteed to 404. The slug mirrors EntityType values, which are
+ *  already lowercase underscore-safe ('zombie', 'wood_golem', …). Pure;
+ *  exported for tests. */
 export function entityTypeRigFile(entity) {
   if (!entity || typeof entity.type !== 'string') return null;
   const slug = entity.type.toLowerCase().replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
-  return slug ? `${slug}-idle.glb` : null;
+  if (!slug || !RIGGED_ENTITY_TYPES.has(slug)) return null;
+  return `${slug}-idle.glb`;
 }
 
 /** Entity types whose rig is loaded JUST-IN-TIME (during the round replay that
@@ -746,10 +763,11 @@ export function entityTypeRigFile(entity) {
  *  up-front preload (`_preloadCharacterRigs`). */
 export const LAZY_RIG_TYPES = Object.freeze(new Set([EntityType.SURVIVOR]));
 
-/** Ordered rig-file cascade for a non-paladin unit: its own `<type>-idle.glb`
- *  first, then the shared mannequin. The caller tries each in turn and uses the
- *  first that loads. Paladin-typed units never reach here — they keep the
- *  dedicated _paladinSource path. Pure; exported for tests. */
+/** Ordered rig-file cascade for a unit: its own `<type>-idle.glb` first (ONLY
+ *  for a type in `RIGGED_ENTITY_TYPES` — `entityTypeRigFile` returns null
+ *  otherwise, so a type with no committed rig is never probed and never 404s),
+ *  then the shared mannequin. The caller tries each in turn and uses the first
+ *  that loads. Pure; exported for tests. */
 export function fallbackRigCandidates(entity) {
   const out = [];
   const typeFile = entityTypeRigFile(entity);
@@ -908,9 +926,11 @@ export function weaponModelForId(weaponId) {
  *  + axis rotation applied) and where its handle/grip end lands:
  *   - `worldLength` — target on-screen size of the weapon's LONG axis, in
  *     world units (same units as TARGET_PALADIN_WORLD_HEIGHT ≈ 0.69). The
- *     loader measures the template's long-axis span and derives a uniform
- *     scale to hit this; the per-standee paladin scale is divided back out at
- *     attach time (see weaponGripLocalTransform).
+ *     loader measures the template's long-axis span from its LOCAL geometry
+ *     bbox (`weaponModelLongSpan`) and derives a uniform scale to hit this; the
+ *     per-standee paladin scale is divided back out at attach time (see
+ *     weaponGripLocalTransform). All four weapons use the same world-unit scale
+ *     (~0.3–0.7); the rifle is no longer special.
  *   - `rotation` {x,y,z} — Euler radians applied to the clone so the long axis
  *     points up-and-forward out of the fist (matching the old cylinder pose).
  *   - `offset` {x,y,z} — local translation (in the SAME post-rotation frame)
@@ -936,17 +956,17 @@ export const WEAPON_GRIP_TRANSFORMS = Object.freeze({
   // reads clearly from above. The grip end still sits at the fist (offset slides
   // the handle onto the bone).
   //
-  // worldLength is 70, not ~0.7 like the other weapons, because Rifle.glb ships
-  // with a baked node scale of 100 that the others lack: `_loadWeaponModel`
-  // measures `longSpan` from the WORLD-scaled bbox (≈2.9 instead of the true
-  // ≈0.029 vertex extent), so the derived clone scale comes out 100× too small
-  // and the rifle renders microscopically. worldLength × ~100 cancels that and
-  // lands the rifle at the intended ~0.7-world-unit on-screen length. (A cleaner
-  // systemic fix — measuring the LOCAL bbox / baking the node scale in
-  // `_loadWeaponModel` — is out of scope here; worldLength is the per-model knob
-  // meant to absorb exactly this measurement quirk.) Tuned vs gameplay-camera
-  // screenshots.
-  rifle:  { worldLength: 70, rotation: { x: -Math.PI * 0.06, y: Math.PI * 0.7, z: -Math.PI * 0.15 }, offset: { x: -0.02, y: 0.05, z: 0.04 } },
+  // worldLength is ~0.7 (a touch longer than the sword — it's a long gun), the
+  // same world-unit scale as the other weapons. It used to be 70 (a magic ~100×)
+  // to cancel a measurement quirk: Rifle.glb is a SINGLE-primitive GLB, so it
+  // skips the MergeMeshes transform-bake the multi-primitive weapons get, and
+  // its glTF node scale of 100 stayed on the transform (un-baked into the
+  // geometry). The old loader measured `longSpan` from the WORLD bbox (≈2.9 vs
+  // the true ≈0.029 local vertex extent), so the derived clone scale came out
+  // 100× too small. `_loadWeaponModel` now measures the LOCAL bbox
+  // (`weaponModelLongSpan`) for every weapon, so the node scale is irrelevant
+  // and a normal worldLength works. Tuned vs gameplay-camera screenshots.
+  rifle:  { worldLength: 0.70, rotation: { x: -Math.PI * 0.06, y: Math.PI * 0.7, z: -Math.PI * 0.15 }, offset: { x: -0.02, y: 0.05, z: 0.04 } },
 });
 
 /** Compute the rig-LOCAL grip transform for a weapon model clone, given the
@@ -970,6 +990,38 @@ export function weaponGripLocalTransform(model, modelLongSpan, rigScale) {
     rotation: { ...cfg.rotation },
     offset:   { ...cfg.offset },
   };
+}
+
+/** Measure a weapon template's natural long-axis span (the largest of its three
+ *  bbox dimensions) from the mesh's LOCAL bounding box — the raw geometry extent,
+ *  ignoring any node transform sitting on the mesh.
+ *
+ *  Why local and not world: `_buildWeaponGlbClone` OVERWRITES the clone's
+ *  `scaling` with the grip scale, so the template's node transform is discarded
+ *  on every held weapon — only the vertex extent feeds the on-screen size. The
+ *  four weapon GLBs measure inconsistently in WORLD space: the multi-primitive
+ *  ones (sword/axe/dagger) are collapsed by MergeMeshes, which bakes each node's
+ *  world transform into the vertices and leaves an identity world matrix (local
+ *  == world). Rifle.glb is a SINGLE primitive, so it skips that merge-bake and
+ *  keeps its glTF node scale of 100 on the transform: its world bbox reads ≈2.9
+ *  while its true geometry is ≈0.029 — a 100× discrepancy that previously had to
+ *  be cancelled by a magic `worldLength`. Reading the local bbox measures all
+ *  four the same way (raw geometry), so one sane `worldLength` per weapon works.
+ *  Falls back to 1 on a missing/stubbed bounding box. Pure; exported for tests. */
+export function weaponModelLongSpan(source) {
+  if (!source || typeof source.getBoundingInfo !== 'function') return 1;
+  try {
+    const info = source.getBoundingInfo();
+    const bb   = info?.boundingBox;
+    if (!bb) return 1;
+    const min = bb.minimum ?? bb.minimumWorld ?? {};
+    const max = bb.maximum ?? bb.maximumWorld ?? {};
+    const dx = Math.abs((max.x ?? 0) - (min.x ?? 0));
+    const dy = Math.abs((max.y ?? 0) - (min.y ?? 0));
+    const dz = Math.abs((max.z ?? 0) - (min.z ?? 0));
+    const span = Math.max(dx, dy, dz);
+    return span > 0 ? span : 1;
+  } catch { return 1; }
 }
 
 /** Classify a Mixamo leg bone by name → 'thigh' | 'shin' | 'foot' | null.
@@ -3477,21 +3529,14 @@ export class Renderer3D {
       if (!source) return null;
 
       // Measure the natural long-axis span (largest bbox dimension) so the grip
-      // transform can scale every weapon to a constant on-screen size.
-      let longSpan = 1;
-      try {
-        const info = typeof source.getBoundingInfo === 'function' ? source.getBoundingInfo() : null;
-        const bb   = info?.boundingBox;
-        if (bb) {
-          const min = bb.minimumWorld ?? bb.minimum ?? {};
-          const max = bb.maximumWorld ?? bb.maximum ?? {};
-          const dx = Math.abs((max.x ?? 0) - (min.x ?? 0));
-          const dy = Math.abs((max.y ?? 0) - (min.y ?? 0));
-          const dz = Math.abs((max.z ?? 0) - (min.z ?? 0));
-          const span = Math.max(dx, dy, dz);
-          if (span > 0) longSpan = span;
-        }
-      } catch { /* keep longSpan = 1 */ }
+      // transform can scale every weapon to a constant on-screen size. Measured
+      // from the LOCAL (geometry-space) bbox, not the world bbox — see
+      // `weaponModelLongSpan` for why: a clone OVERWRITES `scaling` with the grip
+      // scale, so only the raw vertex extent matters, and world-space readings
+      // are inconsistent across the four GLBs (single-primitive Rifle.glb skips
+      // the MergeMeshes transform-bake and so carries an un-baked node scale 100,
+      // reading ~100× the others in world space).
+      const longSpan = weaponModelLongSpan(source);
 
       // Hide the template — clones render geometry on its behalf.
       if (typeof source.setEnabled === 'function') source.setEnabled(false);
