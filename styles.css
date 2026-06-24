@@ -6631,9 +6631,8 @@ body.spectator-mode #game-screen   { display: flex !important; }
 }
 
 /* Mobile (matches the plan-panel's collapsible breakpoint, 760px): float the
-   action/resolution dialogs at the TOP so they never cover the bottom-right
-   Submit button or the bottom-centre replay controls. Intro dialogs stay
-   centered. */
+   action/resolution dialogs just BELOW the top game header (so they cover neither
+   the header/menu bar nor the bottom-centre replay controls / Submit button). */
 @media (max-width: 760px) {
   .tutorial-tooltip {
     max-width: calc(100vw - 1.6rem);
@@ -6644,7 +6643,7 @@ body.spectator-mode #game-screen   { display: flex !important; }
     left: 0.8rem;
     right: 0.8rem;
     bottom: auto;
-    top: 0.8rem;
+    top: calc(env(safe-area-inset-top, 0px) + 4.6rem);   /* clear of #game-header */
     transform: none;
   }
 }
