@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { compileTurnBattleSummary, compileTurnBattlePairs, collectTurnFinds } from '../src/battle-utils.js';
 import { ResEventType } from '../server/resolver.js';
 import { PlanActionType } from '../src/planner.js';
+import { ICON } from '../src/icons.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -103,7 +104,8 @@ describe('compileTurnBattleSummary', () => {
       PlanActionType,
     );
     assert.equal(lines.length, 1);
-    assert.match(lines[0], /\u{1F480}/u); // skull emoji
+    assert.ok(lines[0].includes(ICON.defeat), 'kill marked with the icon-font skull (ICON.defeat)');
+    assert.ok(!lines[0].includes('\u{1F480}'), 'no 💀 color emoji in the summary line');
     assert.match(lines[0], /Witch/);
   });
 

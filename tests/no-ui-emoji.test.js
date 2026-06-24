@@ -39,6 +39,29 @@ function stripComments(src, isJs) {
   return s;
 }
 
+// A color emoji written as a JS escape — `\u{1F4A2}` or a `💢` surrogate
+// pair — has no actual emoji codepoint in the file bytes, so the raw-character scan
+// below sails right past it (this is exactly how `\u{1F4A2}` slipped into
+// wrapup-summary.js). Decode supplementary-plane escapes (cp >= 0x1F000, the
+// pictograph/emoji planes — and the *only* form for which a `\u` escape can never
+// be a legitimate BMP glyph) back into their literal codepoint so the scanner sees
+// them. We deliberately do NOT decode BMP escapes (⛌, ✓, ▶ …): those have
+// non-emoji uses and stay readable as escapes; only the unambiguous astral emoji
+// are un-hidden here. Keeps line numbers intact (no newlines introduced).
+function decodeAstralEmojiEscapes(src) {
+  // \u{1Fxxxx} braced form.
+  let s = src.replace(/\\u\{([0-9A-Fa-f]{4,6})\}/g, (m, hex) => {
+    const cp = parseInt(hex, 16);
+    return cp >= 0x1F000 ? String.fromCodePoint(cp) : m;
+  });
+  // \uD8xx\uDCxx surrogate-pair form → astral codepoint.
+  s = s.replace(/\\u(D[89AB][0-9A-Fa-f]{2})\\u(D[C-Fc-f][0-9A-Fa-f]{2})/g, (m, hi, lo) => {
+    const cp = (parseInt(hi, 16) - 0xD800) * 0x400 + (parseInt(lo, 16) - 0xDC00) + 0x10000;
+    return cp >= 0x1F000 ? String.fromCodePoint(cp) : m;
+  });
+  return s;
+}
+
 // Internal authoring tools (the mission editor / admin) are not player-facing UI
 // and may use emoji freely — same carve-out as admin.html / admin-tools.html.
 const SKIP_DIRS = new Set(['tools']);
@@ -68,7 +91,7 @@ test('no color emoji in player-facing UI source (use the BrimstoneIcons font)', 
     const rel = relative(ROOT, file);
     if (ALLOW.has(rel)) continue;
     const isJs = file.endsWith('.js');
-    const lines = stripComments(readFileSync(file, 'utf8'), isJs).split('\n');
+    const lines = decodeAstralEmojiEscapes(stripComments(readFileSync(file, 'utf8'), isJs)).split('\n');
     lines.forEach((ln, i) => {
       for (const ch of ln) {
         const cp = ch.codePointAt(0);

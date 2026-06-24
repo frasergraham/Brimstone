@@ -183,7 +183,8 @@ describe('wrapup-summary — splash row', () => {
     }];
     const html = buildWrapupCombatsHtml(combats, glyphIcon);
     assert.ok(html.includes('wrapup-splash'), 'splash sub-row rendered');
-    assert.ok(html.includes('💢'), 'splash glyph present');
+    assert.ok(html.includes(ICON.splash), 'splash glyph present (icon font, not color emoji)');
+    assert.ok(!html.includes('\u{1F4A2}'), 'no 💢 color emoji in the splash label');
     assert.ok(html.includes(ICON.defeat), 'splash kill skull shown');
   });
 
