@@ -11,6 +11,7 @@
 import { mmSortRows, mmFormatRow, mmIsCampaignRow } from '../main-menu-games.js';
 import { ICON } from '../icons.js';
 import { mountServerSelector } from '../server-selector.js';
+import { MAP_SIZES } from '../map.js';
 import { loadThumb, missionThumb, campaignMissionRowId } from './thumbnails.js';
 import { isModeAvailable, isFactionAvailable, COMING_SOON_LABEL } from '../demo-config.js';
 
@@ -594,10 +595,22 @@ function _panelSkirmish(body) {
   body.appendChild(_cap('The night ahead'));
   const opts = document.createElement('div');
   opts.className = 'lg-opts';
-  opts.appendChild(_optSelect('mapSize', 'Map size', MAP_SIZE_OPTS, (v) => v));
-  opts.appendChild(_optSelect('nodeCount', 'Power nodes', [
-    { value: '2', label: '2', sub: 'sparse' }, { value: '3', label: '3', sub: 'default' }, { value: '4', label: '4', sub: 'crowded' },
-  ], (v) => parseInt(v, 10)));
+
+  // Map size and Power nodes are linked: the node-count range follows the
+  // selected size (larger maps allow up to 7; small maps stay narrow). Changing
+  // the size re-clamps the chosen count into the new size's [min,max] band.
+  const nodeDd = _dropdown(_nodeCountOpts(_skOpts.mapSize), String(_skOpts.nodeCount), (v) => {
+    _skOpts.nodeCount = parseInt(v, 10);
+  });
+  const mapDd = _dropdown(MAP_SIZE_OPTS, _skOpts.mapSize, (v) => {
+    _skOpts.mapSize = v;
+    _skOpts.nodeCount = _clampNodeCount(v, _skOpts.nodeCount);
+    nodeDd.setOptions(_nodeCountOpts(v), _skOpts.nodeCount);
+  });
+  // Initial clamp in case a stale _skOpts.nodeCount sits outside the size range.
+  _skOpts.nodeCount = parseInt(nodeDd.value, 10);
+  opts.appendChild(_optWrap('Map size', mapDd));
+  opts.appendChild(_optWrap('Power nodes', nodeDd));
   opts.appendChild(_optSelect('aiDifficulty', 'AI cunning', [
     { value: 'easy', label: 'Easy', sub: 'forgiving' }, { value: 'normal', label: 'Normal', sub: 'balanced' }, { value: 'hard', label: 'Hard', sub: 'ruthless' },
   ], (v) => v));
@@ -743,7 +756,12 @@ function _othersFind(body) {
   opts.className = 'lg-opts';
   const modeDd = _dropdown(CADENCE_OPTS, _createAsync ? 'async' : 'live', (v) => { _createAsync = v === 'async'; select('others'); });
   const ppsDd  = _dropdown([{ value: '1', label: '1v1' }, { value: '2', label: '2v2' }, { value: '3', label: '3v3' }, { value: '4', label: '4v4' }], '1');
-  const mapDd  = _dropdown(MAP_SIZE_OPTS, 'standard');
+  // Map size and Power nodes are linked, same as Skirmish — the node-count range
+  // follows the map size; changing the size re-clamps the choice into its band.
+  const nodeDd = _dropdown(_nodeCountOpts('standard'), String(MAP_SIZES.standard.nodeCount ?? 3));
+  const mapDd  = _dropdown(MAP_SIZE_OPTS, 'standard', (v) => {
+    nodeDd.setOptions(_nodeCountOpts(v), _clampNodeCount(v, parseInt(nodeDd.value, 10)));
+  });
   const privDd = _dropdown([{ value: 'false', label: 'Public', sub: 'Listed; anyone can join' }, { value: 'true', label: 'Private', sub: 'Join by code only' }], 'false');
   const resDd  = _dropdown(STARTING_RES_OPTS, 'none');
   const timeDd = _createAsync
@@ -752,12 +770,14 @@ function _othersFind(body) {
   opts.appendChild(_optWrap('Cadence', modeDd));
   opts.appendChild(_optWrap('Players', ppsDd));
   opts.appendChild(_optWrap('Map', mapDd));
+  opts.appendChild(_optWrap('Power nodes', nodeDd));
   opts.appendChild(_optWrap('Resources', resDd));
   opts.appendChild(_optWrap(_createAsync ? 'Per turn' : 'Turn timer', timeDd));
   opts.appendChild(_optWrap('Visibility', privDd));
   body.appendChild(opts);
   const createBtn = _button('＋ Create Game', 'gold', () => _data.lobby?.create?.({
     playersPerSide: parseInt(ppsDd.value, 10), mapSize: mapDd.value,
+    nodeCount: _clampNodeCount(mapDd.value, parseInt(nodeDd.value, 10)),
     isPrivate: privDd.value === 'true', isAsync: _createAsync,
     turnIntervalMs: parseInt(timeDd.value, 10), startingResources: resDd.value,
   }));
@@ -976,6 +996,35 @@ const MAP_SIZE_OPTS = [
   { value: 'campaign', label: 'Campaign', sub: '23×23 · long game' },
   { value: 'battle',   label: 'Battle',   sub: '42×42 · epic war' },
 ];
+
+// Power-node count options for a map size — the selectable range is driven by
+// the size's nodeCountMin/nodeCountMax (larger maps reach up to 7; small maps
+// stay narrow). Values are strings to match the dropdown contract; the default
+// for the size is tagged so the picker shows a sensible starting choice.
+export function _nodeCountOpts(mapSize) {
+  const cfg = MAP_SIZES[mapSize] ?? MAP_SIZES.standard;
+  const min = cfg.nodeCountMin ?? 1;
+  const max = cfg.nodeCountMax ?? cfg.nodeCount ?? 3;
+  const def = cfg.nodeCount ?? min;
+  const opts = [];
+  for (let i = min; i <= max; i++) {
+    let sub;
+    if (i === def) sub = 'default';
+    else if (i === min) sub = 'sparse';
+    else if (i === max) sub = 'crowded';
+    opts.push({ value: String(i), label: String(i), sub });
+  }
+  return opts;
+}
+
+// Clamp a node count into a map size's allowed [min,max] range.
+export function _clampNodeCount(mapSize, n) {
+  const cfg = MAP_SIZES[mapSize] ?? MAP_SIZES.standard;
+  const min = cfg.nodeCountMin ?? 1;
+  const max = cfg.nodeCountMax ?? cfg.nodeCount ?? 3;
+  const v = Number.isFinite(n) ? n : (cfg.nodeCount ?? min);
+  return Math.max(min, Math.min(max, v));
+}
 // "Starting Resources" — a faction-tuned cache each side begins with. 'None'
 // keeps the faction defaults (the long-standing baseline); higher levels add
 // summon stock for the witch and sustain/economy for the hero.
@@ -1001,42 +1050,67 @@ function _bindDropdownClose() {
 
 /** Custom dropdown matching the ledger aesthetic, with per-option subtext.
  *  options: [{ value, label, sub? }]. Returns an element exposing a live `.value`. */
-function _dropdown(options, value, onChange) {
+export function _dropdown(options, value, onChange) {
   _bindDropdownClose();
   let cur = value ?? options[0]?.value;
+  let curOptions = options;
   const root = document.createElement('div');
   root.className = 'lg-dd';
   Object.defineProperty(root, 'value', { get: () => cur, configurable: true });
-  const labelFor = (v) => options.find((o) => o.value === v)?.label ?? v;
+  const labelFor = (v) => curOptions.find((o) => o.value === v)?.label ?? v;
   const capBtn = document.createElement('button');
   capBtn.type = 'button';
   capBtn.className = 'lg-dd-cap';
   const renderCap = () => { capBtn.innerHTML = `<span class="lg-dd-cur">${esc(labelFor(cur))}</span><span class="lg-dd-arrow">▾</span>`; };
-  renderCap();
   const menu = document.createElement('div');
   menu.className = 'lg-dd-menu';
-  for (const o of options) {
-    const item = document.createElement('button');
-    item.type = 'button';
-    item.className = 'lg-dd-item' + (o.value === cur ? ' is-sel' : '') + (o.disabled ? ' is-soon' : '');
-    item.innerHTML = `<span class="lg-dd-item-label">${esc(o.label)}</span>` +
-      (o.sub ? `<span class="lg-dd-item-sub">${esc(o.sub)}</span>` : '');
-    if (o.disabled) {
-      // Visible but unpickable (e.g. a demo-blocked champion).
-      item.disabled = true;
-      item.setAttribute('aria-disabled', 'true');
-    } else {
-      item.addEventListener('click', (e) => {
-        e.stopPropagation();
-        cur = o.value;
-        renderCap();
-        menu.querySelectorAll('.lg-dd-item').forEach((el) => el.classList.toggle('is-sel', el === item));
-        root.classList.remove('is-open');
-        onChange?.(cur);
-      });
+  // (Re)build the menu items from `curOptions`, keeping `cur` if still present
+  // (else snapping to the first pickable option). `silent` skips the onChange
+  // callback — used by setOptions so re-clamping the value doesn't recurse.
+  const buildMenu = (silent) => {
+    menu.replaceChildren();
+    if (!curOptions.some((o) => o.value === cur && !o.disabled)) {
+      const next = curOptions.find((o) => !o.disabled) ?? curOptions[0];
+      const changed = next && next.value !== cur;
+      cur = next?.value ?? cur;
+      if (changed && !silent) onChange?.(cur);
     }
-    menu.appendChild(item);
-  }
+    for (const o of curOptions) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'lg-dd-item' + (o.value === cur ? ' is-sel' : '') + (o.disabled ? ' is-soon' : '');
+      item.innerHTML = `<span class="lg-dd-item-label">${esc(o.label)}</span>` +
+        (o.sub ? `<span class="lg-dd-item-sub">${esc(o.sub)}</span>` : '');
+      if (o.disabled) {
+        // Visible but unpickable (e.g. a demo-blocked champion).
+        item.disabled = true;
+        item.setAttribute('aria-disabled', 'true');
+      } else {
+        item.addEventListener('click', (e) => {
+          e.stopPropagation();
+          cur = o.value;
+          renderCap();
+          menu.querySelectorAll('.lg-dd-item').forEach((el) => el.classList.toggle('is-sel', el === item));
+          root.classList.remove('is-open');
+          onChange?.(cur);
+        });
+      }
+      menu.appendChild(item);
+    }
+    renderCap();
+  };
+  // Swap the option set (e.g. node-count range follows the selected map size).
+  // Optionally pin the selection to `desiredValue` (a pre-clamped value the
+  // caller wants shown); if it isn't in the new set, buildMenu snaps to the
+  // first pickable option. Never fires onChange (silent re-clamp).
+  root.setOptions = (next, desiredValue) => {
+    curOptions = next;
+    if (desiredValue != null && next.some((o) => o.value === String(desiredValue) && !o.disabled)) {
+      cur = String(desiredValue);
+    }
+    buildMenu(true);
+  };
+  buildMenu(true);
   capBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     const willOpen = !root.classList.contains('is-open');
