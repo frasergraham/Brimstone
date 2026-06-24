@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import {
   describePlanAction,
   buildPlanStepsHtml,
+  buildUnitPlanBlocksHtml,
   buildPlayerStatusHtml,
   buildObjectivesHtml,
   buildMissionLogHtml,
@@ -184,6 +185,48 @@ describe('buildPlanStepsHtml', () => {
     // Check both step numbers appear
     assert.ok(html.includes('>1<'), `expected step 1 badge in: ${html.substring(0, 200)}`);
     assert.ok(html.includes('>2<'), `expected step 2 badge in: ${html.substring(0, 200)}`);
+  });
+});
+
+// ── buildUnitPlanBlocksHtml — per-unit plan blocks (incl. veterancy level pill) ─
+
+describe('buildUnitPlanBlocksHtml', () => {
+  // Two units differing only by level so the pill is the sole variable.
+  const lvl1 = { id: 'u1', displayName: 'Greenhorn', type: EntityType.SURVIVOR, level: 1 };
+  const lvl3 = { id: 'u3', displayName: 'Veteran',  type: EntityType.SURVIVOR, level: 3 };
+
+  // Render a single-unit block: a controllable list of [entity] with one queued move.
+  const renderOne = (entity) => {
+    const unitPlans = new Map([
+      [entity.id, [{ type: PlanActionType.MOVE, entityId: entity.id, toCol: 4, toRow: 2 }]],
+    ]);
+    return buildUnitPlanBlocksHtml(
+      unitPlans, 3, 0, false, [entity], null,
+      [entity], null, null, false,
+    );
+  };
+
+  test('level > 1 unit renders a .level-pill carrying the number, beside its name', () => {
+    const html = renderOne(lvl3);
+    assert.ok(html.includes('plan-unit-name'), 'block carries the unit name span');
+    assert.ok(html.includes('Veteran'), 'block shows the unit name');
+    assert.match(html, /class="level-pill"/, 'level-3 unit gets a level pill');
+    assert.match(html, />3<\/span>/, 'pill carries the bare level number');
+  });
+
+  test('level 1 unit renders NO level pill (bare default)', () => {
+    const html = renderOne(lvl1);
+    assert.ok(html.includes('Greenhorn'), 'block shows the unit name');
+    assert.ok(!html.includes('level-pill'), 'level-1 unit shows no pill');
+  });
+
+  test('the pill sits between the unit name and the action count', () => {
+    const html = renderOne(lvl3);
+    const nameIdx  = html.indexOf('plan-unit-name');
+    const pillIdx  = html.indexOf('level-pill');
+    const countIdx = html.indexOf('plan-unit-count');
+    assert.ok(nameIdx >= 0 && pillIdx >= 0 && countIdx >= 0, 'all three markers present');
+    assert.ok(nameIdx < pillIdx && pillIdx < countIdx, 'order is name → pill → count');
   });
 });
 
