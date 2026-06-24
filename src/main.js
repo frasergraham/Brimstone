@@ -1677,11 +1677,20 @@ function _playAttackIntroAnim(actorSnap, targetSnap, fromCol, fromRow, toCol, to
       owner: actorSnap.owner,
     });
   } else {
+    // Aim the lunge at the defender's ACTUAL sub-hex slot (its live standee
+    // position) rather than the hex centre, so the attacker meets the defender
+    // where it stands instead of snapping it to the middle of the hex. The
+    // defender holds its slot — render-only, no state mutation. Falls back to
+    // the hex centre when the renderer can't resolve the slot (e.g. 2D editor).
+    const targetWorld = typeof renderer.entityWorldPos === 'function'
+      ? renderer.entityWorldPos(targetSnap.id)
+      : null;
     renderer.addLungeAnim(
       actorSnap.id,
       fromCol, fromRow,
       toCol, toRow,
       actorSnap.type, actorSnap.owner, actorSnap.title ?? null,
+      0, false, targetWorld,
     );
   }
 }
