@@ -477,6 +477,24 @@ function wsFor(room, playerId) {
 // ── Room ─────────────────────────────────────────────────────────────────────
 
 /**
+ * Coerce an untrusted nodeCount config value to a finite integer, or null.
+ * Only a genuine number or a numeric string is honored — `null`, `undefined`,
+ * `[]`, `{}`, `false`, `true`, `""`, `"banana"`, `NaN`, `Infinity` all map to
+ * null (→ the map size's default node count). Finite values are floored.
+ * The actual range clamp happens in generateMap() against the size's band.
+ * @param {*} v
+ * @returns {number|null}
+ */
+function coerceNodeCount(v) {
+  if (typeof v === 'number') return Number.isFinite(v) ? Math.floor(v) : null;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.floor(n) : null;
+  }
+  return null;
+}
+
+/**
  * Create an empty room shell in lobby state.
  * GameState is deferred — created when the host calls startGame().
  * @param {object} [config]
@@ -500,7 +518,14 @@ function createRoom(config = {}) {
     config: {
       fog:              config.fog ?? 'partial',
       mapSize:          config.mapSize ?? 'standard',
-      nodeCount:        config.nodeCount ?? null,
+      // Coerce an untrusted client-supplied nodeCount to a finite integer or null.
+      // null falls through to the map size's default node count (the safe behavior).
+      // A non-numeric value (e.g. "banana", {}, [], NaN) would otherwise reach
+      // generateMap's clamp as NaN, bypassing _pickNodesAcrossRiver's guards and
+      // maxing out the node count instead of using the size default. We only honor a
+      // genuine number or numeric string — `+null`/`+[]`/`+false` all coerce to 0, so
+      // a bare `Number.isFinite(+x)` would wrongly accept those empty/nullish shapes.
+      nodeCount:        coerceNodeCount(config.nodeCount),
       playersPerSide:   Math.max(1, Math.min(config.isBattle ? 10 : 4, (config.playersPerSide | 0) || 1)),
       turnIntervalMs:   Math.max(Math.min(TURN_TIMEOUT_MS, 30_000), Math.min(259_200_000, Number(config.turnIntervalMs) || TURN_TIMEOUT_MS)),
       isAsync:          !!config.isAsync,
