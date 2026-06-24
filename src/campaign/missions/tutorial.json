@@ -439,5 +439,41 @@
   },
   "conductor": {
     "scriptKey": "tutorial"
+  },
+  "logic": {
+    "version": 1,
+    "variables": [],
+    "nodes": [
+      {
+        "id": "objStart",
+        "type": "onMissionStart",
+        "params": {},
+        "x": 40,
+        "y": 900
+      },
+      {
+        "id": "set_learn",
+        "type": "setObjective",
+        "params": {
+          "id": "learn",
+          "label": "Reach Caleb's Hollow alive"
+        },
+        "x": 300,
+        "y": 900
+      }
+    ],
+    "edges": [
+      {
+        "from": {
+          "node": "objStart",
+          "pin": "out"
+        },
+        "to": {
+          "node": "set_learn",
+          "pin": "in"
+        },
+        "kind": "exec"
+      }
+    ]
   }
 }
