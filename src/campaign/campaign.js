@@ -297,6 +297,38 @@ export function deploySpots(explicitSpots, neighbors) {
 }
 
 /**
+ * Decide which roster indices to deploy at mission start.
+ *
+ * The working selection (`_activeRosterIndices` in main.js) is the player's live
+ * squad choice, populated by the Party / Progress screen. But the Ledger "Begin
+ * Mission" path launches a mission WITHOUT visiting that screen, leaving the
+ * working selection empty — in which case we must fall back to the persisted
+ * `Campaign.activeParty` (the player's saved NAMED squad) rather than deploying
+ * nobody (which lets the minSurvivors balancer backfill random generics — the
+ * "I had 4 units, only 2 showed up" bug). Mirrors the legacy briefing fallback.
+ *
+ * Pure: reads only the args (Campaign.getActiveParty itself sanitizes against the
+ * current roster), returns a new clamped, sanitized index list.
+ *
+ * @param {number[]|null} workingIndices  the live working selection (may be empty)
+ * @param {Campaign|null} campaign        the active campaign (for the persisted fallback)
+ * @param {number} maxFromRoster          the mission's clamped start cap
+ * @returns {number[]} roster indices to deploy, length ≤ maxFromRoster
+ */
+export function resolveDeployIndices(workingIndices, campaign, maxFromRoster) {
+  const cap = Math.max(0, Math.floor(Number(maxFromRoster) || 0));
+  if (cap === 0 || !campaign) return [];
+  const size = Array.isArray(campaign.roster) ? campaign.roster.length : 0;
+  // The live working selection wins when present (validated against the roster).
+  const working = Array.isArray(workingIndices)
+    ? workingIndices.filter(i => Number.isInteger(i) && i >= 0 && i < size)
+    : [];
+  if (working.length > 0) return working.slice(0, cap);
+  // Empty working selection → fall back to the persisted squad (sanitized + clamped).
+  return campaign.getActiveParty(cap);
+}
+
+/**
  * Build victory/defeat delegate function from mission objectives.
  * Returns a function (state) => { winner, winReason, log } | null.
  *
