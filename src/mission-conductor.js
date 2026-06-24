@@ -418,6 +418,13 @@ export class MissionConductor {
     // menu. Dialog steps block the map outright, so their lists don't matter.
     this._publishGating(step);
 
+    // On a Submit step, make sure the plan panel (which holds the Submit button)
+    // is expanded — on mobile it collapses to a right-edge tab, leaving the button
+    // hidden / rendered in the top-left corner where the spotlight can't anchor.
+    if (step.trigger?.type === 'plan_submitted') {
+      document.getElementById('plan-panel')?.classList.remove('collapsed');
+    }
+
     // Spotlight (+ optional pulsing red circle on the same target)
     this._clearSpotlight();
     if (step.spotlight) this._applySpotlight(step.spotlight, step.pulse === true);
@@ -524,11 +531,12 @@ export class MissionConductor {
         el.classList.add('tutorial-spotlit');
         this._spotlitEl = el;
       }
-      // Re-anchor the arrow + pulse to the element EVERY frame so they track
-      // layout/scroll and never stick at 0,0 when the element isn't laid out yet
-      // (the mobile submit button reported at the top-left corner).
-      if ((target.arrow || pulse) && (this._arrowEl || this._pulseEl)) {
-        this._startElementAnchor(target.selector, target.arrow, pulse);
+      // Re-anchor only the ARROW to the element every frame (tracks layout/scroll
+      // and never sticks at 0,0). The pulsing circle is deliberately NOT drawn on
+      // UI elements — a circle centred on a small button (the mobile Submit button)
+      // covers it; the arrow + the gold `.tutorial-spotlit` glow highlight it cleanly.
+      if (target.arrow && this._arrowEl) {
+        this._startElementAnchor(target.selector, target.arrow, false);
       }
     }
   }
