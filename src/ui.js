@@ -21,7 +21,7 @@ import { compileTurnBattleSummary, compileTurnXpSummary } from './battle-utils.j
 import { buildWrapupCombatsHtml, wrapupIconHtml } from './wrapup-summary.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
-import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildMissionLogHtml, buildMissionLogDescriptionHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, buildCycleDeadlineHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos, TurnCardAutoScroll, shouldAutoScrollToActive, computeFadeFlags, buildActionPipsHtml, buildActionBudgetTooltipHtml } from './ui-render.js';
+import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildMissionLogHtml, buildMissionLogDescriptionHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, buildCycleDeadlineHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos, TurnCardAutoScroll, shouldAutoScrollToActive, computeFadeFlags, buildActionPipsHtml, buildActionBudgetTooltipHtml, levelPillHtml } from './ui-render.js';
 import {
   hideActionPopup, getEntityScreenPos, computeArcPositions,
   positionArcPopup, startArcTracking, positionPopup,
@@ -2673,7 +2673,7 @@ export class UIController {
 
       arcItems.push({
         group: 'disambig',
-        label: `<div class="arc-portrait-img-wrap">${imgHtml}${badgeHtml}</div><div class="arc-portrait-hp"><div class="arc-portrait-hp-fill" style="width:${(pct * 100).toFixed(0)}%;background:${hpColor};"></div></div><span class="arc-portrait-name">${u.displayName}</span>${oddsHtml}`,
+        label: `<div class="arc-portrait-img-wrap">${imgHtml}${badgeHtml}</div><div class="arc-portrait-hp"><div class="arc-portrait-hp-fill" style="width:${(pct * 100).toFixed(0)}%;background:${hpColor};"></div></div><span class="arc-portrait-name">${u.displayName}${levelPillHtml(u.level)}</span>${oddsHtml}`,
         fullLabel: odds
           ? `${u.displayName} — HP ${u.hp}/${u.maxHp} — ${this._formatOddsText(odds)}`
           : `${u.displayName} — HP ${u.hp}/${u.maxHp}`,
@@ -3000,7 +3000,7 @@ export class UIController {
         ${portraitHtml}
         ${cycleNextHtml}
         <span class="usb-info">
-          <span class="usb-name" style="color:${color}">${entity.displayName}</span>
+          <span class="usb-name" style="color:${color}">${entity.displayName}${levelPillHtml(entity.level)}</span>
           <span class="usb-details">
             <span class="usb-hp-wrap">
               <span class="usb-stat">HP</span>
@@ -6682,7 +6682,7 @@ function _unitCardHTML(entity, { renderer = null, selectable = false, showStats 
 }
 
 function _snapEntity(e) {
-  return { id: e.id, name: e.displayName, hp: e.hp, maxHp: e.maxHp, attack: e.getAttack(), defense: e.getDefense(), type: e.type, title: e.title ?? null };
+  return { id: e.id, name: e.displayName, hp: e.hp, maxHp: e.maxHp, attack: e.getAttack(), defense: e.getDefense(), type: e.type, title: e.title ?? null, level: e.level ?? 1 };
 }
 
 function _combatantHTML(snap, role, portraitSrc = null) {
@@ -6695,7 +6695,7 @@ function _combatantHTML(snap, role, portraitSrc = null) {
     : '';
   return `
     ${portraitHtml}
-    <div class="combatant-name" style="color:${color}">${snap.name}</div>
+    <div class="combatant-name" style="color:${color}">${snap.name}${levelPillHtml(snap.level)}</div>
     <div style="font-size:var(--fs-2xs);color:#7a7060;margin-bottom:0.3rem">${label}</div>
     <div class="combatant-stats">HP: ${snap.hp}/${snap.maxHp} · ATK: ${snap.attack} · DEF: ${snap.defense}</div>
     <div class="combatant-hp-bar">

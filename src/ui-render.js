@@ -19,6 +19,19 @@ const _BAD_EFFECTS  = new Set(['wounded', 'poisoned', 'bleeding', 'stunned', 'sl
 const _GOOD_EFFECTS = new Set(['frenzied', 'inspired', 'fortified', 'eagle_eyed']);
 
 /**
+ * Render the veterancy level pill — a small gold rounded badge carrying the
+ * level number, drawn beside a unit's name. Replaces the old "Name L2" string
+ * suffix. Returns '' for level 1 / null (the bare default), so callers can
+ * unconditionally append it. Shared by the Unit Stats Bar, the action-popup
+ * arc portrait and the battle dialog combatant card. Pure (no DOM).
+ */
+export function levelPillHtml(level) {
+  const n = Number(level);
+  if (!Number.isFinite(n) || n <= 1) return '';
+  return `<span class="level-pill" title="Veterancy level ${n}">${n}</span>`;
+}
+
+/**
  * Render the active effects pip strip for an entity. Each pip shows the
  * effect's icon and (for finite durations) a small remaining-rounds badge.
  * The full label/description is exposed via the title attribute for

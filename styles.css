@@ -1349,6 +1349,27 @@ input, textarea, select, [contenteditable], [contenteditable] * {
   text-overflow: ellipsis;
 }
 
+/* Veterancy level pill — a small gold rounded badge carrying the level number,
+   shown beside a unit's name. Replaces the old "Name L2" string suffix. Gold-
+   on-dark to read as "rank" (matches the canvas pill in renderer-3d.js and the
+   XP/veterancy gold accent), distinct from red damage markers. */
+.level-pill {
+  display: inline-block;
+  min-width: 1.05em;
+  padding: 0 0.32em;
+  margin-left: 0.34em;
+  border-radius: 0.7em;
+  border: 1px solid var(--gold, #c8a84b);
+  background: rgba(28, 22, 12, 0.92);
+  color: var(--gold, #e8c84a);
+  font-size: 0.74em;
+  font-weight: 700;
+  line-height: 1.45;
+  text-align: center;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
 .usb-details {
   display: flex;
   align-items: center;
