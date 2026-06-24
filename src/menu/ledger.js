@@ -13,7 +13,7 @@ import { ICON } from '../icons.js';
 import { mountServerSelector } from '../server-selector.js';
 import { MAP_SIZES } from '../map.js';
 import { loadThumb, missionThumb, campaignMissionRowId } from './thumbnails.js';
-import { isModeAvailable, isFactionAvailable, COMING_SOON_LABEL } from '../demo-config.js';
+import { isModeAvailable, isFactionAvailable, isOnlineAvailable, ONLINE_ONLY_DESTINATIONS, COMING_SOON_LABEL } from '../demo-config.js';
 import { getCampaignPortrait } from '../campaign/campaign-ui.js';
 import { levelPillHtml } from '../ui-render.js';
 
@@ -26,6 +26,19 @@ const DESTINATIONS = [
   { id: 'replays',  icon: '\uE014', label: 'Replays',          title: 'Replays',          tag: 'Revisit past games',               accent: 'gold' },
   { id: 'account',  icon: '\uE0A1',  label: 'Account',          title: 'Account',          tag: '',                                   accent: 'gold' },
 ];
+
+/**
+ * The rail destinations to render in THIS build. On the server-less static
+ * (itch.io) build the online-only entries (Play Online + Account/leaderboard)
+ * are dropped entirely \u2014 there's no server to reach, so they would only error
+ * on click. Every other build (dev / Electron / Capacitor) shows the full set.
+ * Pure: takes the online flag so a unit test can drive both branches off-DOM.
+ * @param {boolean} [onlineAvailable]  defaults to isOnlineAvailable()
+ */
+export function railDestinations(onlineAvailable = isOnlineAvailable()) {
+  if (onlineAvailable) return DESTINATIONS;
+  return DESTINATIONS.filter((d) => !ONLINE_ONLY_DESTINATIONS.includes(d.id));
+}
 
 let _root = null;
 let _activeId = null;
@@ -117,7 +130,7 @@ function _renderRail() {
   const host = document.getElementById('ledger-rail-items');
   if (!host) return;
   host.replaceChildren();
-  for (const d of DESTINATIONS) {
+  for (const d of railDestinations()) {
     const item = document.createElement('div');
     const available = isModeAvailable(d.id);   // demo builds can flip a mode OFF
     item.className = 'ledger-rail-item' + (available ? '' : ' is-soon');
@@ -141,12 +154,17 @@ function _renderRail() {
 export function select(id) {
   let dest = DESTINATIONS.find(d => d.id === id);
   if (!dest) return;
+  // The static (itch.io) build hides the online-only destinations entirely —
+  // never bind the pane to one (e.g. via the `start` default or a stale lobby
+  // push); fall back to a shown destination. _renderRail already omits them.
+  const shown = railDestinations();
+  const isShown = (d) => shown.includes(d);
   // A demo build can disable a mode — never bind the pane to a coming-soon
   // destination (e.g. via the `start` default); fall back to Continue.
-  if (!isModeAvailable(dest.id)) {
-    dest = DESTINATIONS.find(d => d.id === 'continue' && isModeAvailable('continue')) ||
-           DESTINATIONS.find(d => isModeAvailable(d.id)) || dest;
-    if (!isModeAvailable(dest.id)) return;
+  if (!isShown(dest) || !isModeAvailable(dest.id)) {
+    dest = shown.find(d => d.id === 'continue' && isModeAvailable('continue')) ||
+           shown.find(d => isModeAvailable(d.id)) || dest;
+    if (!isShown(dest) || !isModeAvailable(dest.id)) return;
   }
   id = dest.id;
   _activeId = id;

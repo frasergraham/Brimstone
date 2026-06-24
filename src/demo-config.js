@@ -69,3 +69,30 @@ export function isFactionAvailable(factionId) {
   const v = DEMO_CONFIG.factions[factionId];
   return v === undefined ? true : v === true;
 }
+
+// Rail destinations that need a live game server (online play + the account /
+// leaderboard identity). On the static itch.io build there is NO server, so
+// these entries are hidden entirely rather than shown and erroring on click.
+export const ONLINE_ONLY_DESTINATIONS = Object.freeze(['others', 'account']);
+
+/**
+ * Is this a server-less STATIC build (the itch.io zip)? scripts/build-itch.js
+ * injects `window.BRIMSTONE_ITCH = true` into the built index.html; every other
+ * build (dev server, Electron, Capacitor) leaves it unset. Pure read of the
+ * passed-in flag so a unit test can drive it without a DOM.
+ * @param {boolean} [flag]  defaults to window.BRIMSTONE_ITCH (undefined off-DOM)
+ */
+export function isStaticBuild(flag = (typeof window !== 'undefined' ? window.BRIMSTONE_ITCH : undefined)) {
+  return flag === true;
+}
+
+/**
+ * Is online play (and the account / leaderboard) available in this build? False
+ * only on the static itch.io build, where there is no server to reach. Other
+ * builds always return true — the dev / Electron / Capacitor cases where
+ * BRIMSTONE_SERVER may be momentarily unset must NOT hide Online.
+ * @param {boolean} [staticFlag]  defaults to isStaticBuild()
+ */
+export function isOnlineAvailable(staticFlag = isStaticBuild()) {
+  return !staticFlag;
+}

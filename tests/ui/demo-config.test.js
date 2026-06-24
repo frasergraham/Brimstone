@@ -7,8 +7,11 @@ import assert from 'node:assert/strict';
 import {
   DEMO_CONFIG,
   MODE_BY_DESTINATION,
+  ONLINE_ONLY_DESTINATIONS,
   isModeAvailable,
   isFactionAvailable,
+  isStaticBuild,
+  isOnlineAvailable,
   COMING_SOON_LABEL,
 } from '../../src/demo-config.js';
 
@@ -71,6 +74,27 @@ describe('isModeAvailable', () => {
     assert.equal(probe({ skirmish: false }, 'skirmish'), false);
     assert.equal(probe({ online: false }, 'others'), false);  // destination → key
     assert.equal(probe({ skirmish: true }, 'skirmish'), true);
+  });
+});
+
+describe('isStaticBuild / isOnlineAvailable (itch.io server-less gate)', () => {
+  test('isStaticBuild reflects the injected flag', () => {
+    // build-itch.js injects window.BRIMSTONE_ITCH = true; explicit-arg form so
+    // we never touch a real window in the test.
+    assert.equal(isStaticBuild(true), true);
+    assert.equal(isStaticBuild(false), false);
+    assert.equal(isStaticBuild(undefined), false);   // every non-itch build
+    assert.equal(isStaticBuild(null), false);
+  });
+
+  test('isOnlineAvailable is false ONLY on the static build', () => {
+    assert.equal(isOnlineAvailable(true), false);   // static itch build → no server
+    assert.equal(isOnlineAvailable(false), true);   // dev / Electron / Capacitor
+  });
+
+  test('online-only destinations are exactly Play Online + Account', () => {
+    assert.deepEqual([...ONLINE_ONLY_DESTINATIONS], ['others', 'account']);
+    assert.ok(Object.isFrozen(ONLINE_ONLY_DESTINATIONS));
   });
 });
 
