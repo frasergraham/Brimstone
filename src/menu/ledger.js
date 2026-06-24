@@ -424,8 +424,11 @@ function _campaignBriefing(body) {
   // Begin/Resume + Edit Party live on one row, with Abandon (resume only) below.
   const btnRow = document.createElement('div');
   btnRow.className = 'lg-brief-actions';
-  btnRow.appendChild(_button(b.resume ? `${ICON.play} Resume Mission` : `${ICON.play} Begin Mission`, 'gold',
-    () => _data?.startMission?.(b.slot, b.missionId, b.resume)));
+  const beginBtn = _button(b.resume ? `${ICON.play} Resume Mission` : `${ICON.play} Begin Mission`, 'gold',
+    () => _data?.startMission?.(b.slot, b.missionId, b.resume));
+  // Stable hook for the browser-verification harness (startCampaignMission).
+  beginBtn.dataset.testid = 'begin-mission';
+  btnRow.appendChild(beginBtn);
   btnRow.appendChild(_button('Edit Party', 'ghost', () => {
     // Stash the pending briefing so the party view can return to it, then open
     // the party sub-view of the campaign panel.
@@ -1616,6 +1619,10 @@ function _missionRow(slot, m, status, index, campaignId) {
   const img = missionThumb(m.id, rowId);
   const el = document.createElement('div');
   el.className = 'lg-mission is-' + status + (playable ? ' is-playable' : '');
+  // Stable hooks for the browser-verification harness (startCampaignMission):
+  // pick a row by mission id (or title) without depending on text/DOM order.
+  el.dataset.missionId = m.id;
+  el.dataset.missionTitle = m.title || m.id;
   el.innerHTML =
     `<span class="lg-mission-thumb" aria-hidden="true"${img ? ` style="background-image:url(${img})"` : ''}></span>` +
     `<span class="lg-mission-n gthc">${esc(_missionNumLabel(index))}</span>` +

@@ -36,7 +36,7 @@ node -e "import(require('child_process').execSync('npm root -g').toString().trim
 |---|---|
 | `startServer()` | boots `server.js` on :3199 with a throwaway temp DB; returns `{ baseUrl, stop }` |
 | `launchBrowser()` | headless Chromium **with the SwiftShader WebGL flags Babylon requires** (`--use-gl=angle --enable-unsafe-swiftshader`); returns `{ page, logs, close }` with console/pageerror capture |
-| `startCampaignMission(page, baseUrl, { campaignId, missionTitle })` | menu → campaign → mission → Begin Mission |
+| `startCampaignMission(page, baseUrl, { missionId, missionTitle, slot, resume, useHook })` | Ledger → Campaign rail → mission row → Begin Mission (default `missionId: 'prologue'`; pass `useHook: true` to launch via `window.__startCampaignMission` instead of clicking) |
 | `startSkirmish(page, baseUrl)` | menu → vs. AI → Start Game |
 | `loadScenario(page, baseUrl, def)` | **jump straight to a hand-defined board** via `?scenario=` — see below |
 | `waitForGameReady(page)` | waits for the `#loading-overlay` (Babylon + assets) to clear — **always await this before judging visuals** |
@@ -128,7 +128,7 @@ import {
 
 const srv = await startServer();
 const { page, logs, close } = await launchBrowser();
-await startCampaignMission(page, srv.baseUrl, { missionTitle: 'Awakening' });
+await startCampaignMission(page, srv.baseUrl, { missionId: 'prologue' });
 await waitForGameReady(page);
 await page.waitForTimeout(1500);                 // conversation framing settles
 await page.screenshot({ path: '/tmp/intro-line1.png' });
@@ -165,10 +165,11 @@ await close(); srv.stop();
   **replay HUD** (`replayHud:'flex'`, `planPanel:'none'`) and does NOT auto-return
   to planning — step `#replay-next-btn` until `snapHud().planPanel` is visible
   again to reach the next round.
-- **Selectors**: campaign cards `.campaign-select-item[data-campaign=…]`,
-  missions `.campaign-mission.available` (match by title text), begin
-  `#btn-start-mission`, plan submit `#plan-submit-btn` / `#grace-submit-empty`,
-  replay controls `#replay-{next,back,redo}-btn`.
+- **Selectors (Ledger menu)**: campaign rail item
+  `#ledger-rail-items .ledger-rail-item[data-dest="campaign"]`, mission rows
+  `.lg-mission[data-mission-id=…]` (or `[data-mission-title=…]`), Begin/Resume
+  `[data-testid="begin-mission"]`; plan submit `#plan-submit-btn` /
+  `#grace-submit-empty`, replay controls `#replay-{next,back,redo}-btn`.
 - **Cones, not models**: GLB rigs 404 in headless → units render as cones (known
   noise: "unit will be invisible" warnings). Layout / slot / stacking / UI / +N
   badge judgments are still valid.
