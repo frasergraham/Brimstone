@@ -120,8 +120,10 @@ describe('_ensureBabylonCore — script injection from local vendor path', () =>
     const pending = r._ensureBabylonCore();
     assert.equal(scripts.length, 1, 'script tag must be injected synchronously');
     const s = scripts[0];
-    // Pin: core MUST come from the packaged `assets/vendor/` path — no CDN.
-    assert.equal(s.src, '/assets/vendor/babylonjs/babylon.js');
+    // Pin: core MUST come from the packaged `assets/vendor/` path — no CDN —
+    // and RELATIVE (no leading slash) so it resolves under the static itch.io
+    // zip sub-path root as well as capacitor://localhost/ and the Electron root.
+    assert.equal(s.src, 'assets/vendor/babylonjs/babylon.js');
     assert.equal(s.async, true);
     assert.equal(s.dataset.babylonCore, 'true');
 
@@ -257,17 +259,25 @@ describe('renderer-3d.js source — no CDN URLs', () => {
     );
   });
 
-  test('references the local babylon core path', () => {
+  test('references the local babylon core path (relative — itch sub-path safe)', () => {
     assert.ok(
-      RENDERER_SOURCE.includes('/assets/vendor/babylonjs/babylon.js'),
+      RENDERER_SOURCE.includes('assets/vendor/babylonjs/babylon.js'),
       'renderer-3d.js must load babylon core from the local vendor path',
+    );
+    assert.ok(
+      !RENDERER_SOURCE.includes('/assets/vendor/babylonjs/babylon.js'),
+      'must be RELATIVE (no leading slash) — a leading slash 404s on the itch zip sub-path root',
     );
   });
 
-  test('references the local babylon loaders path', () => {
+  test('references the local babylon loaders path (relative — itch sub-path safe)', () => {
     assert.ok(
-      RENDERER_SOURCE.includes('/assets/vendor/babylonjs/babylonjs.loaders.min.js'),
+      RENDERER_SOURCE.includes('assets/vendor/babylonjs/babylonjs.loaders.min.js'),
       'renderer-3d.js must load babylon glTF loaders from the local vendor path',
+    );
+    assert.ok(
+      !RENDERER_SOURCE.includes('/assets/vendor/babylonjs/babylonjs.loaders.min.js'),
+      'must be RELATIVE (no leading slash) — a leading slash 404s on the itch zip sub-path root',
     );
   });
 

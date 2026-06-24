@@ -201,6 +201,64 @@ test('styles-ledger.css (ledger menu) is in BOTH copy manifests (regression)', (
   );
 });
 
+// ── itch.io ships the 3D-renderer RUNTIME assets (not just the styled menu) ───
+// The original CSS fix made the menu render, but the build shipped NONE of the
+// runtime assets the 3D renderer fetches in-game (GLB models, terrain textures,
+// the Babylon vendor bundle, char portraits, mission-map thumbnails, voice), so
+// a game couldn't actually play. The robust fix copies `assets` wholesale; these
+// guards pin that the key runtime trees are covered so the gap can't silently
+// regress to a per-file allowlist that drifts again.
+test('itch.io build ships every 3D-renderer runtime asset dir (game must play, not just menu)', () => {
+  // Each of these is fetched by src/renderer-3d.js / UI at runtime. They live
+  // under assets/, so the wholesale `assets` COPY entry covers them — but assert
+  // explicitly so a future "trim the assets copy" change can't drop a runtime dir.
+  const runtimeAssetDirs = [
+    'assets/models',          // GLB rigs (paladin/mannequin/zombie), buildings, trees
+    'assets/textures/terrain', // *-detail.jpg terrain splat tints the renderer loads
+    'assets/vendor',          // Babylon core + glTF loaders (no CDN at runtime)
+    'assets/voice',           // conversation/tutorial/mission narration MP3s + manifest
+    'assets/mission-maps',    // campaign mission briefing thumbnails
+    'assets/fonts',           // brimstone-icons + ledger fonts
+  ];
+  for (const dir of runtimeAssetDirs) {
+    assert.ok(
+      isCopiedItch(dir),
+      `build-itch.js must ship ${dir} — the 3D renderer / UI fetches it at ` +
+        `runtime; without it a game renders nothing (or 404s) and is unplayable. ` +
+        `Keep the wholesale "assets" entry in COPY[].`,
+    );
+    assert.ok(
+      existsSync(join(ROOT, dir)),
+      `${dir} should exist on disk (test self-check)`,
+    );
+  }
+  // Char portrait PNGs sit at the assets/ root (referenced by the ledger header
+  // and the faction-select carousel in src/main.js).
+  for (const portrait of ['assets/char-paladin.png', 'assets/char-witch.png']) {
+    assert.ok(
+      isCopiedItch(portrait),
+      `build-itch.js must ship ${portrait} (covered by the wholesale assets copy)`,
+    );
+  }
+});
+
+test('Babylon vendor scripts use RELATIVE paths (resolve under the itch zip sub-path root)', () => {
+  // src/renderer-3d.js loads Babylon core + loaders via <script> tags. A
+  // leading-slash absolute path ("/assets/vendor/…") anchors to the ORIGIN root,
+  // which 404s on itch's sub-path host (html.itch.zone/html/<id>/) — Babylon
+  // never loads and the 3D renderer stays a black canvas. Pin them relative.
+  const r3d = readFileSync(join(ROOT, 'src', 'renderer-3d.js'), 'utf8');
+  assert.ok(
+    !/['"`]\/assets\/vendor\/babylonjs\//.test(r3d),
+    'src/renderer-3d.js must NOT load Babylon via a leading-slash "/assets/vendor/…" ' +
+      'path — it 404s on the itch zip sub-path root. Use a relative "assets/vendor/…".',
+  );
+  assert.ok(
+    /['"`]assets\/vendor\/babylonjs\/babylon\.js['"`]/.test(r3d),
+    'expected the relative Babylon core path "assets/vendor/babylonjs/babylon.js"',
+  );
+});
+
 // ── itch.io stub modules export everything the client imports ─────────────────
 // build-itch.js replaces a few dev/native-only modules (platform.js,
 // server-selector.js, notifications.js) with minimal stubs. If a stub omits an
