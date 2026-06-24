@@ -3,7 +3,7 @@
 // Imported by UIController to keep rendering logic separate from DOM wiring.
 
 import { PlanActionType } from './planner.js';
-import { ICON } from './icons.js';
+import { ICON, coloredResourceIcon, coloredResourceLabel, tintResourceGlyphs } from './icons.js';
 import { ITEMS } from './items.js';
 import { EntityType, ENTITY_COLOR, getEquippedWeaponIdOf, getItemCountOf, removeItemInItems, normalizeItems, isLeaderType } from './entities.js';
 import { ResourceType, WEAPON_LABEL, RESOURCE_LABEL } from './tiles.js';
@@ -325,23 +325,23 @@ const RES_ICON = {
 function _stepCostLabel(action, projShared, projWitch, projEntityItems) {
   switch (action.type) {
     case PlanActionType.SUMMON: {
-      if (getItemCountOf(projWitch, ResourceType.METAL) >= 2) return `−2 ${RESOURCE_LABEL[ResourceType.METAL]}`;
-      if (getItemCountOf(projWitch, ResourceType.WOOD)  >= 2) return `−2 ${RESOURCE_LABEL[ResourceType.WOOD]}`;
+      if (getItemCountOf(projWitch, ResourceType.METAL) >= 2) return `−2 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.METAL])}`;
+      if (getItemCountOf(projWitch, ResourceType.WOOD)  >= 2) return `−2 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.WOOD])}`;
       return '−2 res';
     }
     case PlanActionType.FORTIFY:
-      if (getItemCountOf(projShared, ResourceType.METAL) > 0) return `−1 ${RESOURCE_LABEL[ResourceType.METAL]}`;
-      if (getItemCountOf(projShared, ResourceType.WOOD)  > 0) return `−1 ${RESOURCE_LABEL[ResourceType.WOOD]}`;
+      if (getItemCountOf(projShared, ResourceType.METAL) > 0) return `−1 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.METAL])}`;
+      if (getItemCountOf(projShared, ResourceType.WOOD)  > 0) return `−1 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.WOOD])}`;
       return '';
     case PlanActionType.HEAL:
-      return `−1 ${RESOURCE_LABEL[ResourceType.HERBS]}`;
+      return `−1 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.HERBS])}`;
     case PlanActionType.USE_ITEM: {
       const item = action.item;
       if (!item || ITEMS[item]?.kind === 'weapon') return '';
-      return `−1 ${RESOURCE_LABEL[item] || item}`;
+      return `−1 ${coloredResourceLabel(RESOURCE_LABEL[item] || item)}`;
     }
     case PlanActionType.SOUND_HORN:
-      return `−1 ${RESOURCE_LABEL[ResourceType.FOOD]}`;
+      return `−1 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.FOOD])}`;
     default: return '';
   }
 }
@@ -395,7 +395,7 @@ export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entit
     if (foodPowered) foodUsed++;
 
     const desc      = describePlanAction(a, entities, i);
-    const foodTag   = foodPowered ? ` <span class="plan-food-tag">\uE012</span>` : '';
+    const foodTag   = foodPowered ? ` <span class="plan-food-tag">${coloredResourceIcon('food')}</span>` : '';
     const rmBtn     = submitted
       ? ''
       : `<button class="plan-step-remove" data-plan-idx="${i}" title="Remove">\uE070</button>`;
@@ -484,7 +484,7 @@ export function buildUnitDetailHtml(entity, items, expanded = false) {
     .map(([k, spare]) => {
       const label = ITEMS[k]?.kind === 'weapon'
         ? (WEAPON_LABEL[k] || k)
-        : (RESOURCE_LABEL[k] || k);
+        : coloredResourceLabel(RESOURCE_LABEL[k] || k);
       return `<div class="inv-resource-row">`
            + `<span class="inv-resource-label">${label}</span>`
            + `<span class="inv-resource-val">×${spare}</span></div>`;
@@ -665,9 +665,9 @@ export function buildUnitPlanBlocksHtml(
         // target onto a second line so a long name wraps instead of truncating.
         const { verb, target } = describePlanActionParts(a, entities, idx);
         const title   = target ? `${verb} \u2192 ${target}` : verb;
-        const verbHtml   = `<span class="plan-step-verb">${verb}</span>`;
+        const verbHtml   = `<span class="plan-step-verb">${tintResourceGlyphs(verb)}</span>`;
         const targetHtml = target ? `<span class="plan-step-target">\u2192 ${target}</span>` : '';
-        const foodTag = bst === 'food' ? ` <span class="plan-food-tag">\uE012</span>` : '';
+        const foodTag = bst === 'food' ? ` <span class="plan-food-tag">${coloredResourceIcon('food')}</span>` : '';
         const rmBtn   = submitted
           ? ''
           : `<button class="plan-step-remove" data-entity-id="${entityId}" data-step-idx="${idx}" title="Remove">\uE070</button>`;

@@ -236,3 +236,88 @@ export const EMOJI_TO_ICON = Object.freeze({
 // The font-family to apply (DOM: `font-family: var(--font-icons)`; canvas:
 // `ctx.font = '<size> BrimstoneIcons'`).
 export const ICON_FONT_FAMILY = 'BrimstoneIcons';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Resource icon colorization
+//
+// The BrimstoneIcons glyphs are monochrome and inherit CSS `color`. By default a
+// resource glyph takes the surrounding text color; these helpers tint each
+// resource by type so wood reads brown, herbs green, etc., consistently across
+// every player-facing render site.
+//
+// Two ways to colorize:
+//   • DOM/HTML — wrap the glyph in `coloredResourceIcon(id)` (a span carrying the
+//     `.res-icon`/`.res-icon--<id>` classes; colors live in styles.css), or use
+//     `coloredResourceLabel(id, label)` to tint just the leading glyph of a label
+//     string while leaving the trailing text on the ambient color.
+//   • Canvas/other — read the hex straight from `RESOURCE_ICON_COLOR[id]`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Canonical resource ids (matches ResourceType values in tiles.js). Kept local
+// so icons.js stays dependency-free (no tiles.js import → no import cycle).
+export const RESOURCE_ICON_COLOR = Object.freeze({
+  wood:      '#b07a45', // warm timber brown
+  metal:     '#9aa6b2', // cold steel grey-blue
+  food:      '#e0883a', // warm ration orange
+  silver:    '#cfd6dd', // bright silvery white
+  scripture: '#d8b25c', // aged parchment / gilt
+  herbs:     '#6fbf73', // living-green herb
+  herb:      '#6fbf73', // alias (ICON name is `herb`, ResourceType is `herbs`)
+});
+
+// Glyph (PUA char) → resource id, so a bare label glyph can be located + tinted.
+const RES_GLYPH_TO_ID = Object.freeze({
+  [ICON.wood]:      'wood',
+  [ICON.metal]:     'metal',
+  [ICON.food]:      'food',
+  [ICON.silver]:    'silver',
+  [ICON.scripture]: 'scripture',
+  [ICON.herb]:      'herbs',
+});
+
+/** True when `id` is one of the six tintable resource types. */
+export function isResourceId(id) {
+  return Object.prototype.hasOwnProperty.call(RESOURCE_ICON_COLOR, id);
+}
+
+/**
+ * Return the resource glyph for `id` wrapped in a tinted span (HTML string).
+ * Falls back to the bare glyph (no span) for unknown ids so callers can pass it
+ * through safely. `glyph` overrides the looked-up glyph when supplied.
+ */
+export function coloredResourceIcon(id, glyph) {
+  const ch = glyph ?? ICON[id === 'herbs' ? 'herb' : id];
+  if (!ch) return '';
+  if (!isResourceId(id)) return ch;
+  return `<span class="res-icon res-icon--${id}">${ch}</span>`;
+}
+
+/**
+ * Tint just the leading resource glyph of a label string (e.g. RESOURCE_LABEL
+ * values like " Herbs") and leave the trailing text on the ambient color.
+ * If the string doesn't start with a known resource glyph it is returned
+ * unchanged, so this is safe to apply blindly to any label.
+ */
+export function coloredResourceLabel(label) {
+  if (typeof label !== 'string' || !label) return label;
+  const id = RES_GLYPH_TO_ID[label.charAt(0)];
+  if (!id) return label;
+  return `<span class="res-icon res-icon--${id}">${label.charAt(0)}</span>${label.slice(1)}`;
+}
+
+// Matches any of the six resource glyphs (U+E010 wood .. U+E015 herb) wherever
+// they sit in a string. (Range covers wood/metal/food/silver/scripture/herb.)
+const RES_GLYPH_RE = /[\uE010-\uE015]/g;
+
+/**
+ * Tint EVERY resource glyph found anywhere in an HTML string (not just a
+ * leading one). Use when the glyph may sit mid-string (e.g. "Use  Herbs").
+ * Returns HTML — never pass the result into an attribute value.
+ */
+export function tintResourceGlyphs(html) {
+  if (typeof html !== 'string' || !html) return html;
+  return html.replace(RES_GLYPH_RE, (ch) => {
+    const id = RES_GLYPH_TO_ID[ch];
+    return id ? `<span class="res-icon res-icon--${id}">${ch}</span>` : ch;
+  });
+}
