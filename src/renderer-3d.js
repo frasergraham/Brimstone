@@ -50,6 +50,7 @@ export const scaledForestTreeCount = _scaledForestTreeCount;
 import {
   EntityType, isLeaderType, ADVANTAGE_CAP,
   factionHasMultipleLeaders, leaderColorFor, applyProjectedEquip,
+  getEquippedWeaponIdOf,
 } from './entities.js';
 import {
   buildingRenderHex,
@@ -851,6 +852,101 @@ export function weaponStandInTransform(paladinScale) {
     // Slide half the length up the blade's local axis so the grip end lands at
     // the hand bone rather than the cylinder's centre.
     offset:   { x: 0, y: height / 2, z: 0 },
+  };
+}
+
+// ─── Weapon GLB models (real held weapons; replaces the cylinder stand-in) ──
+// Four hand-weapon GLBs ship in `assets/`: Sword, Axe, Rifle, Dagger. Each
+// equippable weapon id (src/items.js ITEMS, `kind:'weapon'`) maps to whichever
+// of the four reads closest; a few (shield, staff, magic_bolt) have no good
+// physical analogue and fall through to the cylinder stand-in so equipping them
+// still shows *something* in-hand. Path is relative to the assets base captured
+// by loadImages(); the files sit directly under assets/, not assets/models/.
+export const WEAPON_MODEL_FILES = Object.freeze({
+  sword:  'Sword.glb',
+  axe:    'Axe.glb',
+  rifle:  'Rifle.glb',
+  dagger: 'Dagger.glb',
+});
+
+/** weapon item id → weapon model name ('sword'|'axe'|'rifle'|'dagger'|null).
+ *  Bladed melee (sword/greatsword) → sword; chopping/blunt (axe/warhammer) →
+ *  axe; firearms + thrown/launched ranged (musket/pistol/longrifle/bow/
+ *  crossbow/sling) → rifle; the knife → dagger. shield/staff/magic_bolt have
+ *  no matching model → null (cylinder fallback). Pure; exported for tests. */
+export const WEAPON_ID_TO_MODEL = Object.freeze({
+  sword:      'sword',
+  greatsword: 'sword',
+  axe:        'axe',
+  warhammer:  'axe',
+  dagger:     'dagger',
+  bow:        'rifle',
+  crossbow:   'rifle',
+  musket:     'rifle',
+  pistol:     'rifle',
+  longrifle:  'rifle',
+  sling:      'rifle',
+  // shield / staff / magic_bolt: no GLB analogue → cylinder stand-in.
+});
+
+/** Map an equipped weapon id to its weapon-model name, or null if none of the
+ *  four GLBs fits (caller falls back to the cylinder). Pure; exported. */
+export function weaponModelForId(weaponId) {
+  if (typeof weaponId !== 'string') return null;
+  return WEAPON_ID_TO_MODEL[weaponId] || null;
+}
+
+/** Per-model grip transform, in the hand-bone-LOCAL frame, so the weapon sits
+ *  in the fist rather than floating in front. Each entry describes how that
+ *  GLB is oriented as Babylon imports it (with the glTF node's baked scale 100
+ *  + axis rotation applied) and where its handle/grip end lands:
+ *   - `worldLength` — target on-screen size of the weapon's LONG axis, in
+ *     world units (same units as TARGET_PALADIN_WORLD_HEIGHT ≈ 0.69). The
+ *     loader measures the template's long-axis span and derives a uniform
+ *     scale to hit this; the per-standee paladin scale is divided back out at
+ *     attach time (see weaponGripLocalTransform).
+ *   - `rotation` {x,y,z} — Euler radians applied to the clone so the long axis
+ *     points up-and-forward out of the fist (matching the old cylinder pose).
+ *   - `offset` {x,y,z} — local translation (in the SAME post-rotation frame)
+ *     to slide the grip onto the bone. Hand-tuned against browser screenshots.
+ *  Operator-tunable — these are pure presentation. Exported for tests. */
+export const WEAPON_GRIP_TRANSFORMS = Object.freeze({
+  // Sword: imported long axis = +Y (blade up), handle near the model origin.
+  // Tilt forward like the stand-in; lift so the grip (not the bbox centre)
+  // meets the fist.
+  sword:  { worldLength: 0.62, rotation: { x: -Math.PI * 0.14, y: 0, z: 0 },     offset: { x: 0, y: 0.02, z: 0 } },
+  // Axe: long axis = +Y, head splayed in -X near the top. Same forward tilt.
+  axe:    { worldLength: 0.58, rotation: { x: -Math.PI * 0.14, y: 0, z: 0 },     offset: { x: 0.02, y: 0.04, z: 0 } },
+  // Dagger: long axis = +Y, short. Slight forward tilt; small lift.
+  dagger: { worldLength: 0.30, rotation: { x: -Math.PI * 0.18, y: 0, z: 0 },     offset: { x: 0, y: 0.01, z: 0 } },
+  // Rifle: long axis = +X (barrel forward). Yaw +90° about Y swings the barrel
+  // into the unit's FORWARD direction so it's carried across the body and reads
+  // as a held long-gun from the high gameplay camera (rather than standing
+  // vertical / hidden behind the body). A small forward-up tilt keeps the muzzle
+  // clear of the ground and the body.
+  rifle:  { worldLength: 0.66, rotation: { x: -Math.PI * 0.06, y: Math.PI * 0.5, z: 0 }, offset: { x: -0.02, y: 0.03, z: 0.05 } },
+});
+
+/** Compute the rig-LOCAL grip transform for a weapon model clone, given the
+ *  model's natural long-axis span (`modelLongSpan`, in the template's own
+ *  post-import units) and the per-standee uniform `rigScale` that attachToBone
+ *  folds in via the affector's world matrix. Returns `{ scale, rotation,
+ *  offset }` where `scale` is the uniform clone scale and rotation/offset are
+ *  copied from WEAPON_GRIP_TRANSFORMS. Mirrors weaponStandInTransform's
+ *  divide-out-the-rig-scale trick so the weapon lands at a constant on-screen
+ *  size regardless of rig height. Falls back gracefully on bad input. Pure;
+ *  exported for tests. */
+export function weaponGripLocalTransform(model, modelLongSpan, rigScale) {
+  const cfg = WEAPON_GRIP_TRANSFORMS[model];
+  if (!cfg) return null;
+  const span = (typeof modelLongSpan === 'number' && modelLongSpan > 0) ? modelLongSpan : 1;
+  const rs   = (typeof rigScale === 'number' && rigScale > 0) ? rigScale : 1;
+  // worldLength = span × scale × rigScale  ⇒  scale = worldLength / (span × rigScale)
+  const scale = cfg.worldLength / (span * rs);
+  return {
+    scale,
+    rotation: { ...cfg.rotation },
+    offset:   { ...cfg.offset },
   };
 }
 
@@ -2246,6 +2342,19 @@ export class Renderer3D {
     // is needed, and it behaves identically on every browser.
     this._buildingMeshes = new Set();
     this._assetsBasePath   = null; // captured by loadImages()
+    // ── Weapon GLB model state (see `_loadWeaponModel`) ───────────────────
+    // `_weaponTemplates`    : Map<modelName, { mesh, longSpan }> — one hidden
+    //                          source mesh per weapon model ('sword'|'axe'|
+    //                          'rifle'|'dagger'). Each held weapon is a CLONE of
+    //                          its template parented to the standee's right-hand
+    //                          bone (see _syncStandeeWeapon). `longSpan` is the
+    //                          template's measured long-axis span, used to derive
+    //                          a uniform grip scale (weaponGripLocalTransform).
+    // `_weaponLoadPromises` : Map<modelName, Promise> — de-dupes concurrent
+    //                          loads. A failed/missing load leaves the model
+    //                          absent so that weapon falls back to the cylinder.
+    this._weaponTemplates   = new Map();
+    this._weaponLoadPromises = new Map();
     // ── Tree-pack GLB state (see `_loadTreePackManifest`) ─────────────────
     // `_treeTemplates`     : Map<filename, mesh>   — hidden source meshes,
     //                       one per unique GLB file loaded from the manifest.
@@ -2697,6 +2806,9 @@ export class Renderer3D {
     // if already resolved), so this never starts a duplicate network load.
     const afterInit = (fn) => babylonP.then(() => (this._scene ? fn() : null));
     const buildingsP = afterInit(() => this._loadBuildingModels(basePath));
+    // Held-weapon GLBs (sword/axe/rifle/dagger). Lazy + fault-isolated — a
+    // missing weapon GLB just falls back to the cylinder stand-in.
+    const weaponsP   = afterInit(() => this._loadWeaponModels(basePath));
     // Pre-warm the hero rig (and, transitively, the shared walking source) via
     // the generic cascade — the hero is just EntityType.PALADIN → paladin-idle.glb.
     const paladinP   = afterInit(() => this._loadFallbackRig(PALADIN_MODEL_FILE, basePath));
@@ -2715,6 +2827,7 @@ export class Renderer3D {
       { id: 'engine',     label: 'engine',     promise: babylonP,    progress: 0 },
       { id: 'sprites',    label: 'sprites',    promise: atlasP,      progress: 0 },
       { id: 'buildings',  label: 'buildings',  promise: buildingsP,  progress: 0 },
+      { id: 'weapons',    label: 'weapons',    promise: weaponsP,    progress: 0 },
       { id: 'paladin',    label: 'paladin',    promise: paladinP,    progress: 0 },
       { id: 'characters', label: 'characters', promise: charactersP, progress: 0 },
       { id: 'forest',     label: 'forest',     promise: treesP,      progress: 0 },
@@ -3218,6 +3331,112 @@ export class Renderer3D {
     })();
 
     this._buildingLoadPromises.set(relPath, promise);
+    return promise;
+  }
+
+  /** Kick off the load of every weapon GLB (lazily, in parallel). Fire-and-
+   *  forget from `beginLoad`; each load is de-duped + fault-isolated so a
+   *  missing/broken weapon GLB never blocks the others or gameplay (that
+   *  weapon simply falls back to the cylinder stand-in). Resolves once all
+   *  loads have settled. */
+  async _loadWeaponModels(basePath = this._assetsBasePath || 'assets') {
+    if (!this._babylon || !this._scene) return null;
+    const names = Object.keys(WEAPON_MODEL_FILES);
+    return Promise.all(names.map(name => this._loadWeaponModel(name, basePath)));
+  }
+
+  /** Lazy-load one weapon GLB (`<basePath>/<file>`) and stash it as a hidden
+   *  template in `_weaponTemplates` keyed by model name. Each held weapon is a
+   *  `mesh.clone(...)` of the template, parented to the standee's right-hand
+   *  bone (see `_syncStandeeWeapon`). The GLB is intentionally optional: any
+   *  loader / import / merge failure leaves the model absent from
+   *  `_weaponTemplates`, so that weapon keeps the cylinder stand-in. De-duped
+   *  per model via `_weaponLoadPromises`.
+   *
+   *  Mirrors `_loadBuildingModel`: same loaders-plugin registration, the same
+   *  geometry-mesh filter + MergeMeshes collapse, but it does NOT bake the
+   *  origin to the bottom — a held weapon's pivot is its grip, placed via the
+   *  per-model grip transform, not the ground. The template's long-axis span is
+   *  measured so `weaponGripLocalTransform` can derive a constant on-screen
+   *  size. */
+  async _loadWeaponModel(model, basePath = this._assetsBasePath || 'assets') {
+    if (!this._babylon || !this._scene || !model) return null;
+    const file = WEAPON_MODEL_FILES[model];
+    if (!file) return null;
+    const existing = this._weaponTemplates.get(model);
+    if (existing && existing.mesh) return existing.mesh;
+    if (this._weaponLoadPromises.has(model)) return this._weaponLoadPromises.get(model);
+    const BABYLON = this._babylon;
+
+    const promise = (async () => {
+      await this._ensureBabylonLoaders();
+      if (!BABYLON.SceneLoader || typeof BABYLON.SceneLoader.ImportMeshAsync !== 'function') {
+        console.warn('[Renderer3D] BABYLON.SceneLoader.ImportMeshAsync unavailable; skipping weapon model.');
+        return null;
+      }
+
+      let result;
+      try {
+        result = await BABYLON.SceneLoader.ImportMeshAsync(
+          null, `${basePath}/`, file, this._scene, this._glbProgressHandler('weapons'),
+        );
+      } catch (err) {
+        console.warn(`[Renderer3D] ${file} load failed; ${model} weapons use the cylinder stand-in.`, err);
+        return null;
+      }
+
+      const realMeshes = (result.meshes || []).filter(m =>
+        m && typeof m.getTotalVertices === 'function' && m.getTotalVertices() > 0,
+      );
+      if (realMeshes.length === 0) {
+        console.warn(`[Renderer3D] ${file} contained no geometry; ${model} weapons use the cylinder stand-in.`);
+        return null;
+      }
+
+      // Collapse to ONE source mesh so clones share a single vertex buffer.
+      let source = realMeshes[0];
+      if (realMeshes.length > 1 && typeof BABYLON.Mesh?.MergeMeshes === 'function') {
+        try {
+          const merged = BABYLON.Mesh.MergeMeshes(
+            realMeshes, true, true, undefined, false, true,
+          );
+          if (merged) source = merged;
+        } catch (err) {
+          console.warn(`[Renderer3D] ${file} merge failed; using first sub-mesh.`, err);
+          source = realMeshes[0];
+        }
+      }
+      if (!source) return null;
+
+      // Measure the natural long-axis span (largest bbox dimension) so the grip
+      // transform can scale every weapon to a constant on-screen size.
+      let longSpan = 1;
+      try {
+        const info = typeof source.getBoundingInfo === 'function' ? source.getBoundingInfo() : null;
+        const bb   = info?.boundingBox;
+        if (bb) {
+          const min = bb.minimumWorld ?? bb.minimum ?? {};
+          const max = bb.maximumWorld ?? bb.maximum ?? {};
+          const dx = Math.abs((max.x ?? 0) - (min.x ?? 0));
+          const dy = Math.abs((max.y ?? 0) - (min.y ?? 0));
+          const dz = Math.abs((max.z ?? 0) - (min.z ?? 0));
+          const span = Math.max(dx, dy, dz);
+          if (span > 0) longSpan = span;
+        }
+      } catch { /* keep longSpan = 1 */ }
+
+      // Hide the template — clones render geometry on its behalf.
+      if (typeof source.setEnabled === 'function') source.setEnabled(false);
+      source.isPickable = false;
+      if (typeof source.renderingGroupId !== 'undefined') source.renderingGroupId = WORLD_GROUP;
+      applyShadowReceiving([source, ...(typeof source.getChildMeshes === 'function' ? source.getChildMeshes() : [])]);
+
+      this._weaponTemplates.set(model, { mesh: source, longSpan });
+      console.log(`[Renderer3D] ${file} loaded (weapon model '${model}', long-span ${longSpan.toFixed(3)}).`);
+      return source;
+    })();
+
+    this._weaponLoadPromises.set(model, promise);
     return promise;
   }
 
@@ -4860,39 +5079,100 @@ export class Renderer3D {
   }
 
   /** ─── G6: weapon-in-hand ────────────────────────────────────────────────
-   *  Attach a per-standee weapon stand-in to the paladin's right-hand bone
-   *  when the entity has a weapon equipped; dispose it when the weapon is
-   *  dropped. Idempotent — safe to call every sync pass.
+   *  Attach a per-standee held weapon to the paladin's right-hand bone when the
+   *  entity has a weapon equipped; dispose it when the weapon is dropped, and
+   *  SWAP it when the equipped weapon changes to a different model. Idempotent —
+   *  safe to call every sync pass.
+   *
+   *  The equipped weapon id (src/items.js) maps to one of four GLB models via
+   *  `weaponModelForId` — sword/axe/rifle/dagger render the real model in the
+   *  fist; anything without a model (shield/staff/magic_bolt) or a model whose
+   *  GLB hasn't loaded yet falls back to the cylinder stand-in. `weaponKey`
+   *  records which variant is currently attached (`'glb:<model>'` |
+   *  `'cylinder'` | null) so a weapon change rebuilds and a pending GLB load
+   *  upgrades the cylinder once the template arrives.
    *
    *  Per-unit attachment on the SHARED skeleton works because Babylon's
    *  `attachToBone(bone, affectorMesh)` positions the mesh from the bone's
    *  LOCAL pose composed with the affector mesh's WORLD matrix. We pass the
-   *  standee's own skinned clone as the affector, so each unit's sword tracks
+   *  standee's own skinned clone as the affector, so each unit's weapon tracks
    *  that unit's hand — not a single shared hand. */
   _syncStandeeWeapon(standee, entity) {
     if (!standee) return;
-    const want = entityHasWeapon(entity) && !!standee.paladinClone;
-    if (want === !!standee.weaponMesh) return;  // already in the right state
-    if (!want) { this._disposeStandeeWeapon(standee); return; }
+    const equipped = (entityHasWeapon(entity) && !!standee.paladinClone)
+      ? getEquippedWeaponIdOf(entity?.items) : null;
+    if (!equipped) {
+      // No weapon (or no rig yet) → tear any attached weapon down.
+      if (standee.weaponMesh) this._disposeStandeeWeapon(standee);
+      return;
+    }
+    // Which variant do we WANT? A loaded GLB template wins; otherwise the
+    // cylinder stand-in (also the path for weapons with no GLB analogue).
+    const model = weaponModelForId(equipped);
+    const tpl   = model ? this._weaponTemplates.get(model) : null;
+    const wantKey = (model && tpl?.mesh) ? `glb:${model}` : 'cylinder';
+    if (standee.weaponKey === wantKey && standee.weaponMesh) return; // already correct
 
+    // Variant changed (equip swap, or the GLB finished loading) → rebuild.
+    if (standee.weaponMesh) this._disposeStandeeWeapon(standee);
+
+    const mesh = (wantKey === 'cylinder')
+      ? this._buildWeaponCylinder(standee, entity)
+      : this._buildWeaponGlbClone(standee, entity, model, tpl);
+    if (!mesh) return; // build failed — try again next pass (weaponKey stays null)
+    standee.weaponMesh = mesh;
+    standee.weaponKey  = wantKey;
+  }
+
+  /** Resolve the shared attach context (hand bone + affector + per-standee rig
+   *  scale) for a weapon mesh, or null if the rig isn't ready. */
+  _weaponAttachContext(standee) {
     const BABYLON = this._babylon;
-    const clone = standee.paladinClone;
+    const clone = standee?.paladinClone;
+    if (!BABYLON || !clone) return null;
     // Use the clone's OWN skeleton (every rig has its own), not the paladin's.
     const skeleton = clone.skinnedMesh?.skeleton || this._paladinSource?.skeleton || null;
-    if (!BABYLON?.MeshBuilder || !skeleton) return;
+    if (!skeleton) return null;
     const affector = clone.skinnedMesh || clone.mesh;
-    if (!affector || typeof affector.attachToBone !== 'function') return;
+    if (!affector || typeof affector.attachToBone !== 'function') return null;
     const handBone = findBoneByName(skeleton, WEAPON_BONE_NAME_RE);
-    if (!handBone) return;
-
-    // World-size blade → rig-LOCAL cylinder dims. The per-standee scale lives
-    // on the clone root; attachToBone folds it in via the affector's world
-    // matrix, so we divide it back out here to land a constant on-screen size.
-    // Read the clone root's actual scale so any rig (not just paladin) is right.
+    if (!handBone) return null;
+    // The per-standee scale lives on the clone root; attachToBone folds it in
+    // via the affector's world matrix, so callers divide it back out to land a
+    // constant on-screen size. Read the clone root's actual scale so any rig
+    // (not just the paladin) is right.
     const rigScale = (clone.mesh?.scaling?.x > 0) ? clone.mesh.scaling.x
       : (typeof this._paladinScale === 'number' && this._paladinScale > 0)
         ? this._paladinScale : PALADIN_BASE_SCALE;
-    const t = weaponStandInTransform(rigScale);
+    return { handBone, affector, rigScale };
+  }
+
+  /** Finish a weapon mesh: world-group / pickable flags, attach to the hand
+   *  bone, register as a shadow caster, and inherit the standee's current
+   *  fog/enabled state. The mesh is a SCENE-ROOT mesh (attachToBone drives only
+   *  its world transform, not scene-graph parentage), so it does NOT inherit
+   *  the standee plane's setEnabled state — mirror it explicitly here, or
+   *  equipping onto a fog-hidden unit flashes a weapon over an empty fogged hex
+   *  until the next `_applyFogVeil` pass (which keeps it synced thereafter). */
+  _finishWeaponMesh(standee, mesh, handBone, affector) {
+    mesh.isPickable = false;
+    if (typeof mesh.renderingGroupId !== 'undefined') mesh.renderingGroupId = WORLD_GROUP;
+    mesh.alwaysSelectAsActiveMesh = true;
+    if (typeof mesh.attachToBone === 'function') mesh.attachToBone(handBone, affector);
+    this._addShadowCaster(mesh);
+    if (standee.plane?.isEnabled?.() === false && typeof mesh.setEnabled === 'function') {
+      mesh.setEnabled(false);
+    }
+  }
+
+  /** Build the cylinder weapon stand-in (legacy fallback for weapons with no
+   *  GLB analogue, or while a GLB template is still loading). Returns the mesh
+   *  or null on failure. */
+  _buildWeaponCylinder(standee, entity) {
+    const BABYLON = this._babylon;
+    const ctx = this._weaponAttachContext(standee);
+    if (!BABYLON?.MeshBuilder || !ctx) return null;
+    const t = weaponStandInTransform(ctx.rigScale);
     let blade;
     try {
       blade = BABYLON.MeshBuilder.CreateCylinder(
@@ -4900,10 +5180,7 @@ export class Renderer3D {
         { height: t.height, diameter: t.diameter, tessellation: 6 },
         this._scene,
       );
-    } catch { return; }
-    blade.isPickable = false;
-    if (typeof blade.renderingGroupId !== 'undefined') blade.renderingGroupId = WORLD_GROUP;
-    blade.alwaysSelectAsActiveMesh = true;
+    } catch { return null; }
     // Steel-grey stand-in material (freshly created — never a shared material).
     if (BABYLON.StandardMaterial) {
       const mat = new BABYLON.StandardMaterial(`weapon_mat_${entity?.id ?? 'x'}`, this._scene);
@@ -4921,16 +5198,37 @@ export class Renderer3D {
       blade.position = new BABYLON.Vector3(t.offset.x, t.offset.y, t.offset.z);
       blade.rotation = new BABYLON.Vector3(t.rotation.x, t.rotation.y, t.rotation.z);
     }
-    blade.attachToBone(handBone, affector);
-    this._addShadowCaster(blade);
-    standee.weaponMesh = blade;
-    // Inherit the unit's CURRENT fog/enabled state at creation. The blade is a
-    // scene-root mesh (attachToBone drives only its world transform, not
-    // scene-graph parentage), so it does not auto-inherit the standee plane's
-    // setEnabled state. Without this, equipping a weapon onto a fog-hidden unit
-    // would flash a floating sword over an empty fogged hex until the next
-    // `_applyFogVeil` pass. (That pass also keeps it in sync thereafter.)
-    if (standee.plane?.isEnabled?.() === false) blade.setEnabled(false);
+    this._finishWeaponMesh(standee, blade, ctx.handBone, ctx.affector);
+    return blade;
+  }
+
+  /** Build a CLONE of a loaded weapon GLB template, gripped in the hand. The
+   *  clone shares the template's geometry + material (no per-unit material is
+   *  created), so the only added cost is one draw call per held weapon. The
+   *  per-model grip transform (scale / rotation / offset) positions the handle
+   *  at the bone with the long axis up-and-forward out of the fist. Returns the
+   *  clone or null on failure (caller leaves weaponKey null so a later pass
+   *  retries / falls back to the cylinder). */
+  _buildWeaponGlbClone(standee, entity, model, tpl) {
+    const BABYLON = this._babylon;
+    const ctx = this._weaponAttachContext(standee);
+    if (!BABYLON || !ctx || !tpl?.mesh || typeof tpl.mesh.clone !== 'function') return null;
+    const grip = weaponGripLocalTransform(model, tpl.longSpan, ctx.rigScale);
+    if (!grip) return null;
+    let mesh;
+    try {
+      mesh = tpl.mesh.clone(`weapon_${model}_${entity?.id ?? 'x'}`);
+    } catch { return null; }
+    if (!mesh) return null;
+    // The template is hidden (setEnabled(false)); a clone inherits that — re-enable.
+    if (typeof mesh.setEnabled === 'function') mesh.setEnabled(true);
+    if (BABYLON.Vector3) {
+      mesh.scaling  = new BABYLON.Vector3(grip.scale, grip.scale, grip.scale);
+      mesh.position = new BABYLON.Vector3(grip.offset.x, grip.offset.y, grip.offset.z);
+      mesh.rotation = new BABYLON.Vector3(grip.rotation.x, grip.rotation.y, grip.rotation.z);
+    }
+    this._finishWeaponMesh(standee, mesh, ctx.handBone, ctx.affector);
+    return mesh;
   }
 
   _disposeStandeeWeapon(standee) {
@@ -4939,11 +5237,15 @@ export class Renderer3D {
     if (typeof m.detachFromBone === 'function') { try { m.detachFromBone(); } catch { /* ignore */ } }
     this._removeShadowCaster(m);
     if (typeof m.dispose === 'function') m.dispose();
+    // The cylinder stand-in owns a freshly-created material; a GLB clone shares
+    // the template's material (don't dispose it). weaponMat is only set on the
+    // cylinder path, so disposing it here is safe for both.
     if (standee.weaponMat && typeof standee.weaponMat.dispose === 'function') {
       standee.weaponMat.dispose();
     }
     standee.weaponMesh = null;
     standee.weaponMat = null;
+    standee.weaponKey = null;
   }
 
   /** ─── G5: mounted / horse ───────────────────────────────────────────────

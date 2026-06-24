@@ -35,6 +35,7 @@ function makeStubbedRenderer() {
   r._initBabylon                  = () => defer('engine');
   r.loadImages                    = () => defer('sprites');
   r._loadBuildingModels           = () => defer('buildings');
+  r._loadWeaponModels             = () => defer('weapons');
   // Hero rig is pre-warmed through the generic cascade now (paladin-idle.glb).
   r._loadFallbackRig              = () => defer('paladin');
   // All other character meshes (mannequin + type rigs) preload as one item.
@@ -55,7 +56,7 @@ describe('Renderer3D loading bundle', () => {
 
     r.beginLoad();
     const firstBundle = r._assetBundle;
-    assert.equal(firstBundle.length, 7, 'bundle should have 7 items');
+    assert.equal(firstBundle.length, 8, 'bundle should have 8 items');
     assert.equal(initCalls, 1, '_initBabylon should run exactly once');
 
     r.beginLoad();
@@ -77,6 +78,7 @@ describe('Renderer3D loading bundle', () => {
     assert.equal(resolved, false, 'whenReady resolved before house/paladin/forest settled');
 
     settle.buildings.resolve();
+    settle.weapons.resolve();
     settle.paladin.resolve();
     settle.characters.resolve();
     await tick();
@@ -85,7 +87,7 @@ describe('Renderer3D loading bundle', () => {
     settle.forest.resolve();
     settle.terrain.resolve();
     await ready;
-    assert.equal(resolved, true, 'whenReady should resolve once all seven settle');
+    assert.equal(resolved, true, 'whenReady should resolve once all eight settle');
   });
 
   test('onProgress emits the aggregate fraction as each item settles', async () => {
@@ -102,21 +104,22 @@ describe('Renderer3D loading bundle', () => {
     settle.paladin.resolve();
     settle.characters.resolve();
     settle.buildings.resolve();
+    settle.weapons.resolve();
     settle.terrain.resolve();
     await r.whenReady();
 
-    assert.equal(ticks.length, 7, 'onProgress should fire exactly 7 times (once per settle)');
-    // Each settled item adds 1/7 to the aggregate, monotonically to 1.0.
+    assert.equal(ticks.length, 8, 'onProgress should fire exactly 8 times (once per settle)');
+    // Each settled item adds 1/8 to the aggregate, monotonically to 1.0.
     // Approximate compare — floating-point summation order produces sub-ULP
-    // differences vs. `i × (1/7)`.
-    const SEVENTH = 1 / 7;
-    const expected = [1, 2, 3, 4, 5, 6, 7].map(i => i * SEVENTH);
+    // differences vs. `i × (1/8)`.
+    const EIGHTH = 1 / 8;
+    const expected = [1, 2, 3, 4, 5, 6, 7, 8].map(i => i * EIGHTH);
     ticks.forEach((t, i) => assert.ok(Math.abs(t.progress01 - expected[i]) < 1e-9,
       `tick ${i} = ${t.progress01}, expected ~${expected[i]}`));
     // Every label was reported as the item that advanced.
     assert.deepEqual(
       ticks.map(t => t.label).sort(),
-      ['buildings', 'characters', 'engine', 'forest', 'paladin', 'sprites', 'terrain'],
+      ['buildings', 'characters', 'engine', 'forest', 'paladin', 'sprites', 'terrain', 'weapons'],
     );
   });
 
@@ -126,9 +129,9 @@ describe('Renderer3D loading bundle', () => {
     r.onProgress = (progress01, label) => ticks.push({ progress01, label });
     r.beginLoad();
 
-    // buildings at 50% of its bytes → 0.5 of one of seven items ≈ 0.0714 aggregate.
+    // buildings at 50% of its bytes → 0.5 of one of eight items ≈ 0.0625 aggregate.
     r._glbProgressHandler('buildings')({ lengthComputable: true, loaded: 50, total: 100 });
-    assert.equal(ticks.at(-1).progress01, 0.5 / 7);
+    assert.equal(ticks.at(-1).progress01, 0.5 / 8);
     assert.equal(ticks.at(-1).label, 'buildings');
 
     // A regressing fraction is ignored — the bar never goes backwards.
@@ -142,7 +145,7 @@ describe('Renderer3D loading bundle', () => {
 
     // Advancing further re-emits a higher aggregate.
     r._glbProgressHandler('buildings')({ lengthComputable: true, loaded: 100, total: 100 });
-    assert.equal(ticks.at(-1).progress01, 1 / 7, 'buildings fully streamed → 1/7 of the bundle');
+    assert.equal(ticks.at(-1).progress01, 1 / 8, 'buildings fully streamed → 1/8 of the bundle');
 
     // An unknown id is a no-op (no crash, no emit).
     const beforeUnknown = ticks.length;
@@ -161,14 +164,15 @@ describe('Renderer3D loading bundle', () => {
     await tick();
     settle.sprites.resolve();
     settle.buildings.reject(new Error('buildings church.glb 404'));   // simulated GLB failure
+    settle.weapons.reject(new Error('Sword.glb 404'));                // simulated weapon GLB failure
     settle.paladin.reject(new Error('paladin.glb 404'));
     settle.characters.resolve();
     settle.forest.resolve();
     settle.terrain.resolve();
 
-    // whenReady must resolve (not reject) despite two rejected items.
+    // whenReady must resolve (not reject) despite the rejected items.
     await assert.doesNotReject(r.whenReady());
-    assert.equal(count, 7, 'progress should tick for failed items too');
+    assert.equal(count, 8, 'progress should tick for failed items too');
     assert.equal(last, 1.0, 'aggregate reaches 1.0 even when items fail');
   });
 
