@@ -1,6 +1,6 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
 import { hexKey, hexToPixel, hexDistance, MAP_COLS, MAP_ROWS } from './hex.js';
-import { ICON, coloredResourceIcon, coloredResourceLabel } from './icons.js';
+import { ICON, coloredResourceIcon, coloredResourceLabel, tintResourceGlyphs } from './icons.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, FORTIFY_HP_PER_LEVEL, getFortifyCombatBonus, legacyTileType } from './tiles.js';
 import { ITEMS, lootDisplayLabel } from './items.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf, rangeOf, getEquippedWeaponIdOf, getItemCountOf, totalItemCount, applyProjectedEquip } from './entities.js';
@@ -6164,8 +6164,12 @@ export class UIController {
       targetOut = out(entry.targetDmg > 0 ? `−${entry.targetDmg}` : '', kind);
     } else {
       // Move / explore / etc.: the note (BLOCKED / "+1 RESOURCE") sits centred.
+      // Loot/explore notes carry resource glyphs (e.g. " Wood" / " Herbs"); tint
+      // each by type so the glyph reads brown/green while the label stays
+      // ambient. Non-resource notes (BLOCKED / FOUND SURVIVOR / …) pass through
+      // unchanged — tintResourceGlyphs only touches the six resource PUA glyphs.
       actorOut  = out('', '');
-      centerOut = entry.note ? out(entry.note.text, entry.note.kind) : out('', '');
+      centerOut = entry.note ? out(tintResourceGlyphs(entry.note.text), entry.note.kind) : out('', '');
       targetOut = out('', '');
     }
 
@@ -6422,8 +6426,13 @@ export class UIController {
     if (loot.length) {
       const tally = new Map();
       for (const it of loot) { const k = String(it).replace(/^\+/, ''); tally.set(k, (tally.get(k) ?? 0) + 1); }
+      // Tint each pip's leading resource glyph by type (wood brown, herbs green,
+      // …) while the label text stays ambient. esc() runs first for safety; the
+      // resource PUA glyphs are not &<> so they survive escaping, and
+      // tintResourceGlyphs wraps only those six glyphs — horse/weapon pips pass
+      // through ambient.
       const pips = [...tally.entries()].map(([label, n]) =>
-        `<span class="wrapup-loot-pip">${esc(label)}${n > 1 ? `<span class="wrapup-loot-x">×${n}</span>` : ''}</span>`
+        `<span class="wrapup-loot-pip">${tintResourceGlyphs(esc(label))}${n > 1 ? `<span class="wrapup-loot-x">×${n}</span>` : ''}</span>`
       ).join('');
       lootHtml = `<div class="wrapup-loot"><div class="wrapup-found-label">Looted</div>`
         + `<div class="wrapup-loot-row">${pips}</div></div>`;
