@@ -116,8 +116,14 @@ import { attachRoadEdgeToMaterial } from './road-edge-plugin.js';
 // own internal copy of core, so the plugin registered on the wrong BABYLON
 // and SceneLoader rejected GLB files with "Unable to find a plugin to load
 // .glb".)
-const BABYLON_CORE_LOCAL    = '/assets/vendor/babylonjs/babylon.js';
-const BABYLON_LOADERS_LOCAL = '/assets/vendor/babylonjs/babylonjs.loaders.min.js';
+// RELATIVE paths (no leading slash) so they resolve under every host root: the
+// dev server (`/`), capacitor://localhost/, the Electron file root, AND a static
+// itch.io zip served from a sub-path (e.g. html.itch.zone/html/<id>/). A leading
+// slash anchors to the ORIGIN root, which 404s on itch's sub-path host and left
+// Babylon unloaded → the 3D renderer never initialised (black canvas, no game).
+// Same bug class as the missing-CSS regression guarded by cap-web-assets.test.js.
+const BABYLON_CORE_LOCAL    = 'assets/vendor/babylonjs/babylon.js';
+const BABYLON_LOADERS_LOCAL = 'assets/vendor/babylonjs/babylonjs.loaders.min.js';
 
 // ─── House GLB model (replaces the procedural box+roof building) ───────────
 // Path is relative to the assets base directory (`assets/` in production), so
@@ -6989,7 +6995,7 @@ export class Renderer3D {
         // no-op and the warn below makes that explicit to the operator.
         await new Promise((resolve, reject) => {
           const s = document.createElement('script');
-          s.src = '/assets/vendor/babylonjs/babylon.inspector.bundle.js';
+          s.src = 'assets/vendor/babylonjs/babylon.inspector.bundle.js'; // relative — see BABYLON_CORE_LOCAL note
           s.onload = resolve;
           s.onerror = () => reject(new Error('script load failed'));
           document.head.appendChild(s);
