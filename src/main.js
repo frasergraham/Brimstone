@@ -84,6 +84,7 @@ import {
   debriefPartyHTML as _debriefPartyHTML, debriefRewardsSectionHTML as _debriefRewardsSectionHTML,
   missionRows as _missionRows,
   departureMessage as _departureMessage, arrivalMessage as _arrivalMessage,
+  buildDeployPartyPreview as _buildDeployPartyPreview,
 } from './campaign/campaign-ui.js';
 import { requestNotificationPermission, notifyRoundReady, notifyWaitingOnYou, notifyDeadlineApproaching, notifyGameOver } from './notifications.js';
 import { mmSortRows, mmFormatRow, mmDedupeCampaignRows } from './main-menu-games.js';
@@ -9730,6 +9731,40 @@ function _ledgerCampaignParty(slot) {
   return { started, title: camp.title, html: _ledgerPartyHTML() };
 }
 
+// Read-only "who deploys this mission" preview for the Begin Mission screen.
+// Loads the campaign on the chosen slot, seeds the working squad exactly as the
+// launch path does, then resolves the deploy set through the SAME
+// resolveDeployIndices() call _initCampaignMission uses — so the displayed party
+// CANNOT drift from what actually deploys ("what you see is what deploys"). The
+// mapping into a display shape is the pure buildDeployPartyPreview helper.
+// Returns null when there's no campaign/mission (the strip is then skipped).
+function _ledgerBeginMissionParty(slot, missionId) {
+  const camp = CAMPAIGNS.find(c => !c.disabled) || CAMPAIGNS[0];
+  if (!camp) return null;
+  _activeCampaign = new Campaign(camp, slot);
+  _activeCampaign.load();
+  const missionDef = missionId && _activeCampaign.getMissionDef?.(missionId);
+  if (!missionDef) return null;
+  // Seed the live working selection from the persisted squad (the Ledger path
+  // skips the Party screen), mirroring _ledgerStartCampaignMission.
+  _seedActiveRosterForProgress();
+  const maxFromRoster = _effectivePartyCap(
+    missionDef.maxSurvivorsFromRoster, missionDef.id, 'maxSurvivorsFromRoster');
+  const toDeploy = resolveDeployIndices(_activeRosterIndices, _activeCampaign, maxFromRoster);
+  return _buildDeployPartyPreview(_activeCampaign.heroStats, _activeCampaign.roster, toDeploy);
+}
+
+// Abandon a mid-mission save so the next Begin starts the mission FRESH. This
+// deletes ONLY the mission-in-progress localStorage key (deleteCampaignMissionSave)
+// — it must NEVER call Campaign.delete(), which would wipe the entire playthrough
+// (roster, progress, resources). That total wipe is the slot ✕ (deleteCampaignSlot).
+// Mirrors the _ledgerAbandonRow 'local-campaign' branch.
+function _ledgerAbandonMissionSave(slot, missionId) {
+  const camp = CAMPAIGNS.find(c => !c.disabled) || CAMPAIGNS[0];
+  if (!camp || !missionId) return;
+  deleteCampaignMissionSave(camp.id, missionId, slot ?? 1);
+}
+
 function _ledgerPartyAction(kind, target, weapon) {
   if (!_activeCampaign) return '';
   const maxActive = _progressMaxActive();
@@ -9882,6 +9917,10 @@ function _buildLedgerData() {
     },
     startMission:     (slot, missionId, resume) => _ledgerStartCampaignMission(slot, missionId, resume),
     campaignParty:    (slot) => _ledgerCampaignParty(slot),
+    // Read-only "who deploys" preview for the Begin Mission screen (== deploy set).
+    beginMissionParty: (slot, missionId) => _ledgerBeginMissionParty(slot, missionId),
+    // Delete ONLY the mid-mission save (not the playthrough) so Begin starts fresh.
+    abandonMissionSave: (slot, missionId) => _ledgerAbandonMissionSave(slot, missionId),
     deleteCampaignSlot: (slot) => {
       const camp = CAMPAIGNS.find(c => !c.disabled) || CAMPAIGNS[0];
       if (!camp) return;
