@@ -1,6 +1,6 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
 import { hexKey, hexToPixel, hexDistance, MAP_COLS, MAP_ROWS } from './hex.js';
-import { ICON } from './icons.js';
+import { ICON, coloredResourceIcon, coloredResourceLabel } from './icons.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, FORTIFY_HP_PER_LEVEL, getFortifyCombatBonus, legacyTileType } from './tiles.js';
 import { ITEMS, lootDisplayLabel } from './items.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf, rangeOf, getEquippedWeaponIdOf, getItemCountOf, totalItemCount, applyProjectedEquip } from './entities.js';
@@ -2375,7 +2375,7 @@ export class UIController {
         case ActionType.SOUND_HORN:
           arcItems.push({ group: 'scout', label: 'Sound Horn', fullLabel: 'Sound Horn — call hidden survivors within 4 hexes, but reveal your position this round (1 action, 1 food)',
             desc: 'Calls hidden survivors within 4 hexes, but reveals your position this round.',
-            color: '#7eccd6', dis: !action.affordable || dis, cost: 1, resCost: `1 ${RESOURCE_LABEL[ResourceType.FOOD]}`, attrs: 'data-action="sound_horn"' });
+            color: '#7eccd6', dis: !action.affordable || dis, cost: 1, resCost: `1 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.FOOD])}`, attrs: 'data-action="sound_horn"' });
           break;
         case ActionType.GUARD: {
           const charges = action.currentCharges || 0;
@@ -2398,7 +2398,7 @@ export class UIController {
           const doublerGain = Math.min(MAX_FORTIFY_LEVEL, cur + 2) - cur;
           const woodGain    = Math.min(MAX_FORTIFY_LEVEL, cur + 1) - cur;
           const shortLbl = hasMetal ? 'Reinforce Hex' : 'Fortify Hex';
-          const fortRes = hasMetal ? `1 ${RESOURCE_LABEL[ResourceType.METAL]}` : `1 ${RESOURCE_LABEL[ResourceType.WOOD]}`;
+          const fortRes = hasMetal ? `1 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.METAL])}` : `1 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.WOOD])}`;
           const fullLbl = hasMetal
             ? `Reinforce +${metalGain} lvl (1 metal)`
             : hasDoubler
@@ -2426,7 +2426,7 @@ export class UIController {
           }
           arcItems.push({ group: 'items', label: 'Heal', fullLabel: action.atFullHp ? 'Already at full HP' : 'Herbs (heal 2D10 HP)',
             desc: action.atFullHp ? 'Already at full HP.' : 'Spend 1 herb to heal this unit 2D10 HP. (1 action)',
-            color: '#55cc55', dis: healDis, cost: 1, resCost: `1 ${RESOURCE_LABEL[ResourceType.HERBS]}`,
+            color: '#55cc55', dis: healDis, cost: 1, resCost: `1 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.HERBS])}`,
             attrs: 'data-action="heal"' });
           break;
         }
@@ -2504,8 +2504,8 @@ export class UIController {
           .map(o => o.summonType)
       );
       const ALL_SUMMONS = [
-        { st: EntityType.IRON_GOLEM, label: 'Summon Iron Golem',  full: 'Summon Iron Golem (2 metal)',  afford: projMetal >= 2, res: `2 ${RESOURCE_LABEL[ResourceType.METAL]}` },
-        { st: EntityType.WOOD_GOLEM, label: 'Summon Wood Golem', full: 'Summon Wood Golem (2 wood)',   afford: projWood >= 2, res: `2 ${RESOURCE_LABEL[ResourceType.WOOD]}` },
+        { st: EntityType.IRON_GOLEM, label: 'Summon Iron Golem',  full: 'Summon Iron Golem (2 metal)',  afford: projMetal >= 2, res: `2 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.METAL])}` },
+        { st: EntityType.WOOD_GOLEM, label: 'Summon Wood Golem', full: 'Summon Wood Golem (2 wood)',   afford: projWood >= 2, res: `2 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.WOOD])}` },
         { st: EntityType.MINION,     label: 'Summon Minion',      full: 'Summon Minion (2 any resource)', afford: projTotal >= 2, res: '2 res' },
       ];
       for (const s of ALL_SUMMONS) {
@@ -3926,7 +3926,7 @@ export class UIController {
       }
     };
     const rows = parts.filter(p => p.value > 0).map(p => ({ key: p.key, label: labelFor(p), value: p.value }));
-    const foodLabel = food > 0 ? `${ICON.food} Food ×${food}` : '';
+    const foodLabel = food > 0 ? `${coloredResourceIcon('food')} Food ×${food}` : '';
     return { parts, rows, total, food, foodLabel };
   }
 
@@ -4787,10 +4787,11 @@ export class UIController {
       const hp     = tile.fortifyHP ?? tile.fortifyLevel * FORTIFY_HP_PER_LEVEL;
       const lvlMax = tile.fortifyLevel * FORTIFY_HP_PER_LEVEL;
       const hpStr  = `${hp}/${lvlMax} HP`;
-      const fl = tile.fortifyLevel >= 5 ? `${ICON.metal}${ICON.metal}${ICON.metal} Bastion (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`
-               : tile.fortifyLevel >= 3 ? `${ICON.metal}${ICON.metal} Heavily Reinforced (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`
-               : tile.fortifyLevel >= 2 ? `${ICON.metal} Metal Reinforced (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`
-               : `${ICON.wood} Fortified (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`;
+      const metalIcon = coloredResourceIcon('metal');
+      const fl = tile.fortifyLevel >= 5 ? `${metalIcon}${metalIcon}${metalIcon} Bastion (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`
+               : tile.fortifyLevel >= 3 ? `${metalIcon}${metalIcon} Heavily Reinforced (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`
+               : tile.fortifyLevel >= 2 ? `${metalIcon} Metal Reinforced (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`
+               : `${coloredResourceIcon('wood')} Fortified (lvl ${tile.fortifyLevel}: ${bonusStr} · ${hpStr})`;
       linesHtml += `<div class="tile-zoom-info-line fortified">${fl}</div>`;
     }
     if (!tile.explored) linesHtml += `<div class="tile-zoom-info-line">— unexplored —</div>`;
@@ -4893,7 +4894,7 @@ export class UIController {
     const rows = entries.length
       ? entries.map(([k, v]) =>
           `<div class="inv-resource-row">
-            <span class="inv-resource-label">${RESOURCE_LABEL[k] || k}</span>
+            <span class="inv-resource-label">${coloredResourceLabel(RESOURCE_LABEL[k] || k)}</span>
             <span class="inv-resource-val">×${v.count}</span>
           </div>`
         ).join('')
@@ -5236,12 +5237,12 @@ export class UIController {
         const foundEntries = Object.entries(foundRes);
         const usedEntries  = Object.entries(usedRes);
         if (foundEntries.length > 0) {
-          const foundStr = foundEntries.map(([id, n]) => `${RESOURCE_LABEL[id] || id} \u00d7${n}`).join('   ');
+          const foundStr = foundEntries.map(([id, n]) => `${coloredResourceLabel(RESOURCE_LABEL[id] || id)} \u00d7${n}`).join('   ');
           html += `<div class="summary-resources found">${ICON.storehouse} Found: ${foundStr}</div>`;
         }
         if (usedEntries.length > 0) {
           const usedStr = usedEntries.map(([id, n]) =>
-            id === 'res' ? `${n} res` : `${RESOURCE_LABEL[id] || id} \u00d7${n}`
+            id === 'res' ? `${n} res` : `${coloredResourceLabel(RESOURCE_LABEL[id] || id)} \u00d7${n}`
           ).join('   ');
           html += `<div class="summary-resources used">${ICON.sentTo} Spent: ${usedStr}</div>`;
         }
@@ -6584,7 +6585,7 @@ function _buildTerrainBadge(tile, nodeBadge = '') {
     const lvl    = tile.fortifyLevel;
     const hp     = tile.fortifyHP ?? lvl * FORTIFY_HP_PER_LEVEL;
     const lvlMax = lvl * FORTIFY_HP_PER_LEVEL;
-    parts.push(`<span class="usb-terrain-fort">${ICON.metal} Fort L${lvl} · ${hp}/${lvlMax} HP</span>`);
+    parts.push(`<span class="usb-terrain-fort">${coloredResourceIcon('metal')} Fort L${lvl} · ${hp}/${lvlMax} HP</span>`);
   }
   if (nodeBadge) {
     parts.push(nodeBadge);

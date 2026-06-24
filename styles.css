@@ -7394,6 +7394,21 @@ body.spectator-mode #game-screen   { display: flex !important; }
   font-size: var(--fs-base);
 }
 
+/* ── Resource icon tint ─────────────────────────────────────────────────── */
+/* The BrimstoneIcons resource glyphs are monochrome and inherit `color`; these
+   classes tint each by type so wood reads brown, herbs green, etc., wherever a
+   resource icon is rendered in player-facing UI. Applied via the helpers in
+   src/icons.js (coloredResourceIcon / coloredResourceLabel). Only the glyph
+   carries the class — surrounding label text stays on the ambient color. */
+.res-icon { font-family: var(--font-icons); }
+.res-icon--wood      { color: #b07a45; } /* warm timber brown */
+.res-icon--metal     { color: #9aa6b2; } /* cold steel grey-blue */
+.res-icon--food      { color: #e0883a; } /* warm ration orange */
+.res-icon--silver    { color: #cfd6dd; } /* bright silvery white */
+.res-icon--scripture { color: #d8b25c; } /* aged parchment / gilt */
+.res-icon--herbs,
+.res-icon--herb      { color: #6fbf73; } /* living-green herb */
+
 /* ── ⚰ Fallen memorial ─────────────────────────────────────────────────── */
 /* Tombstone cards for survivors lost to permadeath. Desaturated + greyed,
    reusing the .campaign-party-card layout patterns. */

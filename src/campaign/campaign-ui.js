@@ -2,7 +2,7 @@
 // Extracted from main.js to reduce its size and colocate campaign logic.
 
 import { Renderer } from '../renderer.js';
-import { ICON } from '../icons.js';
+import { ICON, coloredResourceIcon } from '../icons.js';
 import { ENTITY_COLOR, EntityType, getEquippedWeaponIdOf } from '../entities.js';
 import { xpForLevel } from '../balance.js';
 import { ITEMS } from '../items.js';
@@ -228,7 +228,7 @@ export function rewardsSectionHTML(rewards) {
   }
   if (resEntries.length) {
     const chips = resEntries.map(([k, v]) =>
-      `<span class="reward-resource"><span class="reward-res-icon">${RESOURCE_ICONS[k] || '\uE016'}</span>+${v} ${k}</span>`
+      `<span class="reward-resource"><span class="reward-res-icon res-icon res-icon--${k}">${RESOURCE_ICONS[k] || '\uE016'}</span>+${v} ${k}</span>`
     ).join('');
     body += `<div class="reward-resources">\uE09F ${chips}</div>`;
   }
@@ -311,7 +311,7 @@ function resourceGridHTML(resources) {
   for (const [k, v] of Object.entries(resources || {})) {
     if (!(v > 0)) continue;
     slots.push(`<div class="cprog-slot is-resource" title="${k}">`
-      + `<span class="cprog-slot-glyph">${RESOURCE_ICONS[k] || '\uE016'}</span>`
+      + `<span class="cprog-slot-glyph res-icon res-icon--${k}">${RESOURCE_ICONS[k] || '\uE016'}</span>`
       + `<span class="cprog-slot-n">×${v}</span>`
       + `<span class="cprog-slot-name">${k}</span></div>`);
   }
@@ -455,7 +455,7 @@ export function progressUnitCardHTML(unit, opts = {}) {
     ? `<button class="cprog-ctrl ${control.cls}" data-idx="${idx}" title="${control.title}">${control.label}</button>`
     : '';
   const healHtml = canHeal
-    ? `<button class="cprog-heal-btn" data-idx="${idx}">${ICON.herb} Use 1 herb</button>`
+    ? `<button class="cprog-heal-btn" data-idx="${idx}">${coloredResourceIcon('herbs')} Use 1 herb</button>`
     : '';
 
   return `<div class="${cls.join(' ')}" data-idx="${idx}" data-drop="unit">
@@ -652,7 +652,7 @@ export function debriefRewardsSectionHTML(rewards) {
   }
   if (resEntries.length) {
     const chips = resEntries.map(([k, v]) =>
-      `<span class="reward-resource"><span class="reward-res-icon">${RESOURCE_ICONS[k] || '\uE016'}</span>+${v} ${k}</span>`
+      `<span class="reward-resource"><span class="reward-res-icon res-icon res-icon--${k}">${RESOURCE_ICONS[k] || '\uE016'}</span>+${v} ${k}</span>`
     ).join('');
     body += `<div class="reward-resources">\uE09F ${chips}</div>`;
   }
