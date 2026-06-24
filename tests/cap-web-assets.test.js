@@ -201,6 +201,29 @@ test('styles-ledger.css (ledger menu) is in BOTH copy manifests (regression)', (
   );
 });
 
+test('itch.io build injects the static-build marker (window.BRIMSTONE_ITCH = true)', () => {
+  // The menu (src/menu/ledger.js via src/demo-config.js isStaticBuild) reads
+  // window.BRIMSTONE_ITCH to hide the online-only rail entries (Play Online +
+  // Account) — there's no server on the static host, so they'd only error on
+  // click. build-itch.js must inject the flag into the built index.html, and it
+  // must be valid JS (a `window.BRIMSTONE_ITCH = true` assignment in a <script>).
+  const patchMatch = itchScript.match(/const ITCH_PATCH\s*=\s*`([\s\S]*?)`/);
+  assert.ok(patchMatch, 'build-itch.js should define an ITCH_PATCH template injected into index.html');
+  const patch = patchMatch[1];
+  assert.match(patch, /<script>/, 'the patch must wrap the flag in a <script> tag');
+  assert.match(
+    patch,
+    /window\.BRIMSTONE_ITCH\s*=\s*true\s*;?/,
+    'build-itch.js must inject `window.BRIMSTONE_ITCH = true` so the menu hides the online-only entries',
+  );
+  // And it must actually be spliced into the head (not just defined).
+  assert.match(
+    itchScript,
+    /replace\(\s*['"]<\/head>['"]\s*,\s*ITCH_PATCH/,
+    'build-itch.js must splice ITCH_PATCH into index.html before </head>',
+  );
+});
+
 // ── itch.io ships the 3D-renderer RUNTIME assets (not just the styled menu) ───
 // The original CSS fix made the menu render, but the build shipped NONE of the
 // runtime assets the 3D renderer fetches in-game (GLB models, terrain textures,
