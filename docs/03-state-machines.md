@@ -96,8 +96,15 @@ One full cycle = **8 rounds**:
 Round:  0       1       2       3       4       5       6       7       0 ...
 Phase:  DAWN    DAY     DAY     DAY     DUSK    NIGHT   NIGHT   NIGHT   DAWN ...
         ├─1r─┤  ├──────3 rounds──────┤  ├─1r─┤  ├──────3 rounds──────┤
-        score                           score
+            ⮑score                          ⮑score
 ```
+
+Scoring is evaluated at the **END** of each DAWN and DUSK round — against the
+unit positions the round finishes with, after that round's actions resolve. A
+unit must still hold the node when the dawn/dusk round *ends* to count; merely
+standing on it as the round *begins* no longer scores. (In `endRound()` this is
+keyed on `prevPhase` — the phase of the round that just resolved — not the live
+phase, which has already advanced to the next round.)
 
 ### Phase Diagram
 
@@ -136,11 +143,14 @@ Phase:  DAWN    DAY     DAY     DAY     DUSK    NIGHT   NIGHT   NIGHT   DAWN ...
 
 ### Scoring at Dawn/Dusk
 
-At each DAWN and DUSK checkpoint:
-1. Count faction control per Power Node (presence = control)
-2. **Sweep check**: if one faction holds all 3 nodes → instant win
-3. **Majority**: faction with more nodes scores 1 point
-4. **First to 3 points wins** (equivalently, 4 points in the code but initial state starts at 1)
+At the **end** of each DAWN and DUSK round (`endRound()`, keyed on `prevPhase`):
+1. Count faction control per Power Node from the round's final positions
+   (majority of a node's hexes occupied by one faction = control)
+2. **Majority**: faction with more nodes scores 1 point (ties score nothing)
+3. **First to 4 points wins** (`nodeScoreThreshold`, default 4)
+
+Holding *all* nodes no longer triggers an instant win — it just scores the
+majority point like any other lead.
 
 ---
 
@@ -202,7 +212,7 @@ Each round follows a strict planning → resolution → post-round sequence.
 │    ├── Increment round counter                                   │
 │    ├── Recalculate phase from round number                       │
 │    ├── Apply post-round effects (hazards, attrition)             │
-│    ├── At DAWN/DUSK: check node objectives → score points        │
+│    ├── If the round just ended was DAWN/DUSK: score node control │
 │    └── checkVictory()                                            │
 │         ├── Custom delegate (campaign missions)                  │
 │         ├── Leader elimination                                   │

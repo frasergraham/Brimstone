@@ -18,7 +18,7 @@ import { PlanActionType, actionCosts, computeGhostState, computeProjectedInvento
 import { ABILITIES } from './abilities.js';
 import { buildRollRows, buildOutcomeSummary, buildTurnCardHoverOverlays, battleOutcomeWord, compactUneventfulTurns } from './replay-timeline.js';
 import { compileTurnBattleSummary, compileTurnXpSummary } from './battle-utils.js';
-import { buildWrapupCombatsHtml, wrapupIconHtml } from './wrapup-summary.js';
+import { buildWrapupCombatsHtml, wrapupIconHtml, buildWrapupReckoningHtml, reckoningText } from './wrapup-summary.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
 import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildMissionLogHtml, buildMissionLogDescriptionHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, buildCycleDeadlineHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos, TurnCardAutoScroll, shouldAutoScrollToActive, computeFadeFlags, buildActionPipsHtml, buildActionBudgetTooltipHtml, levelPillHtml } from './ui-render.js';
@@ -5289,26 +5289,26 @@ export class UIController {
           }
         }
 
-        // Reckoning section at dawn/dusk (skip when scoring is disabled, e.g. campaign missions)
+        // Reckoning section for the round just fought, when it was a dawn/dusk
+        // scoring checkpoint (skip when scoring is disabled, e.g. campaign
+        // missions). Scoring now happens at the END of the dawn/dusk round, so
+        // state.phase has already advanced — key on the FOUGHT round's phase,
+        // derived from its round number, not the live phase.
         const state = this.state;
-        if (!state.disableScoring && prevScore && (state.phase === 'dawn' || state.phase === 'dusk')) {
-          const heroDelta  = state.nodeScore.hero  - prevScore.hero;
-          const witchDelta = state.nodeScore.witch - prevScore.witch;
+        const foughtPhase = phaseForRound(roundNum, state.cycleConfig);
+        if (!state.disableScoring && prevScore && (foughtPhase === 'dawn' || foughtPhase === 'dusk')) {
           const witchCount = state.witchObjectives.filter(obj =>
             nodeController(obj, state.entities) === 'witch').length;
           const heroCount = state.witchObjectives.filter(obj =>
             nodeController(obj, state.entities) === 'hero').length;
 
-          const phaseLabel = state.phase === 'dawn' ? '\uE020 Dawn Reckoning' : '\uE022 Dusk Reckoning';
+          const phaseLabel = foughtPhase === 'dawn' ? '\uE020 Dawn Reckoning' : '\uE022 Dusk Reckoning';
 
-          let reckoningLine;
-          if (witchDelta > 0) {
-            reckoningLine = `Witch holds ${witchCount} Power Node${witchCount !== 1 ? 's' : ''} to Hero's ${heroCount}. Witch scores 1 victory point.`;
-          } else if (heroDelta > 0) {
-            reckoningLine = `Hero holds ${heroCount} Power Node${heroCount !== 1 ? 's' : ''} to Witch's ${witchCount}. Hero scores 1 victory point.`;
-          } else {
-            reckoningLine = `Nodes tied ${heroCount}–${witchCount}. No points scored.`;
-          }
+          const reckoningLine = reckoningText({
+            heroDelta:  state.nodeScore.hero  - prevScore.hero,
+            witchDelta: state.nodeScore.witch - prevScore.witch,
+            heroCount, witchCount,
+          });
 
           const pip = (filled, cls) =>
             `<span class="score-pip ${cls}${filled ? ' filled' : ''}"></span>`;
@@ -6340,7 +6340,7 @@ export class UIController {
    * @param {object} opts { titleHtml, bodyHtml, canReplay }
    * @returns {Promise<'next'|'replay'>}
    */
-  showReplayWrapUp({ titleHtml = 'Turn Complete', combats = [], discoveries = [], loot = [], attrition = [], attritionLevel = 0, canReplay = true, humanFaction = null } = {}) {
+  showReplayWrapUp({ titleHtml = 'Turn Complete', combats = [], discoveries = [], loot = [], attrition = [], attritionLevel = 0, reckoning = null, canReplay = true, humanFaction = null } = {}) {
     // Remember whose units the local player controls so a board click on one of
     // them can dismiss this wrap-up as Continue. Falls back to state.myFaction
     // (set for online/async) when not passed explicitly.
@@ -6357,7 +6357,7 @@ export class UIController {
     card.setAttribute('data-step', 'wrapup');
     card.innerHTML =
       `<div class="replay-step-label">${titleHtml}</div>`
-      + `<div class="replay-wrapup-body">${this._buildWrapUpBody(combats, attritionLevel, discoveries, loot, attrition)}</div>`
+      + `<div class="replay-wrapup-body">${this._buildWrapUpBody(combats, attritionLevel, discoveries, loot, attrition, reckoning)}</div>`
       + `<div class="replay-wrapup-actions">${replayBtn}`
       + `<button class="replay-wrapup-btn primary" data-act="next">Continue ▸</button></div>`;
     track.appendChild(card);
@@ -6395,7 +6395,7 @@ export class UIController {
    * skull) beneath each unit, plus the node-score dots reused from the bottom
    * score bar.
    */
-  _buildWrapUpBody(combats, attritionLevel = 0, discoveries = [], loot = [], attrition = []) {
+  _buildWrapUpBody(combats, attritionLevel = 0, discoveries = [], loot = [], attrition = [], reckoning = null) {
     const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const iconFor = (u, size, cls) => {
       const assetId = _entityPortraitId({ type: u.type, title: u.title });
@@ -6462,6 +6462,11 @@ export class UIController {
         + `<div class="wrapup-attr-rows">${rows}</div></div>`;
     }
 
+    // Power Node reckoning callout — names the victory point scored this round
+    // (or the tie). Sits just above the score dots so the "why" reads into the
+    // updated track. Empty string on non-scoring rounds.
+    const reckoningHtml = buildWrapupReckoningHtml(reckoning);
+
     let scoreHtml = '';
     if (this.state?.witchObjectives) {
       const { html } = buildObjectivesHtml(
@@ -6475,7 +6480,7 @@ export class UIController {
       attritionHtml = `<div class="wrapup-attrition">${ICON.night} The curse deepens — exposed survivors `
         + `now take <b>${attritionLevel}</b> damage each night.</div>`;
     }
-    return attritionHtml + combatHtml + foundHtml + lootHtml + attritionListHtml + scoreHtml;
+    return attritionHtml + combatHtml + foundHtml + lootHtml + attritionListHtml + reckoningHtml + scoreHtml;
   }
 
   /** Show the prev/next scrub arrows above the active card. */

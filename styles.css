@@ -5939,6 +5939,28 @@ img.plan-step-avatar {
 .wrapup-attr-dmg { color: #ff8a8a; font-weight: 700; }
 .wrapup-attr-note { color: var(--text-dim); font-size: var(--fs-2xs); font-style: italic; }
 /* Score — the bottom score-bar dots/pips, reused. */
+.wrapup-reckoning {
+  margin-top: 0.2rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid rgba(200, 168, 75, 0.25);
+  text-align: center;
+}
+.wrapup-reckoning-title {
+  font-size: var(--fs-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 0.2rem;
+}
+.wrapup-reckoning-result {
+  font-size: var(--fs-sm);
+  color: var(--text);
+  line-height: 1.25;
+}
+/* A scored round emphasises the line in the scoring faction's colour. */
+.wrapup-reckoning.scored .wrapup-reckoning-result { font-weight: bold; }
+.wrapup-reckoning.scored.hero  .wrapup-reckoning-result { color: var(--hero); }
+.wrapup-reckoning.scored.witch .wrapup-reckoning-result { color: var(--witch); }
 .wrapup-score {
   display: flex;
   align-items: center;

@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 
 import {
   WRAPUP_GLYPHS, wrapupIconHtml, wrapupUnitCellHtml, buildWrapupCombatsHtml,
+  reckoningText, buildWrapupReckoningHtml,
 } from '../src/wrapup-summary.js';
 import { createCombatTester, battleWrapupPair } from '../src/tools/combat-tester.js';
 
@@ -208,5 +209,54 @@ describe('wrapup-summary — splash row', () => {
     assert.ok(html.includes('wrapup-casualties'));
     // The splash victim is among the aggregated casualties.
     assert.ok((html.match(/wrapup-unit\b/g) ?? []).length >= 5);
+  });
+});
+
+// ── Power Node reckoning ─────────────────────────────────────────────────────
+
+describe('wrapup-summary — reckoningText', () => {
+  test('witch scoring names its holdings and the point', () => {
+    const line = reckoningText({ heroDelta: 0, witchDelta: 1, heroCount: 1, witchCount: 2 });
+    assert.equal(line, "Witch holds 2 Power Nodes to Hero's 1. Witch scores 1 victory point.");
+  });
+
+  test('hero scoring names its holdings and the point', () => {
+    const line = reckoningText({ heroDelta: 1, witchDelta: 0, heroCount: 3, witchCount: 0 });
+    assert.equal(line, "Hero holds 3 Power Nodes to Witch's 0. Hero scores 1 victory point.");
+  });
+
+  test('singular "Power Node" for a single held node', () => {
+    const line = reckoningText({ heroDelta: 1, witchDelta: 0, heroCount: 1, witchCount: 0 });
+    assert.ok(line.includes('1 Power Node to'), line);
+  });
+
+  test('a tie scores nothing and says so', () => {
+    const line = reckoningText({ heroDelta: 0, witchDelta: 0, heroCount: 1, witchCount: 1 });
+    assert.equal(line, 'Nodes tied 1–1. No points scored.');
+  });
+});
+
+describe('wrapup-summary — buildWrapupReckoningHtml', () => {
+  test('null reckoning renders nothing (non-scoring round)', () => {
+    assert.equal(buildWrapupReckoningHtml(null), '');
+  });
+
+  test('a scored dusk round is tagged scored + faction for colouring', () => {
+    const html = buildWrapupReckoningHtml({ phase: 'dusk', heroDelta: 1, witchDelta: 0, heroCount: 2, witchCount: 1 });
+    assert.ok(html.includes('wrapup-reckoning scored hero'), html);
+    assert.ok(html.includes('Dusk Reckoning'));
+    assert.ok(html.includes('Hero scores 1 victory point'));
+  });
+
+  test('a scored dawn round for the witch is tagged scored + witch', () => {
+    const html = buildWrapupReckoningHtml({ phase: 'dawn', heroDelta: 0, witchDelta: 1, heroCount: 0, witchCount: 3 });
+    assert.ok(html.includes('wrapup-reckoning scored witch'), html);
+    assert.ok(html.includes('Dawn Reckoning'));
+  });
+
+  test('a tied checkpoint is not tagged scored', () => {
+    const html = buildWrapupReckoningHtml({ phase: 'dawn', heroDelta: 0, witchDelta: 0, heroCount: 1, witchCount: 1 });
+    assert.ok(html.includes('class="wrapup-reckoning"'), html);   // no ' scored' / faction modifier
+    assert.ok(html.includes('No points scored'));
   });
 });

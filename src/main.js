@@ -2,7 +2,7 @@
 import { onInactiveChange, tryGameCenterAuth, isNativeMobile, refreshPushToken, loadGameCenterFriends, shareInvite } from './platform.js'; // must be first — sets server globals for Capacitor builds
 import { AppMode, getMode, setMode, isInGame, isAnimating, shouldBufferMessages, onModeChange } from './app-mode.js';
 import { ICON } from './icons.js';
-import { GameState, phaseForRound, getCycleLength } from './game.js';
+import { GameState, Phase, phaseForRound, getCycleLength } from './game.js';
 import { DAMAGE_SCALE } from './balance.js';
 import { Renderer3D, BLOCK_WORD_VARIANTS } from './renderer-3d.js';
 
@@ -50,7 +50,7 @@ import { playback, resetPlayback, replayFullGame, playbackDelay, swapState, patc
 import { finalizeAndPersistRound } from './round-finalize.js';
 import { ReplayCache } from './replay-cache.js';
 import { makeShowLoadingAndReveal } from './loading-reveal.js';
-import { nodeController } from './game.js';
+import { nodeController, countHeldNodes } from './game.js';
 import { MissionConductor, areHintsSuppressed, markHintsSeen, resetAllHintsForCampaign } from './mission-conductor.js';
 import {
   buildLearnMap, placeLearnUnits, LEARN_STEPS, LEARN_CONDUCTOR_CONFIG,
@@ -1144,7 +1144,7 @@ async function _runLocalAutoResolution() {
 // `state.heroIsAI`/`witchIsAI` are both false, so we accept it from the caller
 // instead of deriving it locally (deriving here returned `null` and surfaced
 // the opponent's discoveries on the wrap-up). null ⇒ count all (AI-vs-AI).
-function _buildWrapUpContent(steps, roundNum, humanFaction = null) {
+function _buildWrapUpContent(steps, roundNum, humanFaction = null, opts = {}) {
   const combats = compileTurnBattlePairs(steps, state.entities, ResEventType, PlanActionType);
   // Survivors/zombies found this round — move/explore/horn encounters plus any
   // spawned at power nodes during endRound (matches the old summary modal).
@@ -1170,7 +1170,36 @@ function _buildWrapUpContent(steps, roundNum, humanFaction = null) {
   const day = Math.ceil(round / cycleLen);
   const roundInCycle = ((round - 1) % cycleLen) + 1;
   const title = `Day ${day} Round ${roundInCycle} — SUMMARY`;
-  return { title, combats, discoveries, loot, attrition };
+
+  // Power Node reckoning — when the round that just resolved was a scoring
+  // checkpoint (dawn/dusk, or a mission's extra scoring phase), call out whether
+  // a victory point was scored and why. Derived from the fought round's phase
+  // plus the pre/post score delta; parity-safe because prevScore, the live
+  // nodeScore, and the node holdings are all available on offline AND online
+  // clients (the server runs the actual scoring; the client just narrates it).
+  const reckoning = _buildReckoning(roundNum, opts.prevScore);
+
+  return { title, combats, discoveries, loot, attrition, reckoning };
+}
+
+// Build the reckoning descriptor for the wrap-up card, or null when the fought
+// round was not a scoring checkpoint (or scoring is disabled / no prior score
+// snapshot). Counts use the post-resolution entity positions — the same ones
+// endRound() scored against — so the callout matches the points awarded.
+function _buildReckoning(roundNum, prevScore) {
+  if (state.disableScoring || !prevScore || !state.witchObjectives?.length) return null;
+  const foughtPhase = phaseForRound(roundNum, state.cycleConfig);
+  const isScoringRound = foughtPhase === Phase.DAWN || foughtPhase === Phase.DUSK
+    || !!state.cycleConfig?.extraScoringPhases?.includes(foughtPhase);
+  if (!isScoringRound) return null;
+  const heroCount  = countHeldNodes('hero',  state.witchObjectives, state.entities);
+  const witchCount = countHeldNodes('witch', state.witchObjectives, state.entities);
+  return {
+    phase:      foughtPhase,
+    heroDelta:  state.nodeScore.hero  - prevScore.hero,
+    witchDelta: state.nodeScore.witch - prevScore.witch,
+    heroCount, witchCount,
+  };
 }
 
 /**
@@ -1203,10 +1232,10 @@ async function _runEndOfRoundReview({
     if (attritionLevel) state.attritionChanged = false;
     let action;
     do {
-      const wrap = _buildWrapUpContent(steps, roundNum, humanFaction);
+      const wrap = _buildWrapUpContent(steps, roundNum, humanFaction, { prevScore });
       action = await ui.showReplayWrapUp({
         titleHtml: wrap.title, combats: wrap.combats, discoveries: wrap.discoveries,
-        loot: wrap.loot, attrition: wrap.attrition, attritionLevel,
+        loot: wrap.loot, attrition: wrap.attrition, attritionLevel, reckoning: wrap.reckoning,
         canReplay: roundHistory.length > 0, humanFaction,
       });
       if (action === 'replay') await reReplay();
