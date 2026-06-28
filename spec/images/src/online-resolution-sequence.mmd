@@ -1,0 +1,27 @@
+sequenceDiagram
+  autonumber
+  actor P1 as Player A (client)
+  actor P2 as Player B (client)
+  participant S as Server (authority)
+  participant R as resolver.js
+
+  Note over S: room.phase = PLANNING
+  S->>P1: planningPhase { myActionsLeft, deadline, … }
+  S->>P2: planningPhase { myActionsLeft, deadline, … }
+  P1->>S: submitPlan { plan, round }
+  S-->>P1: playerSubmitted
+  P2->>S: submitPlan { plan, round }
+  Note over S: all seats ready → _executeResolution
+  S->>S: preState = serializeState(state)
+  S->>R: resolvePlansMP(state, playerEntries)
+  R-->>S: steps[] (live RNG, runs once)
+  S->>S: finalizeRound() → phase/scoring/victory
+  S->>S: finalState = serializeState(state)
+  S->>P1: roundResolved { steps, gameState, round, lastRound }
+  S->>P2: roundResolved { steps, gameState, round, lastRound }
+  Note over P1,P2: clients REPLAY steps[] (never re-run resolver)
+  Note over S: not game-over → next PLANNING phase
+  loop every 15s
+    S-->>P1: heartbeat { round, planningPhase, gameOver }
+  end
+  Note over P1,S: on mismatch P1 → requestState → full stateUpdate

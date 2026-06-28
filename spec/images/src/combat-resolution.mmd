@@ -1,0 +1,20 @@
+flowchart TD
+  A["Combat: attacker vs defender"] --> B["Net advantage per side (cap ±3)<br/>atkNet = phase + gangUp dice + staff + marked − disadvantage<br/>defNet = ally dice − disadvantage"]
+  B --> C["Roll pools: each side rolls (1+|net|) d6<br/>net&gt;0 → best-of-K · net&lt;0 → worst-of-K · net=0 → one d6"]
+  C --> D["attackRoll = chosen + atkFlat<br/>defenseRoll = chosen + defFlat<br/>(flats: ATK/DEF, bonuses, fort, fatigue, night +2)"]
+  D --> E{"margin = attackRoll − defenseRoll<br/>hit if margin &gt; 0"}
+  E -->|"hit"| F{"crush tiers<br/>(melee only)"}
+  E -->|"miss"| G{"defenseRoll ≥ 2× attackRoll<br/>and not ranged?"}
+  F -->|"atk ≥ 3× def"| H["GREAT CRUSH · tier 3"]
+  F -->|"atk ≥ 2× def"| I["CRUSH · tier 2 → apply 'wounded' if survives"]
+  F -->|"else"| J["HIT · tier 1"]
+  H --> K["dmg = rollDamage(weapon) × tier<br/>finalDmg = applyIncomingDamage (+1d6 per wounded)"]
+  I --> K
+  J --> K
+  K --> L{"crush or kill?<br/>(melee)"}
+  L -->|"yes"| M["SPLASH: 2d6 chip to others on target hex<br/>(Brute: radius 1, every hit, knockback, margin-scaled)"]
+  L -->|"no"| N["done"]
+  G -->|"yes"| O["COUNTER · attacker takes 1× rollDamage(defender weapon)"]
+  G -->|"no"| N
+  M --> N
+  O --> N

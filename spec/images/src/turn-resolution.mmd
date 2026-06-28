@@ -1,0 +1,25 @@
+flowchart TD
+  A["resolvePlans / resolvePlansMP<br/>(authority runs once with live RNG)"] --> B["New TURN (step)"]
+  B --> C["Snapshot board BEFORE mutation<br/>(entitySnapshot)"]
+  C --> D["Group each plan into per-entity queues<br/>Build candidates"]
+  D --> E["Sort candidates:<br/>getAgility() desc, tie → ascending entity id"]
+  E --> F["Project end-of-TURN positions<br/>(MOVE actors stand on destination → gang-up counts)"]
+  F --> G["For each candidate in order: drainOneStep"]
+  G --> H{"budget.remaining &gt; 0?"}
+  H -->|"no, queue non-empty"| I{"hero food available?"}
+  I -->|"yes"| J["spend 1 food → remaining += 1<br/>emit FOOD_CONSUMED"]
+  I -->|"no"| K["emit BUDGET_CAP · clear queue"]
+  J --> L["runAction(queue[0])"]
+  H -->|"yes"| L
+  L --> M{"result kind"}
+  M -->|"ok"| N["remaining −= cost (+budgetBonus)<br/>emit ACTION_OK · BREAK (one slot/TURN)"]
+  M -->|"skip"| O["emit ACTION_SKIP · continue same TURN (free)"]
+  M -->|"fail"| P["emit ACTION_FAIL · continue same TURN"]
+  N --> Q["Guard strikes: enemy guarding units in reach<br/>fire 1 free attack (noCounter/noCrush/noAlly)"]
+  O --> L
+  P --> L
+  Q --> R["Push StepRecord {stepIndex, events, entitySnapshot}"]
+  K --> R
+  R --> S{"any faction has<br/>queued actions?"}
+  S -->|"yes"| B
+  S -->|"no / empty TURN"| T["return StepRecord[] → finalizeRound()"]
