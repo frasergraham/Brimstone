@@ -593,7 +593,7 @@ describe('fallenSectionHTML', () => {
       { name: 'Abigail', title: 'Scout', level: 3, diedInMission: 'first_night' },
       { name: 'Bartholomew', title: 'Guard', level: 1, diedInMission: 'dark_ritual' },
     ], resolver);
-    assert.match(html, /⚰ Fallen/);                 // heading
+    assert.match(html, /class="fallen-heading">[^<]*Fallen<\/h3>/); // heading (coffin is an icon-font glyph, not emoji)
     assert.equal(occurrences(html, 'fallen-card'), 2);
     assert.equal(occurrences(html, 'fallen-glyph'), 2);
   });

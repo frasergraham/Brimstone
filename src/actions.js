@@ -1015,6 +1015,7 @@ function _applySplashDamage(state, col, row, excludeIds, log, opts = {}) {
     if (wasKilled) {
       log.push(`${b.displayName} is slain by splash damage!`);
       splashKills.push({ id: b.id, owner: b.owner, type: b.type, ownerId: b.ownerId });
+      state.recordCasualty?.(b);  // campaign permadeath: remember the dead before they vanish
       state.entities = state.entities.filter(e => e.id !== b.id);
     }
   }
@@ -1303,6 +1304,7 @@ export function executeBattle(state, actor, target, opts = {}) {
       awardWithAllies(actor, atkAllies, XP_PER_KILL, state, 'kill', xpAwards);
       dispatchTrigger('damaged-fatal', target, { state, source: actor });
       dispatchTrigger('kill', actor, { state, target });
+      state.recordCasualty?.(target);  // campaign permadeath: remember the dead before they vanish
       state.entities = state.entities.filter(e => e.id !== target.id);
     } else if (damage > 0) {
       const label = isCrush ? `${damage} damage (crushing blow!)` : `${damage} damage`;
@@ -1402,6 +1404,7 @@ export function executeBattle(state, actor, target, opts = {}) {
         target.killsThisRound = (target.killsThisRound ?? 0) + 1;
         dispatchTrigger('damaged-fatal', actor, { state, source: target });
         dispatchTrigger('kill', target, { state, target: actor });
+        state.recordCasualty?.(actor);  // campaign permadeath: remember the dead before they vanish
         state.entities = state.entities.filter(e => e.id !== actor.id);
         // Campaign veterancy: a counter that kills grants the defender kill XP
         // (+ ally share). REPLACES the counter XP for this exchange (handled by

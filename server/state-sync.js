@@ -146,6 +146,10 @@ export function serializeState(state) {
     witchKills:           state.witchKills       ?? 0,
     witchSummonCount:     state.witchSummonCount ?? 0,
     heroRevealedByHorn:   state.heroRevealedByHorn ?? false,
+    // Casualty ledger — survivors who died this mission (campaign permadeath).
+    // Plain JSON snapshots; preserved so a mid-mission resume still drops the
+    // dead from the roster + mourns them at mission end.
+    casualties:           Array.isArray(state.casualties) ? state.casualties.map(c => ({ ...c })) : [],
     nodeScore:            { ...state.nodeScore },
     disableScoring:       !!state.disableScoring,
     disableCycleBar:      !!state.disableCycleBar,
@@ -487,6 +491,7 @@ export function deserializeState(snap) {
   state.witchKills           = snap.witchKills       ?? 0;
   state.witchSummonCount     = snap.witchSummonCount ?? 0;
   state.heroRevealedByHorn   = snap.heroRevealedByHorn ?? false;
+  state.casualties           = Array.isArray(snap.casualties) ? snap.casualties.map(c => ({ ...c })) : [];
   state.campaignAIBudgetBonus = snap.campaignAIBudgetBonus ?? 0;
   state.aiDifficulty          = snap.aiDifficulty ?? 'normal';
   state.gameMode             = snap.gameMode ?? 'standard';

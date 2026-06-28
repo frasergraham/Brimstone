@@ -322,6 +322,7 @@ export function tickEffects(state) {
             : `${def.icon} ${e.displayName} suffers from ${def.label.toLowerCase()}. (-${incoming} HP, ${e.hp}/${e.maxHp})`,
         });
         if (killed) {
+          state.recordCasualty?.(e);  // campaign permadeath: remember the dead before they vanish
           dead.push(e.id);
           break; // entity is gone — no further effects apply this tick
         }

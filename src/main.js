@@ -5128,19 +5128,36 @@ function _handleCampaignMissionEnd() {
   // Computed before the debrief render so the Fallen card can list this run's
   // casualties even before they exist in Campaign.fallen.
   let newlyFallen = [];
+  // Names of survivors who joined the roster THIS run (map discoveries) — the
+  // debrief badges them FOUND. Reward-granted allies surface separately in the
+  // Rewards section, so they're excluded below.
+  let foundThisMission = new Set();
   // What the mission GRANTED this run (survivor snapshots + resource deltas),
   // captured from applyMissionResult so the debrief can SHOW the rewards. Empty
   // on a loss (nothing is granted — the party is restored).
   let rewardSummary = { survivors: [], resources: {} };
   if (won) {
+    // Combat/effects splice a dead entity off the board the instant it dies, so
+    // the reconcile/collect scans below must read the live entities UNION the
+    // casualty ledger (state.casualties). Without it, a survivor who fell this
+    // mission is invisible to the scan and gets silently restored from the
+    // pre-mission roster (with their gear), and the memorial records nobody. The
+    // ledger's alive:false snapshots make the union behave exactly as if each
+    // corpse were still on the board.
+    const endEntities = [...state.entities, ...(state.casualties ?? [])];
+    // Snapshot the PRE-mission roster names before applyMissionResult overwrites
+    // _activeCampaign.roster — a survivor in the reconciled roster but not here
+    // was found this run (vs. a returning veteran).
+    const preRosterNames = new Set((_activeCampaign.roster ?? []).map(s => s.name));
     // Gather surviving survivors for roster (permadeath: dead ones are lost).
     // Roster members who were deployed and died are dropped; undeployed
     // members are preserved; alive deployed members are snapshotted.
-    survivors = reconcileRosterAfterMission(_activeCampaign.roster, state.entities);
+    survivors = reconcileRosterAfterMission(_activeCampaign.roster, endEntities);
+    foundThisMission = new Set(survivors.filter(s => !preRosterNames.has(s.name)).map(s => s.name));
     // Permadeath: a deployed survivor who died on this COMPLETED mission is
     // mourned forever — recorded into Campaign.fallen and removed from the
     // discovery pool. Only on a WIN; a loss restores the party (else-branch).
-    newlyFallen = collectFallenAfterMission(state.entities, missionDef.id);
+    newlyFallen = collectFallenAfterMission(endEntities, missionDef.id);
 
     const _missionResult = _activeCampaign.applyMissionResult(missionDef.id, {
       won,
@@ -5245,7 +5262,7 @@ function _handleCampaignMissionEnd() {
     rosterEl.innerHTML =
       _debriefRewardsSectionHTML(rewardSummary) +
       `<h3>${rosterHeading}</h3>` +
-      _debriefPartyHTML(heroSnap, survivors) +
+      _debriefPartyHTML(heroSnap, survivors, foundThisMission) +
       _fallenSectionHTML(newlyFallen, missionTitleResolver);
   }
 

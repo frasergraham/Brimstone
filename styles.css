@@ -7391,6 +7391,35 @@ body.spectator-mode #game-screen   { display: flex !important; }
   box-shadow: 0 1px 3px rgba(0,0,0,0.5);
 }
 
+/* A survivor recruited on the map THIS mission, badged in the debrief's
+   surviving-roster grid. The wrapper is a real grid cell holding one rich card;
+   the FOUND badge hangs over its corner — a cool teal to read distinctly from
+   the gold NEW badge on granted-reward allies. */
+.found-survivor {
+  position: relative;
+  display: flex;
+}
+.found-survivor .cprog-card {
+  flex: 1 1 auto;
+  width: 100%;
+  border-color: rgba(90,156,168,0.4);
+  background: rgba(90,156,168,0.08);
+}
+.found-badge {
+  position: absolute;
+  top: -6px;
+  right: -4px;
+  z-index: 2;
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  color: #06181c;
+  background: #5a9ca8;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+}
+
 .reward-resources {
   display: flex;
   flex-wrap: wrap;

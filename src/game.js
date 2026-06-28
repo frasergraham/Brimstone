@@ -293,6 +293,16 @@ export class GameState {
     this.witchSummonCount = 0; // total summons performed by witch side
     this.heroRevealedByHorn = false; // true when hero sounded horn this round
 
+    // ── Casualty ledger ──────────────────────────────────────────────────────
+    // Combat/effects splice a dead entity out of `this.entities` the instant it
+    // dies, so a post-mission scan of the board can't find a corpse. The campaign
+    // permadeath reconcile (drop the dead survivor + their gear from the roster)
+    // and the Fallen memorial both need to KNOW who died — this ledger records a
+    // lightweight snapshot of each fallen survivor at the moment of death (see
+    // recordCasualty). Plain JSON so it round-trips through state-sync for a
+    // mid-mission resume. Survivor-only; empty for skirmish/online (never read).
+    this.casualties = [];
+
     // Cumulative node scoring: each dawn/dusk majority scores 1 point; first to 4 wins.
     this.nodeScore = { hero: 0, witch: 0 };
     // When true, skip dawn/dusk node scoring and hide the score track UI.
@@ -608,6 +618,31 @@ export class GameState {
   recordKillForSide(sideId, n = 1) {
     if (sideId === 'day')   this.heroKills  += n;
     if (sideId === 'night') this.witchKills += n;
+  }
+
+  /**
+   * Record a survivor's death into the casualty ledger before it is spliced out
+   * of `entities`. Safe to call at every death site — non-survivors are ignored
+   * and an already-recorded id is deduped, so a single blow that both removes and
+   * (e.g.) splashes the same unit can't double-count. The snapshot carries every
+   * field reconcileRosterAfterMission / collectFallenAfterMission read off a live
+   * entity (type/isNpc/owner gate the faction filter; name/title/level surface in
+   * the memorial), with `alive:false` so a union with the live board treats it
+   * exactly as if the corpse were still present.
+   */
+  recordCasualty(entity) {
+    if (!entity || entity.type !== EntityType.SURVIVOR) return;
+    if (this.casualties.some(c => c.id === entity.id)) return;
+    this.casualties.push({
+      id:    entity.id,
+      name:  entity.name,
+      title: entity.title ?? null,
+      level: entity.level || 1,
+      type:  entity.type,
+      isNpc: !!entity.isNpc,
+      owner: entity.owner,
+      alive: false,
+    });
   }
 
   /** Cumulative summons performed by the given side. (Day side: 0 today.) */
