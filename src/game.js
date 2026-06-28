@@ -907,25 +907,25 @@ export class GameState {
         this.addLog(`${ICON.dawn} A new dawn — cycle ${cycle}.`);
       }
       for (const [, t] of this.tiles) t.explored = false;
-      if (!this.disableScoring) this._checkNodeObjectives(Phase.DAWN);
-    }
-    if (this.phase === Phase.DUSK) {
-      if (!this.disableScoring) this._checkNodeObjectives(Phase.DUSK);
     }
 
-    // Mission opt-in: score on additional phases (e.g. NIGHT for "prolonged
-    // night" missions). Inert when cycleConfig is absent or doesn't list extras.
-    const extraScoring = this.cycleConfig?.extraScoringPhases;
-    if (extraScoring && !this.disableScoring
-        && this.phase !== Phase.DAWN && this.phase !== Phase.DUSK
-        && extraScoring.includes(this.phase)) {
-      this._checkNodeObjectives(this.phase);
-    }
-
-    // Battle mode: score every round (not just dawn/dusk)
-    if (this.gameMode === GameMode.BATTLE && !this.disableScoring
-        && this.phase !== Phase.DAWN && this.phase !== Phase.DUSK) {
-      this._checkBattleNodeScoring();
+    // Node scoring is evaluated at the END of a scoring round, reading the final
+    // unit positions for the round that just resolved (`prevPhase`). `this.phase`
+    // has already advanced to the upcoming round above, so we key the checkpoint
+    // on `prevPhase` — holding the nodes when a dawn/dusk round ends is what
+    // scores, not merely standing on them as that round begins.
+    if (!this.disableScoring) {
+      const extraScoring = this.cycleConfig?.extraScoringPhases;
+      if (prevPhase === Phase.DAWN || prevPhase === Phase.DUSK) {
+        this._checkNodeObjectives(prevPhase);
+      } else if (extraScoring?.includes(prevPhase)) {
+        // Mission opt-in: score on additional phases (e.g. NIGHT for "prolonged
+        // night" missions). Inert when cycleConfig is absent or lists no extras.
+        this._checkNodeObjectives(prevPhase);
+      } else if (this.gameMode === GameMode.BATTLE) {
+        // Battle mode scores every round (not just dawn/dusk).
+        this._checkBattleNodeScoring();
+      }
     }
 
     // Campaign wave processor — runs BEFORE checkVictory so triggered spawns
