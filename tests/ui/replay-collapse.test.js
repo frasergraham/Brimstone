@@ -13,6 +13,7 @@ import {
   makeFakeRenderer,
   createElementsBag,
 } from './setup.js';
+import { ICON } from '../../src/icons.js';
 
 const { fakeCanvas } = installGlobalMocks();
 
@@ -64,13 +65,13 @@ describe('replay card markup', () => {
     assert.match(html, /Turn 1/);
   });
 
-  test('a storyBeat column renders as a ✦ title + text card (no action rows / SKIP)', () => {
+  test('a storyBeat column renders as a witch-glyph title + text card (no action rows / SKIP)', () => {
     const { ui } = makeUI();
     const col = { stepIndex: 'beat:3:0', kind: 'storyBeat', title: 'Sanctuary',
                   text: 'You feel <safe> & sound', entries: [{ actionType: 'storyBeat', label: 'STORY' }] };
     const html = ui._replayColHtml(col, 1);
     assert.match(html, /replay-beat-col/);
-    assert.match(html, /✦ Sanctuary/);
+    assert.match(html, new RegExp(`${ICON.witch} Sanctuary`));
     assert.match(html, /replay-beat-text/);
     assert.match(html, /You feel &lt;safe&gt; &amp; sound/);  // HTML-escaped
     assert.doesNotMatch(html, /replay-collapse-btn/);          // not a normal step card

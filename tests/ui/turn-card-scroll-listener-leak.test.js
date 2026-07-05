@@ -74,8 +74,8 @@ describe('turn-card scroll-detection listener lifecycle', () => {
     ui._bindTurnCardScrollDetection();
 
     const types = wrap._records.map(r => r.type).sort();
-    assert.deepEqual(types, ['touchmove', 'wheel'],
-      'only wheel + touchmove are bound; keydown is dropped (non-focusable element)');
+    assert.deepEqual(types, ['scroll', 'touchmove', 'wheel'],
+      'wheel + touchmove (user-scroll detection) + capture-phase scroll (fade masks) are bound; keydown is dropped (non-focusable element)');
 
     // Every binding must pass { signal: <_eventsAC.signal> } so destroy() drops it.
     for (const rec of wrap._records) {

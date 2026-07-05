@@ -17,6 +17,7 @@ import {
   makeFakeRenderer,
   createElementsBag,
 } from './setup.js';
+import { ICON } from '../../src/icons.js';
 
 const { fakeCanvas } = installGlobalMocks();
 
@@ -62,7 +63,7 @@ describe('round summary — campaign XP lines', () => {
     const html = els['round-summary-events']._innerHTML;
     assert.match(html, /class="summary-xp leveled"/, 'level-up line uses the leveled style');
     // Two events (35 + 50) summed into a single line for the unit.
-    assert.match(html, /✨ Tinker \+85 XP \(Lv 2 → 3\)/);
+    assert.match(html, new RegExp(`${ICON.sparkle} Tinker \\+85 XP \\(Lv 2 → 3\\)`));
     assert.equal((html.match(/summary-xp/g) || []).length, 1, 'exactly one XP line for the unit');
   });
 

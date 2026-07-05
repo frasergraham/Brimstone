@@ -141,9 +141,11 @@ function makeUI(els) {
 
 describe('UIController plan-panel toggle listener lifecycle', () => {
   test('an undestroyed orphan double-fires the toggle (stuck); destroy() restores it', () => {
+    // The toggle lives on the plan-tab element (the plan-toggle-btn header
+    // button was removed in the plan-panel redesign).
     const els = createElementsBag();
-    const toggleBtn = makeTrackingEl('plan-toggle-btn');
-    els['plan-toggle-btn'] = toggleBtn;
+    const toggleBtn = makeTrackingEl('plan-tab');
+    els['plan-tab'] = toggleBtn;
 
     const uiA = makeUI(els);
     const uiB = makeUI(els);   // second game's controller, sharing the same DOM
