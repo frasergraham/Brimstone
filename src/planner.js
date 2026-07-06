@@ -1,10 +1,11 @@
 // Simultaneous-turn planning: action types, ghost-state projection, and entity snap.
-import { hexKey, getNeighbors } from './hex.js';
-import { getReachableHexes, getVisiblePositions } from './actions.js';
+import { hexKey, getNeighbors, hexDistance } from './hex.js';
+import { concreteFactionOf } from './factions.js';
+import { getReachableHexes, getVisiblePositions, POSSESS_RANGE, TELEPORT_RANGE } from './actions.js';
 import { ResourceType, isRiver } from './tiles.js';
 import { EntityType, normalizeItems, getItemCountOf, removeItemInItems, getEquippedWeaponIdOf } from './entities.js';
 import { ITEMS } from './items.js';
-import { effectsBlockActions } from './effects.js';
+import { effectsBlockActions, canCommandEntity, possessorOf } from './effects.js';
 
 // ── Plan action types ────────────────────────────────────────────────────────
 //
@@ -33,6 +34,13 @@ export const PlanActionType = Object.freeze({
   // The sender leader is derived live at resolution time from the
   // survivor's current ownerId — no separate sender field on the wire.
   SENT_TO:      'sent-to',
+  // Necromancer spells (innate leader abilities):
+  // POSSESS  — { type, entityId, targetId }: seize an enemy unit for a round.
+  // TELEPORT — { type, entityId, targetCol, targetRow }: inaccurate warp; the
+  //            target is the CENTER hex, resolution lands on a seeded-random
+  //            member of the center+neighbors clump.
+  POSSESS:      'possess',
+  TELEPORT:     'teleport',
 });
 
 // Maximum number of steps a player may place in their plan.
@@ -229,6 +237,29 @@ export function computeGhostState(state, plan) {
       // Give the new unit a temporary id for ghost rendering.
       const ghostId = `ghost-summon-${steps.length}`;
       positions.set(ghostId, { col: spawnCol, row: spawnRow });
+    } else if (action.type === PlanActionType.TELEPORT) {
+      // Ghost at the chosen CENTER hex — the true arrival is a seeded-random
+      // clump member picked at resolution, so the center is the best projection.
+      const pos = positions.get(action.entityId);
+      if (pos && action.targetCol != null) {
+        moveStepNumber++;
+        stepNumber = moveStepNumber;
+        arrow = {
+          entityId: action.entityId,
+          fromCol:  pos.col,
+          fromRow:  pos.row,
+          toCol:    action.targetCol,
+          toRow:    action.targetRow,
+        };
+        positions.set(action.entityId, { col: action.targetCol, row: action.targetRow });
+      }
+    } else if (action.type === PlanActionType.POSSESS) {
+      // Render the domination as an attack-style arrow toward the victim.
+      const fromPos = positions.get(action.entityId);
+      const toPos   = positions.get(action.targetId);
+      if (fromPos && toPos) {
+        attackArrow = { fromCol: fromPos.col, fromRow: fromPos.row, toCol: toPos.col, toRow: toPos.row };
+      }
     } else {
       // Project a weapon switch — a USE_ITEM of a weapon (the real UI path) or a
       // legacy EQUIP_WEAPON — so range-driven highlights for THIS and later steps
@@ -259,6 +290,51 @@ export function computeGhostState(state, plan) {
 // Returns { hero, witch, entityItems } — plain objects (shallow clones of state
 // inventory values keyed by faction id).  Does NOT mutate the real state.
 
+/**
+ * Faction-aware projection of what ONE queued SUMMON deducts from the caster
+ * faction's shared resource pool — the single source of truth for the plan
+ * panel's projections (computeProjectedInventory below, plus ui-render.js's
+ * per-step cost labels and running-pool walker). Mirrors executeSummon:
+ *   • golem-capable casters (witch): 2 metal → 2 wood → 2 of any, largest
+ *     stacks first;
+ *   • chaff-only casters (necromancer, brute): getMinionCost() (1) of any
+ *     resource, largest stacks first.
+ * A null/unknown caster falls back to the witch economics (legacy behavior).
+ *
+ * Mutates `pool` when `apply` is true (default). Returns { amount, resource }
+ * where `resource` is the single ResourceType covering the whole cost, or
+ * null for a mixed / "any resource" spend.
+ */
+export function projectSummonSpend(caster, pool, apply = true) {
+  const conc    = caster ? concreteFactionOf(caster) : null;
+  // Probe with a rich inventory so we learn the faction's full summon set
+  // (golem-capable or not) regardless of what it can currently afford.
+  const allowed = new Set((conc?.getSummonOptions({
+    [ResourceType.METAL]: { count: 99 }, [ResourceType.WOOD]: { count: 99 },
+  }) ?? []).map(o => o.summonType));
+  const golems  = !conc || allowed.has(EntityType.IRON_GOLEM) || allowed.has(EntityType.WOOD_GOLEM);
+
+  const amount = golems ? 2 : (conc?.getMinionCost() ?? 2);
+  let resource = null;
+  if (golems && getItemCountOf(pool, ResourceType.METAL) >= 2)      resource = ResourceType.METAL;
+  else if (golems && getItemCountOf(pool, ResourceType.WOOD) >= 2)  resource = ResourceType.WOOD;
+
+  if (apply) {
+    if (resource) {
+      removeItemInItems(pool, resource, amount);
+    } else {
+      let rem = amount;
+      for (const k of Object.keys(pool).sort((a, b) => getItemCountOf(pool, b) - getItemCountOf(pool, a))) {
+        const spend = Math.min(getItemCountOf(pool, k), rem);
+        removeItemInItems(pool, k, spend);
+        rem -= spend;
+        if (rem === 0) break;
+      }
+    }
+  }
+  return { amount, resource };
+}
+
 export function computeProjectedInventory(state, plan) {
   // Deep-clone the dict-of-objects resource maps (normalizeItems) so projected
   // spending never mutates the real state.inventory entries.
@@ -273,20 +349,10 @@ export function computeProjectedInventory(state, plan) {
   for (const action of plan) {
     switch (action.type) {
       case PlanActionType.SUMMON: {
-        // Mirrors pickSummonType + executeSummon spending
-        if (getItemCountOf(witch, ResourceType.METAL) >= 2) {
-          removeItemInItems(witch, ResourceType.METAL, 2);
-        } else if (getItemCountOf(witch, ResourceType.WOOD) >= 2) {
-          removeItemInItems(witch, ResourceType.WOOD, 2);
-        } else {
-          let rem = 2;
-          for (const k of Object.keys(witch).sort((a, b) => getItemCountOf(witch, b) - getItemCountOf(witch, a))) {
-            const spend = Math.min(getItemCountOf(witch, k), rem);
-            removeItemInItems(witch, k, spend);
-            rem -= spend;
-            if (rem === 0) break;
-          }
-        }
+        // Faction-aware spend — projectSummonSpend mirrors executeSummon
+        // (witch 2 metal → 2 wood → 2 any; necromancer/brute 1 of any).
+        const caster = (state.entities ?? []).find(e => e.id === action.entityId);
+        projectSummonSpend(caster, witch);
         break;
       }
       case PlanActionType.FORTIFY:
@@ -429,6 +495,32 @@ export function validatePlanAction(state, action, projectedPositions = null) {
       return { valid: true };
     }
 
+    case PlanActionType.POSSESS: {
+      if (!action.targetId) return { valid: false, reason: 'No target specified.' };
+      const target = state.entities.find(e => e.id === action.targetId && e.alive);
+      if (!target) return { valid: false, reason: 'Target not found (may be dead at resolution).' };
+      if (target.owner === entity.owner) return { valid: false, reason: 'Cannot possess an allied unit.' };
+      // Leader immunity + range are re-checked authoritatively at resolution
+      // (executePossess); reject the obviously-invalid picks here so a doomed
+      // step never enters the plan.
+      if (target.hasTag?.('leader')) return { valid: false, reason: 'Enemy leaders cannot be possessed.' };
+      if (hexDistance(pos.col, pos.row, target.col, target.row) > POSSESS_RANGE) {
+        return { valid: false, reason: `Target out of possession range (max ${POSSESS_RANGE}).` };
+      }
+      return { valid: true };
+    }
+
+    case PlanActionType.TELEPORT: {
+      if (action.targetCol == null || action.targetRow == null)
+        return { valid: false, reason: 'No target hex specified.' };
+      if (!state.tiles.get(hexKey(action.targetCol, action.targetRow)))
+        return { valid: false, reason: 'Target hex is off the map.' };
+      if (hexDistance(pos.col, pos.row, action.targetCol, action.targetRow) > TELEPORT_RANGE) {
+        return { valid: false, reason: `Too far to teleport (max ${TELEPORT_RANGE}).` };
+      }
+      return { valid: true };
+    }
+
     case PlanActionType.SENT_TO: {
       // Free action: send a SURVIVOR (the actor) to another leader on the
       // same faction. Authoritative checks (live owning leader, faction has
@@ -485,8 +577,16 @@ export function validatePlan(state, playerId, plan) {
       const entity = state.entities.find(e => e.id === action.entityId && e.alive);
       if (!entity)
         return { valid: false, index: i, reason: 'Entity not found.' };
-      if (entity.ownerId !== playerId)
-        return { valid: false, index: i, reason: 'Entity belongs to another player.' };
+      // Command gate: normally the owner — but a POSSESSED unit obeys only its
+      // possessor (the true owner is locked out until the effect expires).
+      if (!canCommandEntity(state, entity, { playerId })) {
+        return {
+          valid: false, index: i,
+          reason: possessorOf(entity) != null && entity.ownerId === playerId
+            ? 'Unit is possessed — it will not obey you this round.'
+            : 'Entity belongs to another player.',
+        };
+      }
     }
   }
 

@@ -87,6 +87,7 @@ export const EntityType = Object.freeze({
   SURVIVOR:    'survivor',
   SOLDIER:     'soldier',
   ZOMBIE:      'zombie',
+  SKELETON:    'skeleton',
   MINION:      'minion',
   WOOD_GOLEM:  'wood_golem',
   IRON_GOLEM:  'iron_golem',
@@ -140,6 +141,9 @@ export const WITCH_PLAYER_COLORS = FACTION_THEME.witch.playerColors;
 const WITCH_UNIT_COLORS = {
   [EntityType.ZOMBIE]: [
     '#3a6b2a', '#2e5520', '#4a7a35', '#1f4418', '#527a3d', '#264d1a',
+  ],
+  [EntityType.SKELETON]: [
+    '#c9c4ae', '#b5ae92', '#ded9c6', '#a29a7e', '#ece8d9', '#8f876c',
   ],
   [EntityType.MINION]: [
     '#c0392b', '#e74c3c', '#962419', '#ff6b5b', '#a93226', '#d45040',
@@ -992,6 +996,7 @@ const _DEFAULT_DISPLAY_NAMES = {
   [EntityType.BRUTE]:       'The Brute',
   [EntityType.SURVIVOR]:    'Survivor',
   [EntityType.ZOMBIE]:      'Zombie',
+  [EntityType.SKELETON]:    'Skeleton',
   [EntityType.MINION]:      'Minion',
   [EntityType.WOOD_GOLEM]:  'Wood Golem',
   [EntityType.IRON_GOLEM]:  'Iron Golem',
@@ -1130,6 +1135,13 @@ export function createZombie(col, row, ownerId = null, state = null) {
 export function createMinion(col, row, ownerId = null, state = null) {
   const e = new Entity(EntityType.MINION, 'witch', col, row, ownerId, state);
   e.color = _witchColor(EntityType.MINION, e);
+  return e;
+}
+
+// Skeleton — the Necromancer's conjured summon (RAISE DEAD, fresh-summon path).
+export function createSkeleton(col, row, ownerId = null, state = null) {
+  const e = new Entity(EntityType.SKELETON, 'witch', col, row, ownerId, state);
+  e.color = _witchColor(EntityType.SKELETON, e);
   return e;
 }
 

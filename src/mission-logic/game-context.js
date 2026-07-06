@@ -61,6 +61,7 @@ export function createGameContext(state, { createEnemyFn, emit, setFlag, getFlag
       return entity;
     },
     despawnUnit: (id) => {
+      // Despawn ≠ death: intentionally records NO grave (state.deathLocations) — a future graph "kill" node must record one itself or RAISE DEAD silently starves.
       const i = state.entities.findIndex((e) => e.id === id);
       if (i >= 0) state.entities.splice(i, 1); // splice keeps the array identity (renderer caches)
     },

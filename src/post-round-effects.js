@@ -161,6 +161,7 @@ function nightAttritionEffect(state) {
 
       if (killed) {
         state.recordCasualty?.(e);  // campaign permadeath: remember the dead before they vanish
+        state.recordDeathLocation?.(e);  // necromancer RAISE DEAD: mark where the body fell
         state.entities = state.entities.filter(x => x.id !== e.id);
       }
     }

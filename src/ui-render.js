@@ -2,7 +2,7 @@
 // Each function takes plain data and returns an HTML string.
 // Imported by UIController to keep rendering logic separate from DOM wiring.
 
-import { PlanActionType } from './planner.js';
+import { PlanActionType, projectSummonSpend } from './planner.js';
 import { ICON, coloredResourceIcon, coloredResourceLabel, tintResourceGlyphs } from './icons.js';
 import { ITEMS } from './items.js';
 import { EntityType, ENTITY_COLOR, getEquippedWeaponIdOf, getItemCountOf, removeItemInItems, normalizeItems, isLeaderType } from './entities.js';
@@ -103,6 +103,12 @@ export function describePlanAction(action, entities, index = 0) {
       return `${who} uses ability`;
     case PlanActionType.SOUND_HORN:
       return `${who} sounds the horn`;
+    case PlanActionType.POSSESS: {
+      const target = entities.find(e => e.id === action.targetId);
+      return `${who} possesses ${target?.displayName ?? '?'}`;
+    }
+    case PlanActionType.TELEPORT:
+      return `${who} teleports toward (${action.targetCol},${action.targetRow})`;
     case PlanActionType.SENT_TO: {
       // The actor IS the survivor (entityId === survivorId). The destination
       // leader is keyed by ownerId — find a live leader on that ownerId in
@@ -167,6 +173,12 @@ export function describePlanActionParts(action, entities, index = 0) {
         : null;
       return { verb: 'Send', target: destLeader?.displayName ?? 'another leader' };
     }
+    case PlanActionType.POSSESS: {
+      const target = entities.find(e => e.id === action.targetId);
+      return { verb: 'Possess', target: target?.displayName ?? '?' };
+    }
+    case PlanActionType.TELEPORT:
+      return { verb: 'Teleport', target: `(${action.targetCol},${action.targetRow})` };
     default:
       return { verb: `Step ${index + 1}`, target: null };
   }
@@ -326,12 +338,16 @@ export function computeFadeFlags({ scrollTop = 0, clientHeight = 0, scrollHeight
  * Return a short cost badge string (e.g. "−2⚙") for a plan action, given the
  * projected inventory AT THAT STEP.  Returns '' for free / action-point-only actions.
  */
-function _stepCostLabel(action, projShared, projWitch, projEntityItems) {
+function _stepCostLabel(action, projShared, projWitch, projEntityItems, entities = null) {
   switch (action.type) {
     case PlanActionType.SUMMON: {
-      if (getItemCountOf(projWitch, ResourceType.METAL) >= 2) return `−2 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.METAL])}`;
-      if (getItemCountOf(projWitch, ResourceType.WOOD)  >= 2) return `−2 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.WOOD])}`;
-      return '−2 res';
+      // Faction-aware cost preview — projectSummonSpend (apply=false) reports
+      // what executeSummon will charge without touching the projected pool.
+      const caster = entities?.find?.(e => e.id === action.entityId);
+      const { amount, resource } = projectSummonSpend(caster, projWitch, false);
+      return resource
+        ? `−${amount} ${coloredResourceLabel(RESOURCE_LABEL[resource])}`
+        : `−${amount} res`;
     }
     case PlanActionType.FORTIFY:
       if (getItemCountOf(projShared, ResourceType.METAL) > 0) return `−1 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.METAL])}`;
@@ -413,7 +429,7 @@ export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entit
       : '';
 
     // Resource cost badge — only shown when inventory data is available
-    const costLbl = initialInv ? _stepCostLabel(a, projShared, projWitch, projEntityItems) : '';
+    const costLbl = initialInv ? _stepCostLabel(a, projShared, projWitch, projEntityItems, entities) : '';
     const costTag = costLbl ? ` <span class="plan-step-cost">${costLbl}</span>` : '';
 
     html += `<div class="plan-step${cls}">
@@ -588,7 +604,7 @@ export function buildUnitPlanBlocksHtml(
       if (foodPowered) foodUsed++;
 
       budgetState.set(key, foodPowered ? 'food' : overBudget ? 'over' : 'ok');
-      costLabels.set(key, initialInv ? _stepCostLabel(a, projShared, projWitch, projEntityItems) : '');
+      costLabels.set(key, initialInv ? _stepCostLabel(a, projShared, projWitch, projEntityItems, entities) : '');
 
       // Advance projected inventory
       _advanceProjectedInventory(a, projShared, projWitch, projEntityItems, entities);
@@ -698,17 +714,14 @@ export function buildUnitPlanBlocksHtml(
 /** Advance projected inventory for one action (shared between flat and per-unit renderers). */
 function _advanceProjectedInventory(a, projShared, projWitch, projEntityItems, entities) {
   switch (a.type) {
-    case PlanActionType.SUMMON:
-      if (getItemCountOf(projWitch, ResourceType.METAL) >= 2) { removeItemInItems(projWitch, ResourceType.METAL, 2); }
-      else if (getItemCountOf(projWitch, ResourceType.WOOD) >= 2) { removeItemInItems(projWitch, ResourceType.WOOD, 2); }
-      else {
-        let rem = 2;
-        for (const k of Object.keys(projWitch).sort((a, b) => getItemCountOf(projWitch, b) - getItemCountOf(projWitch, a))) {
-          const spend = Math.min(getItemCountOf(projWitch, k), rem); removeItemInItems(projWitch, k, spend); rem -= spend;
-          if (rem === 0) break;
-        }
-      }
+    case PlanActionType.SUMMON: {
+      // Faction-aware spend (witch 2, necromancer/brute 1) — shared with
+      // computeProjectedInventory so the plan panel's projected pool matches
+      // what the resolver will actually deduct.
+      const caster = entities?.find?.(e => e.id === a.entityId);
+      projectSummonSpend(caster, projWitch);
       break;
+    }
     case PlanActionType.FORTIFY:
       if (getItemCountOf(projShared, ResourceType.METAL) > 0) removeItemInItems(projShared, ResourceType.METAL, 1);
       else if (getItemCountOf(projShared, ResourceType.WOOD) > 0) removeItemInItems(projShared, ResourceType.WOOD, 1);

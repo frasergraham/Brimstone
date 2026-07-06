@@ -36,7 +36,7 @@ function weaponName(weaponId) {
 // ui.js / ui-render.js (kept local to preserve this module's purity).
 const GLYPHS = Object.freeze({
   hero: ICON.hero, witch: ICON.witch, survivor: ICON.survivor, soldier: ICON.soldier,
-  zombie: ICON.zombie, minion: ICON.minion, wood_golem: ICON.woodGolem, iron_golem: ICON.ironGolem,
+  zombie: ICON.zombie, skeleton: ICON.skeleton, minion: ICON.minion, wood_golem: ICON.woodGolem, iron_golem: ICON.ironGolem,
 });
 
 /** Presentation outcome kinds for a battle row. */

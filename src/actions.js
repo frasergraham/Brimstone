@@ -25,14 +25,14 @@ import { LOOT_TIER_GATE } from './loot.config.js';
 const isWeaponId = (id) => ITEMS[id]?.kind === 'weapon';
 import {
   EntityType, SurvivorAbility, Entity,
-  createZombie, createMinion, createSurvivor,
+  createZombie, createMinion, createSurvivor, createSkeleton,
   createWoodGolem, createIronGolem,
   nextDie, ADVANTAGE_CAP, isLeaderType, abilityStatMod, rollDamage, awardXP,
   getEquippedWeaponIdOf,
   getItemCountOf, totalItemCount, addItemInItems, removeItemInItems,
 } from './entities.js';
 import { Phase } from './game.js';
-import { getFaction, concreteFactionOf, sightRangeForEntity } from './factions.js';
+import { getFaction, concreteFactionOf, sightRangeForEntity, isPlaceableTile } from './factions.js';
 import { dispatchTrigger, applyEffect, effectStatMod } from './effects.js';
 import { triggerSurvivorEncounter } from './survivor-discovery.js';
 
@@ -52,7 +52,21 @@ export const ActionType = Object.freeze({
   // Multiplayer-only free action: a leader hands one of their survivors over
   // to another leader on the same faction.
   SENT_TO:      'sent_to',
+  // Necromancer signature spells (innate leader abilities; see factions.js).
+  POSSESS:      'possess',
+  TELEPORT:     'teleport',
 });
+
+// ── Necromancer spell ranges ────────────────────────────────────────────────
+// RAISE_DEAD_RANGE       — a corpse within this many hexes can rise as a Zombie.
+// SKELETON_CONJURE_RANGE — a fresh Skeleton lands on a seeded-random open hex
+//                          within this many hexes of the necromancer.
+// POSSESS_RANGE          — enemy non-leader units within this range can be seized.
+// TELEPORT_RANGE         — max distance to the chosen warp-center hex.
+export const RAISE_DEAD_RANGE       = 3;
+export const SKELETON_CONJURE_RANGE = 2;
+export const POSSESS_RANGE          = 2;
+export const TELEPORT_RANGE         = 4;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -512,6 +526,33 @@ export function getValidActions(state, actor) {
     for (const opt of summonOpts) {
       actions.push({ type: ActionType.SUMMON, summonType: opt.summonType, affordable: opt.affordable });
     }
+  }
+
+  // Possess — necromancer spell: seize control of an enemy non-leader unit
+  // within POSSESS_RANGE for one round. Under fog only visible units are
+  // offered (same rule as BATTLE target enumeration above).
+  if (actor.hasAbility('possess')) {
+    let possessTargets = state.entities.filter(e =>
+      e.alive && e.owner && e.owner !== actor.owner && e.id !== actor.id &&
+      !isLeaderType(e.type) &&
+      hexDistance(actor.col, actor.row, e.col, e.row) <= POSSESS_RANGE
+    );
+    if (visibleHexes) {
+      possessTargets = possessTargets.filter(e => visibleHexes.has(hexKey(e.col, e.row)));
+    }
+    if (possessTargets.length) actions.push({ type: ActionType.POSSESS, targets: possessTargets });
+  }
+
+  // Teleport — necromancer spell: pick a center hex within TELEPORT_RANGE;
+  // the landing clump = center + neighbors filtered to passable/unoccupied,
+  // and resolution picks one with the seeded die. Only centers whose clump
+  // is non-empty are offered.
+  if (actor.hasAbility('teleport')) {
+    const teleportTargets = hexRange(actor.col, actor.row, TELEPORT_RANGE).filter(h => {
+      if (h.col === actor.col && h.row === actor.row) return false;
+      return getTeleportClump(state, actor, h.col, h.row).length > 0;
+    });
+    if (teleportTargets.length) actions.push({ type: ActionType.TELEPORT, targets: teleportTargets });
   }
 
   // Guard — any unit can take a guard stance (stacks: each use adds 1 charge)
@@ -1016,6 +1057,7 @@ function _applySplashDamage(state, col, row, excludeIds, log, opts = {}) {
       log.push(`${b.displayName} is slain by splash damage!`);
       splashKills.push({ id: b.id, owner: b.owner, type: b.type, ownerId: b.ownerId });
       state.recordCasualty?.(b);  // campaign permadeath: remember the dead before they vanish
+      state.recordDeathLocation?.(b);  // necromancer RAISE DEAD: mark where the body fell
       state.entities = state.entities.filter(e => e.id !== b.id);
     }
   }
@@ -1305,6 +1347,7 @@ export function executeBattle(state, actor, target, opts = {}) {
       dispatchTrigger('damaged-fatal', target, { state, source: actor });
       dispatchTrigger('kill', actor, { state, target });
       state.recordCasualty?.(target);  // campaign permadeath: remember the dead before they vanish
+      state.recordDeathLocation?.(target);  // necromancer RAISE DEAD: mark where the body fell
       state.entities = state.entities.filter(e => e.id !== target.id);
     } else if (damage > 0) {
       const label = isCrush ? `${damage} damage (crushing blow!)` : `${damage} damage`;
@@ -1405,6 +1448,7 @@ export function executeBattle(state, actor, target, opts = {}) {
         dispatchTrigger('damaged-fatal', actor, { state, source: target });
         dispatchTrigger('kill', target, { state, target: actor });
         state.recordCasualty?.(actor);  // campaign permadeath: remember the dead before they vanish
+        state.recordDeathLocation?.(actor);  // necromancer RAISE DEAD: mark where the body fell
         state.entities = state.entities.filter(e => e.id !== actor.id);
         // Campaign veterancy: a counter that kills grants the defender kill XP
         // (+ ally share). REPLACES the counter XP for this exchange (handled by
@@ -1743,7 +1787,8 @@ export function executeSummon(state, actor, requestedType = null) {
   const wood  = getItemCountOf(inv, ResourceType.WOOD);
   const total = totalItemCount(inv);
 
-  // Per-faction minion cost — witch pays 2 of any, brute pays 1.
+  // Per-faction minion cost — witch pays 2 of any, brute pays 1. The
+  // necromancer's skeleton/zombie use the same economics as the baseline.
   const minionCost = concreteFaction.getMinionCost();
 
   // Allowed-summon set comes from the concrete faction so brute-style
@@ -1753,17 +1798,30 @@ export function executeSummon(state, actor, requestedType = null) {
     concreteFaction.getSummonOptions(inv).map(o => o.summonType)
   );
 
+  // RAISE DEAD (necromancer): a ZOMBIE summon raises an unconsumed, non-leader
+  // corpse within RAISE_DEAD_RANGE at its death hex. Resolve the corpse ONCE
+  // here so the request gate and the auto-pick agree.
+  const corpse = allowedTypes.has(EntityType.ZOMBIE)
+    ? _findRaisableCorpse(state, actor)
+    : null;
+
   // Resolve final type: honour request if affordable AND allowed, else
-  // fall back to auto-pick.
+  // fall back to auto-pick. A ZOMBIE request without a corpse in reach
+  // degrades to the auto-pick (which lands on SKELETON for the necromancer).
   let resolvedType = requestedType;
   if (resolvedType && !allowedTypes.has(resolvedType)) resolvedType = null;
   if (resolvedType === EntityType.IRON_GOLEM && metal < 2)          resolvedType = null;
   if (resolvedType === EntityType.WOOD_GOLEM && wood  < 2)          resolvedType = null;
   if (resolvedType === EntityType.MINION      && total < minionCost) resolvedType = null;
+  if (resolvedType === EntityType.ZOMBIE   && (total < minionCost || !corpse)) resolvedType = null;
+  if (resolvedType === EntityType.SKELETON &&  total < minionCost)   resolvedType = null;
   if (!resolvedType) {
-    // Auto-pick priority: iron > wood > minion, restricted to allowed types
+    // Auto-pick priority: iron > wood > zombie (corpse) > skeleton > minion,
+    // restricted to allowed types.
     if      (allowedTypes.has(EntityType.IRON_GOLEM) && metal >= 2)          resolvedType = EntityType.IRON_GOLEM;
     else if (allowedTypes.has(EntityType.WOOD_GOLEM) && wood  >= 2)          resolvedType = EntityType.WOOD_GOLEM;
+    else if (allowedTypes.has(EntityType.ZOMBIE)     && total >= minionCost && corpse) resolvedType = EntityType.ZOMBIE;
+    else if (allowedTypes.has(EntityType.SKELETON)   && total >= minionCost) resolvedType = EntityType.SKELETON;
     else if (allowedTypes.has(EntityType.MINION)     && total >= minionCost) resolvedType = EntityType.MINION;
     else return { success: false, log: [`Need at least ${minionCost} resource${minionCost === 1 ? '' : 's'} to summon.`] };
   }
@@ -1776,18 +1834,43 @@ export function executeSummon(state, actor, requestedType = null) {
     res = ResourceType.WOOD; removeItemInItems(inv, res, 2);
     summonedUnit = createWoodGolem(actor.col, actor.row, ownerId, state);
     unitName = 'Wood Golem';
+  } else if (resolvedType === EntityType.ZOMBIE) {
+    // RAISE DEAD — the corpse rises where it fell; the grave is spent.
+    const spent = _spendAnyResources(inv, minionCost);
+    corpse.consumed = true;
+    summonedUnit = createZombie(corpse.col, corpse.row, ownerId, state);
+    state.entities.push(summonedUnit);
+    assignSlotOnTile(state, summonedUnit);
+    faction.trackSummon(state);
+    return {
+      success: true,
+      log: [`${actor.displayName} calls a corpse back from death — a Zombie claws upright where it fell!`],
+      cost: 1,
+      spent,
+      summonedType: EntityType.ZOMBIE,
+      spawnCol: corpse.col, spawnRow: corpse.row,
+      raisedFromCorpse: true,
+    };
+  } else if (resolvedType === EntityType.SKELETON) {
+    // Fresh conjuration — bones knit together on a seeded-random open hex
+    // within SKELETON_CONJURE_RANGE (state.nextDie keeps resolution sealed).
+    const spent = _spendAnyResources(inv, minionCost);
+    const spawn = _pickSkeletonSpawnHex(state, actor);
+    summonedUnit = createSkeleton(spawn.col, spawn.row, ownerId, state);
+    state.entities.push(summonedUnit);
+    assignSlotOnTile(state, summonedUnit);
+    faction.trackSummon(state);
+    return {
+      success: true,
+      log: [`${actor.displayName} conjures a Skeleton from grave-dust!`],
+      cost: 1,
+      spent,
+      summonedType: EntityType.SKELETON,
+      spawnCol: spawn.col, spawnRow: spawn.row,
+    };
   } else {
     // Minion: spend `minionCost` from any resources, largest stacks first
-    const keys = Object.keys(inv).filter(k => getItemCountOf(inv, k) > 0)
-      .sort((a, b) => getItemCountOf(inv, b) - getItemCountOf(inv, a));
-    let remaining = minionCost;
-    const spentMap = {};
-    for (const k of keys) {
-      const spend = Math.min(getItemCountOf(inv, k), remaining);
-      removeItemInItems(inv, k, spend); remaining -= spend;
-      spentMap[k] = (spentMap[k] || 0) + spend;
-      if (remaining === 0) break;
-    }
+    const spent = _spendAnyResources(inv, minionCost);
     summonedUnit = createMinion(actor.col, actor.row, ownerId, state);
     unitName = 'Minion';
     state.entities.push(summonedUnit);
@@ -1797,7 +1880,7 @@ export function executeSummon(state, actor, requestedType = null) {
       success: true,
       log: [`${actor.displayName} raises a ${unitName}!`],
       cost: 1,
-      spent: Object.entries(spentMap).map(([type, amount]) => ({ type, amount })),
+      spent,
     };
   }
 
@@ -1805,6 +1888,165 @@ export function executeSummon(state, actor, requestedType = null) {
   assignSlotOnTile(state, summonedUnit);
   faction.trackSummon(state);
   return { success: true, log: [`The witch raises a ${unitName}!`], cost: 1, spent: [{ type: res, amount: 2 }] };
+}
+
+// Spend `amount` from any resources in `inv`, largest stacks first (the
+// witch's minion economics — shared by minion, skeleton, and raise-dead).
+// Returns the spent list in the same `[{ type, amount }]` shape the summon
+// results have always carried.
+function _spendAnyResources(inv, amount) {
+  const keys = Object.keys(inv).filter(k => getItemCountOf(inv, k) > 0)
+    .sort((a, b) => getItemCountOf(inv, b) - getItemCountOf(inv, a));
+  let remaining = amount;
+  const spentMap = {};
+  for (const k of keys) {
+    const spend = Math.min(getItemCountOf(inv, k), remaining);
+    removeItemInItems(inv, k, spend); remaining -= spend;
+    spentMap[k] = (spentMap[k] || 0) + spend;
+    if (remaining === 0) break;
+  }
+  return Object.entries(spentMap).map(([type, amount]) => ({ type, amount }));
+}
+
+// Find the corpse RAISE DEAD would consume: unconsumed, never a leader, within
+// RAISE_DEAD_RANGE of the actor, and lying on a hex a fresh unit may stand on
+// (isPlaceableTile — a corpse on a building threshold or a now-full hex is out
+// of reach). Deterministic: nearest first, ties broken by ledger order (oldest
+// grave first) — no dice, so replay/online resolution stays byte-identical.
+function _findRaisableCorpse(state, actor) {
+  const list = state.deathLocations ?? [];
+  let best = null, bestDist = Infinity;
+  for (const d of list) {
+    if (d.consumed) continue;
+    if (isLeaderType(d.type)) continue;   // leaders can never be raised
+    const dist = hexDistance(actor.col, actor.row, d.col, d.row);
+    if (dist > RAISE_DEAD_RANGE) continue;
+    if (!isPlaceableTile(state, d.col, d.row, actor.owner)) continue;
+    if (dist < bestDist) { best = d; bestDist = dist; }
+  }
+  return best;
+}
+
+/** True iff RAISE DEAD currently has a raisable corpse in reach of `actor` —
+ *  drives the UI's "Raise Dead (Zombie)" affordability grey-out. */
+export function hasRaisableCorpse(state, actor) {
+  return !!_findRaisableCorpse(state, actor);
+}
+
+// Seeded-random open hex within SKELETON_CONJURE_RANGE of the actor: placeable
+// terrain (never a river/building/full hex) with no unit standing on it.
+// hexRange enumerates candidates in a fixed order and the pick routes through
+// state.nextDie, so forced dice / replay / online resolution all agree. Falls
+// back to the necromancer's own hex when no open hex exists (mirrors the
+// witch's own-tile summon and consumes no die).
+function _pickSkeletonSpawnHex(state, actor) {
+  const candidates = hexRange(actor.col, actor.row, SKELETON_CONJURE_RANGE).filter(h => {
+    if (h.col === actor.col && h.row === actor.row) return false;
+    if (!isPlaceableTile(state, h.col, h.row, actor.owner)) return false;
+    return !state.entities.some(e => e.alive && e.col === h.col && e.row === h.row);
+  });
+  if (candidates.length === 0) return { col: actor.col, row: actor.row };
+  return candidates[state.nextDie(candidates.length) - 1];
+}
+
+// ── Possess (necromancer) ───────────────────────────────────────────────────
+// Seize control of an enemy unit for one round. Resolving in round N applies
+// the `possessed` effect (source = the possessing player's ownerId) with
+// duration 2: the end-of-round-N tick decrements it to 1, so it is still
+// active through round N+1's planning AND resolution, expiring at N+1's end.
+// While possessed, only the possessor may command the unit — the ownership
+// gates in planner.validatePlan / resolver.runAction / the offline UI all
+// route through canCommandEntity() (src/effects.js).
+
+export function executePossess(state, actor, targetId) {
+  if (!actor.hasAbility('possess')) {
+    return { success: false, log: [`${actor.displayName} cannot possess.`] };
+  }
+  const target = state.entities.find(e => e.id === targetId && e.alive);
+  if (!target) {
+    return { success: false, log: ['Target is dead or gone.'] };
+  }
+  if (target.owner === actor.owner) {
+    return { success: false, log: ['Cannot possess an allied unit.'] };
+  }
+  if (!target.owner) {
+    return { success: false, log: ['That one has no will to dominate.'] };
+  }
+  if (isLeaderType(target.type)) {
+    return { success: false, log: ['Enemy leaders cannot be possessed.'] };
+  }
+  const dist = hexDistance(actor.col, actor.row, target.col, target.row);
+  if (dist > POSSESS_RANGE) {
+    return { success: false, log: [`${target.displayName} is out of range (max ${POSSESS_RANGE}).`] };
+  }
+
+  applyEffect(target, 'possessed', { source: actor.ownerId, duration: 2 });
+  return {
+    success: true,
+    log: [`${ICON.eye} ${actor.displayName} seizes ${target.displayName}'s will — the body obeys a new master!`],
+    cost: 1,
+    targetId: target.id,
+    targetName: target.displayName,
+    targetOwner: target.owner,
+    possessorOwnerId: actor.ownerId ?? null,
+  };
+}
+
+// ── Teleport (necromancer) ──────────────────────────────────────────────────
+// Inaccurate warp: the player picks a CENTER hex up to TELEPORT_RANGE away;
+// the landing clump = that hex + its neighbors filtered to passable/unoccupied
+// ground, and resolution picks one member with state.nextDie (sealed).
+
+/**
+ * The hexes the necromancer may materialise on for a warp centered at
+ * (centerCol,centerRow): the center + its 6 neighbors, filtered to on-map,
+ * non-river, non-building-footprint, non-fort-blocked (witch side is wall-
+ * blocked), unoccupied, with tile capacity remaining. Fixed enumeration order
+ * (center first, then neighbor order) so the seeded pick is deterministic.
+ * Shared by the executor, the targeting UI, and getValidActions.
+ */
+export function getTeleportClump(state, actor, centerCol, centerRow) {
+  const hexes = [{ col: centerCol, row: centerRow }, ...getNeighbors(centerCol, centerRow)];
+  return hexes.filter(h => {
+    const t = tile(state, h.col, h.row);
+    if (!t || isRiver(t) || isBuildingFootprint(t)) return false;
+    if (isFortBlocking(t, actor.owner)) return false;
+    if (state.entities.some(e => e.alive && e.id !== actor.id && e.col === h.col && e.row === h.row)) return false;
+    if (isTileFullForMove(state, actor, h.col, h.row)) return false;
+    return true;
+  });
+}
+
+export function executeTeleport(state, actor, targetCol, targetRow) {
+  if (!actor.hasAbility('teleport')) {
+    return { success: false, log: [`${actor.displayName} cannot teleport.`] };
+  }
+  const t = tile(state, targetCol, targetRow);
+  if (!t) return { success: false, log: ['Invalid target.'] };
+  const dist = hexDistance(actor.col, actor.row, targetCol, targetRow);
+  if (dist > TELEPORT_RANGE) {
+    return { success: false, log: [`Too far to fold — max ${TELEPORT_RANGE} hexes.`] };
+  }
+  const clump = getTeleportClump(state, actor, targetCol, targetRow);
+  if (clump.length === 0) {
+    return { success: false, log: ['No safe ground to arrive on.'] };
+  }
+  const dest = clump[state.nextDie(clump.length) - 1];
+  const fromCol = actor.col, fromRow = actor.row;
+  actor.guarding = 0;  // relocating breaks guard stance, like a move
+  actor.col = dest.col;
+  actor.row = dest.row;
+  assignSlotOnTile(state, actor);
+  return {
+    success: true,
+    log: [`${ICON.newMoon} ${actor.displayName} folds through shadow — and staggers out at (${dest.col},${dest.row})!`],
+    cost: 1,
+    teleport: true,
+    fromCol, fromRow,
+    toCol: dest.col, toRow: dest.row,
+    centerCol: targetCol, centerRow: targetRow,
+    slot: actor.slot,
+  };
 }
 
 export function executeHeal(state, actor) {

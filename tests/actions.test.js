@@ -2377,6 +2377,83 @@ describe('computeProjectedInventory', () => {
     computeProjectedInventory(s, [{ type: PlanActionType.SUMMON }]);
     assert.equal(c(s.inventory.witch.metal), 4, 'original state unchanged');
   });
+
+  test('necromancer SUMMON deducts exactly 1 (getMinionCost), not the witch 2', () => {
+    const s = baseState();
+    s.swapLeaderToFaction('night', 'necromancer');
+    const p = computeProjectedInventory(s, [{ type: PlanActionType.SUMMON, entityId: s.witch.id }]);
+    // 1 of any resource, largest stack first: metal 4 → 3, wood untouched.
+    assert.equal(c(p.witch.metal), 3, 'metal reduced by exactly 1');
+    assert.equal(c(p.witch.wood),  2, 'wood unchanged');
+  });
+});
+
+// ── projectSummonSpend (shared faction-aware summon-spend projection) ────────
+//
+// Single source of truth for the three plan-panel projections
+// (computeProjectedInventory, ui-render's per-step cost labels, and its
+// running-pool walker). Regression: the walker used to hard-code the witch's
+// 2-resource economics, over-deducting 1 per queued necromancer summon.
+import { projectSummonSpend } from '../src/planner.js';
+
+describe('projectSummonSpend', () => {
+  const c = (entry) => entry?.count ?? 0;
+
+  test('witch caster prefers 2 metal (Iron Golem path)', () => {
+    const s = new GameState(true, true);
+    const pool = { metal: { count: 4 }, wood: { count: 2 } };
+    const r = projectSummonSpend(s.witch, pool);
+    assert.deepEqual(r, { amount: 2, resource: ResourceType.METAL });
+    assert.equal(c(pool.metal), 2);
+    assert.equal(c(pool.wood),  2);
+  });
+
+  test('witch caster falls to 2 wood, then mixed any-resource spend', () => {
+    const s = new GameState(true, true);
+    const woodPool = { metal: { count: 1 }, wood: { count: 2 } };
+    assert.deepEqual(projectSummonSpend(s.witch, woodPool), { amount: 2, resource: ResourceType.WOOD });
+    assert.equal(c(woodPool.wood), 0);
+
+    // Neither stack covers 2 → mixed spend, largest stacks first.
+    const mixedPool = { metal: { count: 1 }, wood: { count: 1 }, food: { count: 3 } };
+    const r = projectSummonSpend(s.witch, mixedPool);
+    assert.deepEqual(r, { amount: 2, resource: null });
+    assert.equal(c(mixedPool.food), 1, 'largest stack (food 3) pays the whole cost');
+  });
+
+  test('null caster falls back to witch economics (legacy flat-plan path)', () => {
+    const pool = { metal: { count: 4 } };
+    assert.deepEqual(projectSummonSpend(null, pool), { amount: 2, resource: ResourceType.METAL });
+    assert.equal(c(pool.metal), 2);
+  });
+
+  test('necromancer caster spends exactly getMinionCost() = 1 of any resource', () => {
+    const s = new GameState(true, true);
+    s.swapLeaderToFaction('night', 'necromancer');
+    const pool = { metal: { count: 4 }, wood: { count: 2 } };
+    const r = projectSummonSpend(s.witch, pool);
+    assert.deepEqual(r, { amount: 1, resource: null });
+    assert.equal(c(pool.metal), 3, 'largest stack down by exactly 1');
+    assert.equal(c(pool.wood),  2, 'wood unchanged');
+  });
+
+  test('brute caster also spends exactly 1', () => {
+    const s = new GameState(true, true);
+    s.swapLeaderToFaction('night', 'brute');
+    const pool = { wood: { count: 3 } };
+    const r = projectSummonSpend(s.witch, pool);
+    assert.equal(r.amount, 1);
+    assert.equal(c(pool.wood), 2);
+  });
+
+  test('apply=false reports the cost without touching the pool', () => {
+    const s = new GameState(true, true);
+    s.swapLeaderToFaction('night', 'necromancer');
+    const pool = { metal: { count: 4 } };
+    const r = projectSummonSpend(s.witch, pool, false);
+    assert.equal(r.amount, 1);
+    assert.equal(c(pool.metal), 4, 'pool untouched');
+  });
 });
 
 // ── Survivor discovery (phase-based chance) ───────────────────────────────────

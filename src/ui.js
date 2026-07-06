@@ -11,7 +11,9 @@ import { makeOverlay } from './overlays.js';
 import { concreteFactionOf, getFaction } from './factions.js';
 import {
   ActionType, getValidActions, getVisiblePositions, computeCombatOdds,
+  getTeleportClump, hasRaisableCorpse, POSSESS_RANGE, TELEPORT_RANGE,
 } from './actions.js';
+import { possessorOf } from './effects.js';
 import * as audio from './audio.js';
 
 import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan, groupPlanByEntity, validatePlanAction, buildAutoGuardQueue } from './planner.js';
@@ -1791,11 +1793,9 @@ export class UIController {
       ? this.renderer?.planGhostSteps?.at(-1)?.positions
       : null;
     const clickedEntities = state.entities.filter(e => {
-      if (!e.alive || e.owner !== ownerFilter) return false;
-      // Scripted campaign NPCs are never controllable (view-only below).
-      if (e.isNpc) return false;
-      // In online MP, only allow selecting entities owned by the local player.
-      if (this.myPlayerId && e.ownerId && e.ownerId !== this.myPlayerId) return false;
+      // Command gate: owner (and MP seat) checks + possession handoff — a
+      // possessed enemy unit is OURS to select; our own possessed unit is not.
+      if (!this._canCommand(e)) return false;
       const ghostPos = lastGhostPos?.get(e.id);
       // In planning mode, if the entity has been moved in the plan, use ONLY the
       // ghost position — it should no longer appear on its real tile.
@@ -1807,15 +1807,7 @@ export class UIController {
       // No controllable units — check for any visible non-controllable units
       // (enemies OR allied teammates' units in N-player MP) for view-only selection.
       const viewOnlyEntities = _visibleUnitsAt(state, hex.col, hex.row)
-        .filter(e => {
-          // Enemy faction → always view-only
-          if (e.owner !== ownerFilter) return true;
-          // Scripted campaign NPC → view-only
-          if (e.isNpc) return true;
-          // Same faction but a different player → ally, view-only
-          if (this.myPlayerId && e.ownerId && e.ownerId !== this.myPlayerId) return true;
-          return false;
-        });
+        .filter(e => !this._canCommand(e));
       if (viewOnlyEntities.length > 1) {
         this._hideTileDetail();
         this._selectedEntity       = null;
@@ -1923,6 +1915,16 @@ export class UIController {
         if (posChanged) { effectiveEntity.col = proj.col; effectiveEntity.row = proj.row; }
       }
     }
+    // A possessed ENEMY unit is ours to command this round — flip the proxy's
+    // owner to the commanding faction so target enumeration (battle/battle-hex,
+    // move blocking) points at ITS former allies, not ours. Prototype-preserving
+    // clone; the live entity (and resolution-time rules) keep the true owner.
+    if (this._planMode && entity.owner !== this._planFaction && this._canCommand(entity)) {
+      effectiveEntity = Object.setPrototypeOf(
+        { ...effectiveEntity, owner: this._planFaction },
+        Object.getPrototypeOf(entity)
+      );
+    }
 
     this.renderer.setSelection({
       entityId: entity.id,
@@ -1985,6 +1987,28 @@ export class UIController {
   }
 
   /**
+   * May the local commander (plan faction offline, myPlayerId online) issue
+   * orders to `entity` right now? The UI mirror of canCommandEntity()
+   * (src/effects.js): a POSSESSED unit obeys only its possessor — a possessed
+   * ENEMY unit becomes selectable/commandable here, while one of our own units
+   * possessed by the enemy drops to view-only until the effect expires.
+   */
+  _canCommand(entity) {
+    const state = this.state;
+    if (!state || !entity || !entity.alive || entity.isNpc) return false;
+    const ownerFilter = this._planMode ? this._planFaction : state.activePlayer;
+    const possessor = possessorOf(entity);
+    if (possessor != null) {
+      if (this.myPlayerId) return possessor === this.myPlayerId;
+      const p = (state.players ?? []).find(pl => pl.id === possessor);
+      return (p?.faction ?? possessor) === ownerFilter;
+    }
+    if (entity.owner !== ownerFilter) return false;
+    if (this.myPlayerId && entity.ownerId && entity.ownerId !== this.myPlayerId) return false;
+    return true;
+  }
+
+  /**
    * Return the list of alive entities the local player can control in the
    * current context, in a stable order (by id). Mirrors the owner filter used
    * by _handleSelection so the cycle/plan-panel lists match what tapping the
@@ -1993,12 +2017,7 @@ export class UIController {
   _getControllableUnits() {
     const state = this.state;
     if (!state) return [];
-    const ownerFilter = this._planMode ? this._planFaction : state.activePlayer;
-    const list = state.entities.filter(e => {
-      if (!e.alive || e.owner !== ownerFilter || e.isNpc) return false;
-      if (this.myPlayerId && e.ownerId && e.ownerId !== this.myPlayerId) return false;
-      return true;
-    });
+    const list = state.entities.filter(e => this._canCommand(e));
     list.sort((a, b) => String(a.id).localeCompare(String(b.id)));
     return list;
   }
@@ -2189,6 +2208,12 @@ export class UIController {
       // Highlight all adjacent non-river hexes as potential targets
       this._setTargetOverlay('battle-hex-targets', 'rgba(220,120,40,0.50)',
         this._awaitingTarget.hexTargets ?? []);
+    } else if (actionType === ActionType.POSSESS) {
+      this._setTargetOverlay('possess-targets', 'rgba(176,110,224,0.55)',
+        (this._awaitingTarget.possessTargets ?? []).map(t => ({ col: t.col, row: t.row })));
+    } else if (actionType === ActionType.TELEPORT) {
+      this._setTargetOverlay('teleport-targets', 'rgba(150,90,220,0.40)',
+        this._awaitingTarget.hexTargets ?? []);
     }
   }
 
@@ -2276,6 +2301,36 @@ export class UIController {
       else this._clearSelection();
       this._updateSidebar();
       this.onRedraw();
+
+    } else if (actionType === ActionType.POSSESS) {
+      const possessTargets = this._awaitingTarget.possessTargets ?? [];
+      const targetsAtHex = possessTargets.filter(t => t.col === hex.col && t.row === hex.row);
+      if (!targetsAtHex.length) return;
+
+      this._awaitingTarget = null;
+      this.renderer.clearOverlaysByLayer('highlight-disc');
+      this._addToPlan({ type: PlanActionType.POSSESS, entityId: actor.id, targetId: targetsAtHex[0].id });
+      if (actor.alive) this._selectEntity(actor);
+      else this._clearSelection();
+      this._updateSidebar();
+      this.onRedraw();
+
+    } else if (actionType === ActionType.TELEPORT) {
+      const hexTargets = this._awaitingTarget.hexTargets ?? [];
+      if (!hexTargets.some(t => t.col === hex.col && t.row === hex.row)) return;
+
+      this._awaitingTarget = null;
+      this.renderer.clearOverlaysByLayer('highlight-disc');
+      this._addToPlan({ type: PlanActionType.TELEPORT, entityId: actor.id, targetCol: hex.col, targetRow: hex.row });
+      if (actor.alive) this._selectEntity(actor);
+      else this._clearSelection();
+      // Flash the landing clump AFTER reselection so the player sees exactly
+      // which hexes the seeded arrival can land on (cleared by the next
+      // selection/highlight refresh).
+      const clump = getTeleportClump(this.state, actor, hex.col, hex.row);
+      this._setTargetOverlay('teleport-clump', 'rgba(190,140,255,0.55)', clump);
+      this._updateSidebar();
+      this.onRedraw();
     }
   }
 
@@ -2316,8 +2371,7 @@ export class UIController {
       return;
     }
 
-    const ownerCheck = this._planMode ? this._planFaction : state.activePlayer;
-    if (!entity || entity.owner !== ownerCheck || entity.isNpc || state.gameOver) {
+    if (!entity || !this._canCommand(entity) || state.gameOver) {
       hideActionPopup(this);
       return;
     }
@@ -2337,6 +2391,14 @@ export class UIController {
         effectiveEntity = applyProjectedEquip(entity, weaponChanged ? projWeapon : null);
         if (posChanged) { effectiveEntity.col = proj.col; effectiveEntity.row = proj.row; }
       }
+    }
+    // Possessed enemy unit — command it from OUR side's perspective (see the
+    // matching flip in _selectEntity).
+    if (this._planMode && entity.owner !== this._planFaction && this._canCommand(entity)) {
+      effectiveEntity = Object.setPrototypeOf(
+        { ...effectiveEntity, owner: this._planFaction },
+        Object.getPrototypeOf(entity)
+      );
     }
     const actions = getValidActions(state, effectiveEntity);
 
@@ -2472,6 +2534,18 @@ export class UIController {
             attrs: `data-action="use_ability" data-ability="${action.ability}"` });
           break;
         }
+        case ActionType.POSSESS:
+          arcItems.push({ group: 'combat', label: 'Possess',
+            fullLabel: `Possess (enemy unit within ${POSSESS_RANGE})`,
+            desc: 'Seize an enemy unit\'s will — next round you command it and its master cannot. Leaders are immune. Fades after one round.',
+            color: '#b06ee0', dis, cost: 1, attrs: 'data-action="possess"' });
+          break;
+        case ActionType.TELEPORT:
+          arcItems.push({ group: 'combat', label: 'Teleport',
+            fullLabel: `Teleport (up to ${TELEPORT_RANGE} hexes, inexact)`,
+            desc: 'Fold through shadow toward a chosen hex — you arrive somewhere in that area, not exactly where you aimed.',
+            color: '#b06ee0', dis, cost: 1, attrs: 'data-action="teleport"' });
+          break;
         case ActionType.SENT_TO:
           // Multiplayer free action on the SURVIVOR — getValidActions only
           // surfaces this when the survivor has a live owning leader AND
@@ -2504,10 +2578,21 @@ export class UIController {
           .getSummonOptions({ [ResourceType.METAL]: { count: 99 }, [ResourceType.WOOD]: { count: 99 } })
           .map(o => o.summonType)
       );
+      // Raise-dead corpse availability (necromancer): the Zombie option needs
+      // an unconsumed, raisable corpse within reach of where the plan LEAVES
+      // the caster. Uses the live position — close enough for greying; the
+      // resolver re-checks authoritatively and falls back to a skeleton.
+      const corpseInReach = hasRaisableCorpse(state, entity);
+      // Any-resource summon cost comes from the concrete faction (witch 2,
+      // brute/necromancer 1) so labels + grey-outs track the real economics.
+      const anyCost = concreteFactionOf(entity).getMinionCost();
+      const anyRes  = `${anyCost} res`;
       const ALL_SUMMONS = [
         { st: EntityType.IRON_GOLEM, label: 'Summon Iron Golem',  full: 'Summon Iron Golem (2 metal)',  afford: projMetal >= 2, res: `2 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.METAL])}` },
         { st: EntityType.WOOD_GOLEM, label: 'Summon Wood Golem', full: 'Summon Wood Golem (2 wood)',   afford: projWood >= 2, res: `2 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.WOOD])}` },
-        { st: EntityType.MINION,     label: 'Summon Minion',      full: 'Summon Minion (2 any resource)', afford: projTotal >= 2, res: '2 res' },
+        { st: EntityType.ZOMBIE,     label: 'Raise Dead',         full: `Raise Dead — Zombie at a corpse within 3 (${anyCost} any resource)`, afford: projTotal >= anyCost && corpseInReach, res: anyRes },
+        { st: EntityType.SKELETON,   label: 'Summon Skeleton',    full: `Summon Skeleton — appears nearby (${anyCost} any resource)`, afford: projTotal >= anyCost, res: anyRes },
+        { st: EntityType.MINION,     label: 'Summon Minion',      full: `Summon Minion (${anyCost} any resource)`, afford: projTotal >= anyCost, res: anyRes },
       ];
       for (const s of ALL_SUMMONS) {
         if (!allowedSummons.has(s.st)) continue;
@@ -2905,11 +2990,11 @@ export class UIController {
 
     const GLYPHS = {
       hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003',
-      zombie: '\uE005', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007',
+      zombie: '\uE005', skeleton: '\uE00D', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007',
     };
     const COLORS = {
       hero: '#d4a72c', witch: '#9b59b6', survivor: '#4caf7d', soldier: '#3f78c4',
-      zombie: '#7c9a57', minion: '#c0392b', wood_golem: '#8B5E3C', iron_golem: '#607D8B',
+      zombie: '#7c9a57', skeleton: '#c9c4ae', minion: '#c0392b', wood_golem: '#8B5E3C', iron_golem: '#607D8B',
     };
 
     const glyph = GLYPHS[entity.type] ?? '?';
@@ -2954,9 +3039,7 @@ export class UIController {
 
     // Cycle arrows — only when viewing a controllable friendly unit and there
     // are multiple controllable units to cycle between.
-    const ownerFilter = this._planMode ? this._planFaction : this.state.activePlayer;
-    const isMine = entity.owner === ownerFilter &&
-      (!this.myPlayerId || !entity.ownerId || entity.ownerId === this.myPlayerId);
+    const isMine = this._canCommand(entity);
     const showCycle = isMine && !this._isEnemySelection
       && this._getControllableUnits().length > 1;
     const cyclePrevHtml = showCycle
@@ -3427,7 +3510,7 @@ export class UIController {
     }
 
     if (!entity || !this._planMode) return;
-    if (entity.owner !== this._planFaction) return;
+    if (!this._canCommand(entity)) return;
 
     // Stackable actions: keep the arc menu open, just pulse the button
     const STACKABLE = new Set(['guard', 'summon', 'fortify']);
@@ -3506,6 +3589,33 @@ export class UIController {
         this._clearTargetOverlays();
         this._setTargetOverlay('battle-hex-targets', 'rgba(220,120,40,0.50)', hexTargets);
         state.addLog('Click a hex to attack it (skips if empty).');
+        this._updateSidebar();
+        this.onRedraw();
+        break;
+      }
+
+      case 'possess': {
+        delayedHide();
+        const pAction = this._validActions.find(a => a.type === ActionType.POSSESS);
+        const possessTargets = pAction?.targets ?? [];
+        this._awaitingTarget = { actionType: ActionType.POSSESS, actor: entity, possessTargets };
+        this._clearTargetOverlays();
+        this._setTargetOverlay('possess-targets', 'rgba(176,110,224,0.55)',
+          possessTargets.map(t => ({ col: t.col, row: t.row })));
+        state.addLog('Click an enemy unit to possess it (leaders are immune).');
+        this._updateSidebar();
+        this.onRedraw();
+        break;
+      }
+
+      case 'teleport': {
+        delayedHide();
+        const tAction = this._validActions.find(a => a.type === ActionType.TELEPORT);
+        const hexTargets = tAction?.targets ?? [];
+        this._awaitingTarget = { actionType: ActionType.TELEPORT, actor: entity, hexTargets };
+        this._clearTargetOverlays();
+        this._setTargetOverlay('teleport-targets', 'rgba(150,90,220,0.40)', hexTargets);
+        state.addLog('Click a hex to warp toward — the arrival inside that area is inexact.');
         this._updateSidebar();
         this.onRedraw();
         break;
@@ -4081,7 +4191,7 @@ export class UIController {
     const dialog = this._el('encounter-dialog');
     const card   = this._el('encounter-card');
 
-    const GLYPHS = { hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003', zombie: '\uE005', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007' };
+    const GLYPHS = { hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003', zombie: '\uE005', skeleton: '\uE00D', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007' };
     const glyph  = GLYPHS[encounterUnit.type] ?? '?';
     const color  = encounterUnit.color || '#d4c9b0';
 
@@ -6662,7 +6772,7 @@ function _entityPortraitId(snap) {
  * @param {number}  [opts.portraitSize] Portrait diameter in px (default 36).
  */
 function _unitCardHTML(entity, { renderer = null, selectable = false, showStats = true, portraitSize = 36 } = {}) {
-  const GLYPHS = { hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003', zombie: '\uE005', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007' };
+  const GLYPHS = { hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003', zombie: '\uE005', skeleton: '\uE00D', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007' };
   const color  = ENTITY_COLOR[entity.type] || '#888';
   const glyph  = GLYPHS[entity.type] ?? '?';
   const label  = (entity.type === 'survivor' && entity.name) ? entity.name

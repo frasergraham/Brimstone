@@ -13,7 +13,7 @@ import { ICON } from './icons.js';
 
 export const WRAPUP_GLYPHS = Object.freeze({
   hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003',
-  zombie: '\uE005', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007',
+  zombie: '\uE005', skeleton: '\uE00D', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007',
 });
 
 /**

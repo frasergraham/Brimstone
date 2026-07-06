@@ -118,7 +118,7 @@ describe('Stub factions (PR 5)', () => {
     // day/night stubs still inherit their parent's behaviour wholesale.
     assert.equal(getFaction('rogue').isStub(),       false);
     assert.equal(getFaction('captain').isStub(),     true);
-    assert.equal(getFaction('necromancer').isStub(), true);
+    assert.equal(getFaction('necromancer').isStub(), false); // real faction since the RAISE DEAD / POSSESS / TELEPORT PR
     assert.equal(getFaction('brute').isStub(),       false);
     assert.equal(getFaction('hero').isStub(),        false);
     assert.equal(getFaction('witch').isStub(),       false);

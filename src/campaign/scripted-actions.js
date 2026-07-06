@@ -119,6 +119,7 @@ export async function runScriptedActions(actions, ctx) {
       continue;
     }
     if (a.action === 'despawn') {
+      // Despawn ≠ death: intentionally records NO grave (state.deathLocations) — a scripted "kill" must record one itself or RAISE DEAD silently starves.
       if (!instant) await playbackDelay(200);
       const i = state.entities.indexOf(e);
       if (i >= 0) state.entities.splice(i, 1);
