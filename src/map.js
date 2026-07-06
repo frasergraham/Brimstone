@@ -518,17 +518,24 @@ function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, river
   shuffle(right, rand);
 
   const placed = [];
-  const ok = c => !placed.some(p => hexDistance(p.col, p.row, c.col, c.row) < minDist);
+  const okAt = (c, d) => !placed.some(p => hexDistance(p.col, p.row, c.col, c.row) < d);
 
   if (count >= 2 && left.length > 0 && right.length > 0) {
-    const l = left.find(ok);  if (l) placed.push(l);
-    const r = right.find(ok); if (r) placed.push(r);
+    const l = left.find(c => okAt(c, minDist));  if (l) placed.push(l);
+    const r = right.find(c => okAt(c, minDist)); if (r) placed.push(r);
   }
 
+  // Fill at the requested spacing first, then relax it one hex at a time —
+  // a chosen node count must be honored on cramped maps even if the nodes
+  // end up closer together than ideal. The d = minDist pass is identical to
+  // the pre-relaxation behavior, so maps that never needed the fallback are
+  // unchanged (and no extra rand calls are made — seeds stay stable).
   const rest = shuffle([...left, ...right], rand);
-  for (const c of rest) {
-    if (placed.length >= count) break;
-    if (!placed.some(p => p.col === c.col && p.row === c.row) && ok(c)) placed.push(c);
+  for (let d = minDist; d >= 1 && placed.length < count; d--) {
+    for (const c of rest) {
+      if (placed.length >= count) break;
+      if (!placed.some(p => p.col === c.col && p.row === c.row) && okAt(c, d)) placed.push(c);
+    }
   }
 
   return placed;

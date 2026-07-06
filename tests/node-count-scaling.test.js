@@ -148,6 +148,17 @@ describe('generateMap — the chosen count flows through (offline + online share
       MAP_SIZES.battle.nodeCountMin);
   });
 
+  // Regression: node placement is spacing-relaxing, not best-effort. Before the
+  // relaxation fallback, ~30% of skirmish seeds could not fit 3 nodes at the
+  // ideal min-distance and silently produced fewer nodes than the player chose.
+  test('the clamped count is honored on every seed, even cramped small maps', () => {
+    for (let seed = 1; seed <= 40; seed++) {
+      assert.equal(generateMap(seed, 'skirmish', 7).witchObjectives.length,
+        MAP_SIZES.skirmish.nodeCountMax,
+        `skirmish seed ${seed} places exactly ${MAP_SIZES.skirmish.nodeCountMax} nodes`);
+    }
+  });
+
   test('a null override falls back to the size default', () => {
     for (const size of SIZES) {
       const map = generateMap(2024, size, null);

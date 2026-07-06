@@ -18,6 +18,7 @@ import {
 } from '../../src/ui-render.js';
 import { PlanActionType } from '../../src/planner.js';
 import { EntityType } from '../../src/entities.js';
+import { ICON } from '../../src/icons.js';
 
 // ── describePlanAction ────────────────────────────────────────────────────────
 
@@ -249,21 +250,21 @@ describe('buildPlayerStatusHtml', () => {
     const players = [{ playerId: 'p1', name: 'Alice', faction: 'hero', _submitted: true }];
     const html = buildPlayerStatusHtml(players);
     assert.ok(html.includes('player-ready'), 'submitted player should be ready');
-    assert.ok(html.includes('✓'), 'ready indicator');
+    assert.ok(html.includes(ICON.check), 'ready indicator');
   });
 
   test('hero faction gets hero CSS class', () => {
     const players = [{ playerId: 'p1', name: 'Alice', faction: 'hero' }];
     const html = buildPlayerStatusHtml(players);
     assert.ok(html.includes('faction-hero'), 'hero gets faction-hero class');
-    assert.ok(html.includes('⚔'), 'hero glyph');
+    assert.ok(html.includes(ICON.hero), 'hero glyph');
   });
 
   test('witch faction gets witch CSS class', () => {
     const players = [{ playerId: 'p1', name: 'Bob', faction: 'witch' }];
     const html = buildPlayerStatusHtml(players);
     assert.ok(html.includes('faction-witch'), 'witch gets faction-witch class');
-    assert.ok(html.includes('✦'), 'witch glyph');
+    assert.ok(html.includes(ICON.witch), 'witch glyph');
   });
 
   test('XSS chars in name are escaped', () => {
@@ -703,14 +704,14 @@ describe('buildMissionLogHtml', () => {
       { id: 'zk', label: 'Kill three zombies', target: 3, current: 3, completed: true },
     ]);
     assert.match(html, /class="mission-log-item done"/);
-    assert.match(html, /mission-log-marker">✓</);
+    assert.match(html, new RegExp(`mission-log-marker">${ICON.check}<`));
   });
 
   test('a target-less objective is a plain checkbox', () => {
     const html = buildMissionLogHtml([
       { id: 'golem', label: 'Defeat the Wood Golem', target: null, current: 0, completed: false },
     ]);
-    assert.match(html, /mission-log-marker">☐</);
+    assert.match(html, new RegExp(`mission-log-marker">${ICON.checkbox}<`));
     assert.match(html, /Defeat the Wood Golem/);
   });
 
