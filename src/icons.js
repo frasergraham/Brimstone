@@ -21,6 +21,7 @@ export const ICON = Object.freeze({
   rogue: '\uE00A',
   ogre: '\uE00B',
   person: '\uE00C',
+  skeleton: '\uE00D',
   wood: '\uE010',
   metal: '\uE011',
   food: '\uE012',

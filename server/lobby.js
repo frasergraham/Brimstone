@@ -1457,6 +1457,33 @@ export function _serializeEvents(events) {
         out.result.destOwnerId   = ev.result.destOwnerId   ?? null;
         out.result.destOwnerName = ev.result.destOwnerName ?? null;
       }
+      // Necromancer SUMMON results carry the spawn hex — a skeleton lands on a
+      // seeded-random hex near the caster and RAISE DEAD rises at the corpse
+      // hex, so the replay can't infer the position from the caster's tile.
+      if (ev.action?.type === 'summon') {
+        out.result.summonedType     = ev.result.summonedType     ?? null;
+        out.result.spawnCol         = ev.result.spawnCol         ?? null;
+        out.result.spawnRow         = ev.result.spawnRow         ?? null;
+        out.result.raisedFromCorpse = ev.result.raisedFromCorpse ?? false;
+      }
+      // POSSESS — target identity for the replay card + who now commands it.
+      if (ev.action?.type === 'possess') {
+        out.result.targetId         = ev.result.targetId         ?? null;
+        out.result.targetName       = ev.result.targetName       ?? null;
+        out.result.targetOwner      = ev.result.targetOwner      ?? null;
+        out.result.possessorOwnerId = ev.result.possessorOwnerId ?? null;
+      }
+      // TELEPORT — chosen center vs actual arrival, for the warp animation.
+      if (ev.action?.type === 'teleport') {
+        out.result.teleport  = ev.result.teleport  ?? true;
+        out.result.fromCol   = ev.result.fromCol   ?? null;
+        out.result.fromRow   = ev.result.fromRow   ?? null;
+        out.result.toCol     = ev.result.toCol     ?? null;
+        out.result.toRow     = ev.result.toRow     ?? null;
+        out.result.centerCol = ev.result.centerCol ?? null;
+        out.result.centerRow = ev.result.centerRow ?? null;
+        out.result.slot      = ev.result.slot      ?? 0;
+      }
     }
     if (ev.battleSnaps) {
       out.battleSnaps = ev.battleSnaps;

@@ -79,6 +79,16 @@ export const UNIT_TYPES = Object.freeze({
     color: '#7c9a57',
     tags: ['undead'],
   },
+  // Skeleton — the Necromancer's conjured chaff (RAISE DEAD's fresh-summon
+  // path). Zombie/minion neighborhood: same 2-logical-HP pool (14 = 2×7 — see
+  // the HP NOTE above), trading the zombie's hitting power for a point of
+  // bone-armour and enough agility to act before the shamblers.
+  skeleton: {
+    baseStats: { maxHp: 14, attack: 1, defense: 1 },
+    agility: 4,
+    color: '#c9c4ae',
+    tags: ['undead', 'summoned'],
+  },
   minion: {
     baseStats: { maxHp: 14, attack: 1, defense: 0 },
     agility: 5,

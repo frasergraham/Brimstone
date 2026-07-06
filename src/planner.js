@@ -1,10 +1,11 @@
 // Simultaneous-turn planning: action types, ghost-state projection, and entity snap.
-import { hexKey, getNeighbors } from './hex.js';
-import { getReachableHexes, getVisiblePositions } from './actions.js';
+import { hexKey, getNeighbors, hexDistance } from './hex.js';
+import { concreteFactionOf } from './factions.js';
+import { getReachableHexes, getVisiblePositions, POSSESS_RANGE, TELEPORT_RANGE } from './actions.js';
 import { ResourceType, isRiver } from './tiles.js';
 import { EntityType, normalizeItems, getItemCountOf, removeItemInItems, getEquippedWeaponIdOf } from './entities.js';
 import { ITEMS } from './items.js';
-import { effectsBlockActions } from './effects.js';
+import { effectsBlockActions, canCommandEntity, possessorOf } from './effects.js';
 
 // ── Plan action types ────────────────────────────────────────────────────────
 //
@@ -33,6 +34,13 @@ export const PlanActionType = Object.freeze({
   // The sender leader is derived live at resolution time from the
   // survivor's current ownerId — no separate sender field on the wire.
   SENT_TO:      'sent-to',
+  // Necromancer spells (innate leader abilities):
+  // POSSESS  — { type, entityId, targetId }: seize an enemy unit for a round.
+  // TELEPORT — { type, entityId, targetCol, targetRow }: inaccurate warp; the
+  //            target is the CENTER hex, resolution lands on a seeded-random
+  //            member of the center+neighbors clump.
+  POSSESS:      'possess',
+  TELEPORT:     'teleport',
 });
 
 // Maximum number of steps a player may place in their plan.
@@ -229,6 +237,29 @@ export function computeGhostState(state, plan) {
       // Give the new unit a temporary id for ghost rendering.
       const ghostId = `ghost-summon-${steps.length}`;
       positions.set(ghostId, { col: spawnCol, row: spawnRow });
+    } else if (action.type === PlanActionType.TELEPORT) {
+      // Ghost at the chosen CENTER hex — the true arrival is a seeded-random
+      // clump member picked at resolution, so the center is the best projection.
+      const pos = positions.get(action.entityId);
+      if (pos && action.targetCol != null) {
+        moveStepNumber++;
+        stepNumber = moveStepNumber;
+        arrow = {
+          entityId: action.entityId,
+          fromCol:  pos.col,
+          fromRow:  pos.row,
+          toCol:    action.targetCol,
+          toRow:    action.targetRow,
+        };
+        positions.set(action.entityId, { col: action.targetCol, row: action.targetRow });
+      }
+    } else if (action.type === PlanActionType.POSSESS) {
+      // Render the domination as an attack-style arrow toward the victim.
+      const fromPos = positions.get(action.entityId);
+      const toPos   = positions.get(action.targetId);
+      if (fromPos && toPos) {
+        attackArrow = { fromCol: fromPos.col, fromRow: fromPos.row, toCol: toPos.col, toRow: toPos.row };
+      }
     } else {
       // Project a weapon switch — a USE_ITEM of a weapon (the real UI path) or a
       // legacy EQUIP_WEAPON — so range-driven highlights for THIS and later steps
@@ -273,13 +304,22 @@ export function computeProjectedInventory(state, plan) {
   for (const action of plan) {
     switch (action.type) {
       case PlanActionType.SUMMON: {
-        // Mirrors pickSummonType + executeSummon spending
-        if (getItemCountOf(witch, ResourceType.METAL) >= 2) {
+        // Mirrors executeSummon spending. The caster's concrete faction decides
+        // the shape: golem-capable factions (witch) prefer 2 metal → 2 wood →
+        // any; undead/chaff-only factions (necromancer, brute) always spend
+        // getMinionCost() of any resource, largest stacks first.
+        const caster  = (state.entities ?? []).find(e => e.id === action.entityId);
+        const conc    = caster ? concreteFactionOf(caster) : null;
+        const allowed = new Set((conc?.getSummonOptions({ metal: { count: 99 }, wood: { count: 99 } }) ?? [])
+          .map(o => o.summonType));
+        const golems  = allowed.has(EntityType.IRON_GOLEM) || allowed.has(EntityType.WOOD_GOLEM) || !conc;
+        const anyCost = conc?.getMinionCost() ?? 2;
+        if (golems && getItemCountOf(witch, ResourceType.METAL) >= 2) {
           removeItemInItems(witch, ResourceType.METAL, 2);
-        } else if (getItemCountOf(witch, ResourceType.WOOD) >= 2) {
+        } else if (golems && getItemCountOf(witch, ResourceType.WOOD) >= 2) {
           removeItemInItems(witch, ResourceType.WOOD, 2);
         } else {
-          let rem = 2;
+          let rem = golems ? 2 : anyCost;
           for (const k of Object.keys(witch).sort((a, b) => getItemCountOf(witch, b) - getItemCountOf(witch, a))) {
             const spend = Math.min(getItemCountOf(witch, k), rem);
             removeItemInItems(witch, k, spend);
@@ -429,6 +469,32 @@ export function validatePlanAction(state, action, projectedPositions = null) {
       return { valid: true };
     }
 
+    case PlanActionType.POSSESS: {
+      if (!action.targetId) return { valid: false, reason: 'No target specified.' };
+      const target = state.entities.find(e => e.id === action.targetId && e.alive);
+      if (!target) return { valid: false, reason: 'Target not found (may be dead at resolution).' };
+      if (target.owner === entity.owner) return { valid: false, reason: 'Cannot possess an allied unit.' };
+      // Leader immunity + range are re-checked authoritatively at resolution
+      // (executePossess); reject the obviously-invalid picks here so a doomed
+      // step never enters the plan.
+      if (target.hasTag?.('leader')) return { valid: false, reason: 'Enemy leaders cannot be possessed.' };
+      if (hexDistance(pos.col, pos.row, target.col, target.row) > POSSESS_RANGE) {
+        return { valid: false, reason: `Target out of possession range (max ${POSSESS_RANGE}).` };
+      }
+      return { valid: true };
+    }
+
+    case PlanActionType.TELEPORT: {
+      if (action.targetCol == null || action.targetRow == null)
+        return { valid: false, reason: 'No target hex specified.' };
+      if (!state.tiles.get(hexKey(action.targetCol, action.targetRow)))
+        return { valid: false, reason: 'Target hex is off the map.' };
+      if (hexDistance(pos.col, pos.row, action.targetCol, action.targetRow) > TELEPORT_RANGE) {
+        return { valid: false, reason: `Too far to teleport (max ${TELEPORT_RANGE}).` };
+      }
+      return { valid: true };
+    }
+
     case PlanActionType.SENT_TO: {
       // Free action: send a SURVIVOR (the actor) to another leader on the
       // same faction. Authoritative checks (live owning leader, faction has
@@ -485,8 +551,16 @@ export function validatePlan(state, playerId, plan) {
       const entity = state.entities.find(e => e.id === action.entityId && e.alive);
       if (!entity)
         return { valid: false, index: i, reason: 'Entity not found.' };
-      if (entity.ownerId !== playerId)
-        return { valid: false, index: i, reason: 'Entity belongs to another player.' };
+      // Command gate: normally the owner — but a POSSESSED unit obeys only its
+      // possessor (the true owner is locked out until the effect expires).
+      if (!canCommandEntity(state, entity, { playerId })) {
+        return {
+          valid: false, index: i,
+          reason: possessorOf(entity) != null && entity.ownerId === playerId
+            ? 'Unit is possessed — it will not obey you this round.'
+            : 'Entity belongs to another player.',
+        };
+      }
     }
   }
 

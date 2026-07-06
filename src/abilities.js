@@ -178,6 +178,22 @@ export const ABILITIES = Object.freeze({
     label: 'Summon',
     description: 'Action: spend 2 resources to summon a Minion, Wood Golem, or Iron Golem',
   },
+  // Necromancer-innate spells. Like `summon`, the execute bodies live in
+  // src/actions.js (executePossess / executeTeleport) — they need getFaction /
+  // hex math / effect application, which would cycle if inlined here. The
+  // action gates in src/actions.js check actor.hasAbility('possess'|'teleport').
+  possess: {
+    id: 'possess',
+    kind: 'active',
+    label: 'Possess',
+    description: 'Action: seize control of an enemy unit within 2 hexes for one round (leaders are immune)',
+  },
+  teleport: {
+    id: 'teleport',
+    kind: 'active',
+    label: 'Teleport',
+    description: 'Action: fold through shadow toward a hex up to 4 away — the arrival point within that area is inexact',
+  },
 });
 
 // Derived enum for backwards compatibility with the `SurvivorAbility`

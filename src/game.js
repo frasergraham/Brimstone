@@ -303,6 +303,16 @@ export class GameState {
     // mid-mission resume. Survivor-only; empty for skirmish/online (never read).
     this.casualties = [];
 
+    // ── Death-location ledger (Necromancer RAISE DEAD) ───────────────────────
+    // Every entity death records where the body fell — combat kills, counter
+    // kills, splash, DOT ticks, and night attrition all call
+    // recordDeathLocation() the moment the entity is spliced out of `entities`.
+    // The necromancer's RAISE DEAD reads this to find raisable corpses (leaders
+    // are recorded but can never be raised); a raised corpse is flagged
+    // `consumed` in place so it can't rise twice. Plain JSON; serialized via
+    // state-sync so online play and mid-game resume keep the graves.
+    this.deathLocations = [];
+
     // Cumulative node scoring: each dawn/dusk majority scores 1 point; first to 4 wins.
     this.nodeScore = { hero: 0, witch: 0 };
     // When true, skip dawn/dusk node scoring and hide the score track UI.
@@ -642,6 +652,28 @@ export class GameState {
       isNpc: !!entity.isNpc,
       owner: entity.owner,
       alive: false,
+    });
+  }
+
+  /**
+   * Record where an entity died — the Necromancer's RAISE DEAD corpse pool.
+   * Called at every death site alongside recordCasualty() (which is the
+   * campaign-permadeath, survivor-only ledger; this one records EVERY death).
+   * Deduped by entity id so a blow that both removes and splashes the same
+   * unit can't leave two graves. `consumed` is stamped by executeSummon when
+   * a corpse is raised.
+   */
+  recordDeathLocation(entity) {
+    if (!entity || !entity.id) return;
+    if (this.deathLocations.some(d => d.id === entity.id)) return;
+    this.deathLocations.push({
+      id:      entity.id,
+      type:    entity.type,
+      owner:   entity.owner,
+      ownerId: entity.ownerId ?? null,
+      col:     entity.col,
+      row:     entity.row,
+      round:   this.round,
     });
   }
 

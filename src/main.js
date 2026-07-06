@@ -55,7 +55,7 @@ import { MissionConductor, areHintsSuppressed, markHintsSeen, resetAllHintsForCa
 import {
   buildLearnMap, placeLearnUnits, LEARN_STEPS, LEARN_CONDUCTOR_CONFIG,
 } from './learn/learn-config.js';
-import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel, getEquippedWeaponIdOf, normalizeItems, flattenItemCounts } from './entities.js';
+import { Entity, createMinion, createZombie, createSkeleton, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel, getEquippedWeaponIdOf, normalizeItems, flattenItemCounts } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, CAMPAIGN_SLOT_COUNT, getActiveSlot, setActiveSlot, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout, deploySpots, resolveDeployIndices } from './campaign/campaign.js';
 import { CAMPAIGNS } from './campaign/campaign-registry.js';
@@ -4423,6 +4423,7 @@ function _showMissionBriefing(missionId) {
 function _createEnemyEntity(type, col, row, state = null) {
   switch (type) {
     case 'zombie':     return createZombie(col, row, 'witch', state);
+    case 'skeleton':   return createSkeleton(col, row, 'witch', state);
     case 'minion':     return createMinion(col, row, 'witch', state);
     case 'wood_golem': return createWoodGolem(col, row, 'witch', state);
     case 'iron_golem': return createIronGolem(col, row, 'witch', state);
@@ -4524,6 +4525,13 @@ function initScenario(def) {
   // makes fog/replay bugs unreproducible in scenario mode.
   state = new GameState(true, def.pov !== 'hero', 'skirmish', null, { ...mapData, noWitch: !def.witch });
   state.fogOfWar = def.fog ?? 'none';
+
+  // Dev hook: swap a side's leader to a variant faction so faction-specific
+  // visuals/actions (necromancer possess/teleport arc, rogue bow, …) can be
+  // verified in scenario mode. Runs BEFORE the renderer is built so the
+  // standee/type is right from the first frame. Scenario loader only.
+  if (def.nightFaction && state.witch) state.swapLeaderToFaction('night', def.nightFaction);
+  if (def.dayFaction   && state.hero)  state.swapLeaderToFaction('day',   def.dayFaction);
 
   // Visual-testing hook for the leaders (scenario `units` are witch-side or
   // unrecruited survivors): heroEffects / witchEffects pre-apply status

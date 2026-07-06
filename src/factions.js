@@ -923,9 +923,50 @@ export class NecromancerFaction extends WitchFaction {
   get id()         { return 'necromancer'; }
   get name()       { return 'Necromancer'; }
   get leaderType() { return EntityType.NECROMANCER; }
-  isStub()         { return true; }
+  // No isStub() override — the necromancer has real distinct behaviour now:
+  // an undead-only roster (RAISE DEAD replaces the witch's summon entirely),
+  // POSSESS (seize an enemy unit for a round), and TELEPORT (inaccurate warp).
+
   _buildLeader(col, row, ownerId, state = null) {
     return createNecromancer(col, row, ownerId, state);
+  }
+
+  // Night-side summon plus the necromancer's two signature spells. The
+  // execute bodies live in src/actions.js (executePossess / executeTeleport),
+  // mirroring how `summon` dispatches to executeSummon.
+  get innateLeaderAbilities() { return ['summon', 'possess', 'teleport']; }
+
+  // The necromancer deals exclusively with the undead — no golems, no living
+  // minions. Zombies rise from corpses (RAISE DEAD); skeletons are conjured.
+  getUnitTypes() {
+    return [EntityType.ZOMBIE, EntityType.SKELETON];
+  }
+
+  // Undead chaff is cheap — 1 of any resource (brute precedent) instead of the
+  // witch's 2. Balance: with a 14-HP-only roster (no 21/35-HP golems ever), the
+  // 2-cost baseline ran Hero 67.5% / Necromancer 32.5% over 200 standard games;
+  // halving the bone tithe floods the field enough to re-center (see the
+  // introducing commit for the sweep numbers).
+  getMinionCost() { return 1; }
+
+  /**
+   * RAISE DEAD — replaces the witch's summon list wholesale:
+   *   • ZOMBIE   — raise an unconsumed corpse (recorded in state.deathLocations)
+   *                within RAISE_DEAD_RANGE, at its death hex. Falls back to a
+   *                skeleton at resolution when no corpse is in reach.
+   *   • SKELETON — conjure fresh bones on a seeded-random open hex within
+   *                SKELETON_CONJURE_RANGE of the necromancer.
+   * Both cost the witch's minion economics (getMinionCost() of any resource,
+   * largest stacks first). Corpse availability is state-dependent, so it is
+   * checked in executeSummon — this options list only gates on affordability.
+   */
+  getSummonOptions(inventory) {
+    const total = totalItemCount(inventory);
+    if (total < this.getMinionCost()) return [];
+    return [
+      { summonType: EntityType.ZOMBIE,   affordable: true },
+      { summonType: EntityType.SKELETON, affordable: true },
+    ];
   }
 }
 

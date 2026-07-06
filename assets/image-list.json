@@ -316,6 +316,20 @@
       ]
     },
     {
+      "id": "skeleton",
+      "name": "Skeleton",
+      "category": "unit",
+      "parameters": {
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. A colonial-era animated skeleton, a NON-HUMAN undead creature (not a living human face): bare weathered bone-white skull with hollow black eye sockets lit by faint pinpricks of pale blue light, naked yellowed cranium with cracks and old chips, lipless grinning teeth, exposed cervical vertebrae and bony shoulders. Draped in the rotted scraps of a Puritan coat and collar, grave-dust and cobwebs clinging to its ribs, one skeletal hand raised with splayed bony fingers. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+      },
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
+    },
+    {
       "id": "minion",
       "name": "Minion",
       "category": "unit",

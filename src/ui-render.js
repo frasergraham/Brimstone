@@ -10,6 +10,7 @@ import { ResourceType, WEAPON_LABEL, RESOURCE_LABEL } from './tiles.js';
 import { nodeController, PHASE_ICON, DEFAULT_CYCLE_PHASES } from './game.js';
 import { hexKey } from './hex.js';
 import { getFactionTheme } from './theme.js';
+import { concreteFactionOf } from './factions.js';
 import { EFFECTS } from './effects.js';
 import { buildOutcomeSummary } from './replay-timeline.js';
 
@@ -103,6 +104,12 @@ export function describePlanAction(action, entities, index = 0) {
       return `${who} uses ability`;
     case PlanActionType.SOUND_HORN:
       return `${who} sounds the horn`;
+    case PlanActionType.POSSESS: {
+      const target = entities.find(e => e.id === action.targetId);
+      return `${who} possesses ${target?.displayName ?? '?'}`;
+    }
+    case PlanActionType.TELEPORT:
+      return `${who} teleports toward (${action.targetCol},${action.targetRow})`;
     case PlanActionType.SENT_TO: {
       // The actor IS the survivor (entityId === survivorId). The destination
       // leader is keyed by ownerId — find a live leader on that ownerId in
@@ -167,6 +174,12 @@ export function describePlanActionParts(action, entities, index = 0) {
         : null;
       return { verb: 'Send', target: destLeader?.displayName ?? 'another leader' };
     }
+    case PlanActionType.POSSESS: {
+      const target = entities.find(e => e.id === action.targetId);
+      return { verb: 'Possess', target: target?.displayName ?? '?' };
+    }
+    case PlanActionType.TELEPORT:
+      return { verb: 'Teleport', target: `(${action.targetCol},${action.targetRow})` };
     default:
       return { verb: `Step ${index + 1}`, target: null };
   }
@@ -326,9 +339,18 @@ export function computeFadeFlags({ scrollTop = 0, clientHeight = 0, scrollHeight
  * Return a short cost badge string (e.g. "−2⚙") for a plan action, given the
  * projected inventory AT THAT STEP.  Returns '' for free / action-point-only actions.
  */
-function _stepCostLabel(action, projShared, projWitch, projEntityItems) {
+function _stepCostLabel(action, projShared, projWitch, projEntityItems, entities = null) {
   switch (action.type) {
     case PlanActionType.SUMMON: {
+      // Mirror computeProjectedInventory: golem-capable casters (witch) spend
+      // 2 metal → 2 wood → 2 any; undead/chaff-only casters (necromancer,
+      // brute) always spend getMinionCost() of any resource.
+      const caster  = entities?.find?.(e => e.id === action.entityId);
+      const conc    = caster ? concreteFactionOf(caster) : null;
+      const allowed = new Set((conc?.getSummonOptions({ metal: { count: 99 }, wood: { count: 99 } }) ?? [])
+        .map(o => o.summonType));
+      const golems  = !conc || allowed.has(EntityType.IRON_GOLEM) || allowed.has(EntityType.WOOD_GOLEM);
+      if (!golems) return `−${conc.getMinionCost()} res`;
       if (getItemCountOf(projWitch, ResourceType.METAL) >= 2) return `−2 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.METAL])}`;
       if (getItemCountOf(projWitch, ResourceType.WOOD)  >= 2) return `−2 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.WOOD])}`;
       return '−2 res';
@@ -413,7 +435,7 @@ export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entit
       : '';
 
     // Resource cost badge — only shown when inventory data is available
-    const costLbl = initialInv ? _stepCostLabel(a, projShared, projWitch, projEntityItems) : '';
+    const costLbl = initialInv ? _stepCostLabel(a, projShared, projWitch, projEntityItems, entities) : '';
     const costTag = costLbl ? ` <span class="plan-step-cost">${costLbl}</span>` : '';
 
     html += `<div class="plan-step${cls}">
@@ -588,7 +610,7 @@ export function buildUnitPlanBlocksHtml(
       if (foodPowered) foodUsed++;
 
       budgetState.set(key, foodPowered ? 'food' : overBudget ? 'over' : 'ok');
-      costLabels.set(key, initialInv ? _stepCostLabel(a, projShared, projWitch, projEntityItems) : '');
+      costLabels.set(key, initialInv ? _stepCostLabel(a, projShared, projWitch, projEntityItems, entities) : '');
 
       // Advance projected inventory
       _advanceProjectedInventory(a, projShared, projWitch, projEntityItems, entities);

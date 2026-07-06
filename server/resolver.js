@@ -8,7 +8,7 @@ import {
   executeMove, executeExplore, executeBattle,
   executeFortify, executeSummon, executeHeal, executeUseItem, executeUseAbility,
   executeGuard, executeSoundHorn, executeFortAssault,
-  executeSentTo,
+  executeSentTo, executePossess, executeTeleport,
   hasLineOfSight,
 } from '../src/actions.js';
 import { FORT_IMPASSABLE_THRESHOLD } from '../src/tiles.js';
@@ -19,7 +19,7 @@ import { PlanActionType, snapEntity, groupPlanByEntity } from '../src/planner.js
 import { Phase, countHeldNodes } from '../src/game.js';
 import { ResourceType } from '../src/tiles.js';
 import { getFaction, sightRangeForEntity } from '../src/factions.js';
-import { effectsBlockActions } from '../src/effects.js';
+import { effectsBlockActions, canCommandEntity, possessorOf } from '../src/effects.js';
 
 // groupByEntity removed — now uses groupPlanByEntity from planner.js
 const groupByEntity = groupPlanByEntity;
@@ -146,11 +146,29 @@ function _handleLeaderDeath(state, killedEntity) {
 function runAction(state, action, faction, playerId = null) {
   const entity = state.entities.find(e => e.id === action.entityId && e.alive);
   if (!entity) return { kind: 'skip', reason: 'Entity no longer exists.' };
-  // Multiplayer: validate by ownerId. Offline fallback: validate by faction.
+  // Command gate — multiplayer validates by ownerId, offline by faction, and
+  // BOTH route through canCommandEntity so a POSSESSED unit obeys only its
+  // possessor: the possessor's orders execute, the true owner's fail. (A unit
+  // seized mid-round also refuses the rest of its owner's queued steps —
+  // deliberate: the necromancer's grip lands the instant the spell resolves.)
   if (playerId !== null) {
-    if (entity.ownerId !== playerId) return { kind: 'fail', reason: 'Entity belongs to another player.' };
+    if (!canCommandEntity(state, entity, { playerId })) {
+      return {
+        kind: 'fail',
+        reason: possessorOf(entity) != null && entity.ownerId === playerId
+          ? `${entity.displayName} is possessed and will not obey.`
+          : 'Entity belongs to another player.',
+      };
+    }
   } else {
-    if (entity.owner !== faction) return { kind: 'fail', reason: 'Wrong faction.' };
+    if (!canCommandEntity(state, entity, { faction })) {
+      return {
+        kind: 'fail',
+        reason: possessorOf(entity) != null && entity.owner === faction
+          ? `${entity.displayName} is possessed and will not obey.`
+          : 'Wrong faction.',
+      };
+    }
   }
 
   // Stunned (and any future blocking effect): silently skip the action so
@@ -308,6 +326,22 @@ function runAction(state, action, faction, playerId = null) {
 
     case PlanActionType.SUMMON: {
       const r = executeSummon(state, entity, action.summonType ?? null);
+      if (!r.success) return { kind: 'fail', reason: r.log[0] };
+      return { kind: 'ok', result: r };
+    }
+
+    case PlanActionType.POSSESS: {
+      // Target gone at resolution → free skip (like a battle whose target died),
+      // so later plan steps still run. Other failures (range, leader) are fails.
+      const target = state.entities.find(e => e.id === action.targetId && e.alive);
+      if (!target) return { kind: 'skip', reason: 'Possession target is dead or gone.' };
+      const r = executePossess(state, entity, action.targetId);
+      if (!r.success) return { kind: 'fail', reason: r.log[0] };
+      return { kind: 'ok', result: r };
+    }
+
+    case PlanActionType.TELEPORT: {
+      const r = executeTeleport(state, entity, action.targetCol, action.targetRow);
       if (!r.success) return { kind: 'fail', reason: r.log[0] };
       return { kind: 'ok', result: r };
     }
@@ -561,6 +595,11 @@ function _checkGuardStrikes(state, action, actor, faction, subEvents) {
   // separate exception that ignores LOS but still respects range.) The
   // guard-area highlight in the renderer mirrors this same capped reach.
   const guardians = state.entities.filter(e => {
+    // A unit never guard-strikes itself. Impossible in normal play (the actor
+    // is always on the commanding bucket's own side), but a POSSESSED unit is
+    // enemy-owned while acting for the possessor's bucket — without this
+    // guard it would react to its own action and cut itself down.
+    if (e.id === actor.id) return false;
     if (!(e.alive && (e.guarding > 0) && e.owner !== faction)) return false;
     const gRange = (typeof e.getRange === 'function' ? e.getRange() : (e.range ?? 1));
     const dist = hexDistance(e.col, e.row, triggerCol, triggerRow);
