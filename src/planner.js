@@ -290,6 +290,51 @@ export function computeGhostState(state, plan) {
 // Returns { hero, witch, entityItems } — plain objects (shallow clones of state
 // inventory values keyed by faction id).  Does NOT mutate the real state.
 
+/**
+ * Faction-aware projection of what ONE queued SUMMON deducts from the caster
+ * faction's shared resource pool — the single source of truth for the plan
+ * panel's projections (computeProjectedInventory below, plus ui-render.js's
+ * per-step cost labels and running-pool walker). Mirrors executeSummon:
+ *   • golem-capable casters (witch): 2 metal → 2 wood → 2 of any, largest
+ *     stacks first;
+ *   • chaff-only casters (necromancer, brute): getMinionCost() (1) of any
+ *     resource, largest stacks first.
+ * A null/unknown caster falls back to the witch economics (legacy behavior).
+ *
+ * Mutates `pool` when `apply` is true (default). Returns { amount, resource }
+ * where `resource` is the single ResourceType covering the whole cost, or
+ * null for a mixed / "any resource" spend.
+ */
+export function projectSummonSpend(caster, pool, apply = true) {
+  const conc    = caster ? concreteFactionOf(caster) : null;
+  // Probe with a rich inventory so we learn the faction's full summon set
+  // (golem-capable or not) regardless of what it can currently afford.
+  const allowed = new Set((conc?.getSummonOptions({
+    [ResourceType.METAL]: { count: 99 }, [ResourceType.WOOD]: { count: 99 },
+  }) ?? []).map(o => o.summonType));
+  const golems  = !conc || allowed.has(EntityType.IRON_GOLEM) || allowed.has(EntityType.WOOD_GOLEM);
+
+  const amount = golems ? 2 : (conc?.getMinionCost() ?? 2);
+  let resource = null;
+  if (golems && getItemCountOf(pool, ResourceType.METAL) >= 2)      resource = ResourceType.METAL;
+  else if (golems && getItemCountOf(pool, ResourceType.WOOD) >= 2)  resource = ResourceType.WOOD;
+
+  if (apply) {
+    if (resource) {
+      removeItemInItems(pool, resource, amount);
+    } else {
+      let rem = amount;
+      for (const k of Object.keys(pool).sort((a, b) => getItemCountOf(pool, b) - getItemCountOf(pool, a))) {
+        const spend = Math.min(getItemCountOf(pool, k), rem);
+        removeItemInItems(pool, k, spend);
+        rem -= spend;
+        if (rem === 0) break;
+      }
+    }
+  }
+  return { amount, resource };
+}
+
 export function computeProjectedInventory(state, plan) {
   // Deep-clone the dict-of-objects resource maps (normalizeItems) so projected
   // spending never mutates the real state.inventory entries.
@@ -304,29 +349,10 @@ export function computeProjectedInventory(state, plan) {
   for (const action of plan) {
     switch (action.type) {
       case PlanActionType.SUMMON: {
-        // Mirrors executeSummon spending. The caster's concrete faction decides
-        // the shape: golem-capable factions (witch) prefer 2 metal → 2 wood →
-        // any; undead/chaff-only factions (necromancer, brute) always spend
-        // getMinionCost() of any resource, largest stacks first.
-        const caster  = (state.entities ?? []).find(e => e.id === action.entityId);
-        const conc    = caster ? concreteFactionOf(caster) : null;
-        const allowed = new Set((conc?.getSummonOptions({ metal: { count: 99 }, wood: { count: 99 } }) ?? [])
-          .map(o => o.summonType));
-        const golems  = allowed.has(EntityType.IRON_GOLEM) || allowed.has(EntityType.WOOD_GOLEM) || !conc;
-        const anyCost = conc?.getMinionCost() ?? 2;
-        if (golems && getItemCountOf(witch, ResourceType.METAL) >= 2) {
-          removeItemInItems(witch, ResourceType.METAL, 2);
-        } else if (golems && getItemCountOf(witch, ResourceType.WOOD) >= 2) {
-          removeItemInItems(witch, ResourceType.WOOD, 2);
-        } else {
-          let rem = golems ? 2 : anyCost;
-          for (const k of Object.keys(witch).sort((a, b) => getItemCountOf(witch, b) - getItemCountOf(witch, a))) {
-            const spend = Math.min(getItemCountOf(witch, k), rem);
-            removeItemInItems(witch, k, spend);
-            rem -= spend;
-            if (rem === 0) break;
-          }
-        }
+        // Faction-aware spend — projectSummonSpend mirrors executeSummon
+        // (witch 2 metal → 2 wood → 2 any; necromancer/brute 1 of any).
+        const caster = (state.entities ?? []).find(e => e.id === action.entityId);
+        projectSummonSpend(caster, witch);
         break;
       }
       case PlanActionType.FORTIFY:
