@@ -8,7 +8,11 @@ import { DAMAGE_SCALE } from './balance.js';
 import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
 import { makeOverlay } from './overlays.js';
-import { concreteFactionOf, getFaction } from './factions.js';
+import {
+  concreteFactionOf, getFaction,
+  CAPTAIN_REINFORCEMENT_COST, CAPTAIN_REINFORCEMENT_COUNT,
+  SIEGE_WOOD_COST, SIEGE_METAL_COST,
+} from './factions.js';
 import {
   ActionType, getValidActions, getVisiblePositions, computeCombatOdds,
 } from './actions.js';
@@ -2276,6 +2280,24 @@ export class UIController {
       else this._clearSelection();
       this._updateSidebar();
       this.onRedraw();
+    } else if (actionType === ActionType.MARCH) {
+      // Captain March destination pick — validate against the MARCH targets
+      // (same reachable set as MOVE), then queue a MARCH plan action. The
+      // ghost projection advances the co-located soldiers too.
+      const marchAction = this._validActions.find(a => a.type === ActionType.MARCH);
+      const isValidMarch = marchAction && marchAction.targets.some(t => t.col === hex.col && t.row === hex.row);
+      this._awaitingTarget = null;
+      this._clearTargetOverlays();
+      this.renderer.clearOverlaysByLayer('highlight-disc');
+      if (!isValidMarch) {
+        this._handleSelection(hex);
+        return;
+      }
+      this._addToPlan({ type: PlanActionType.MARCH, entityId: actor.id, toCol: hex.col, toRow: hex.row });
+      if (actor.alive) this._selectEntity(actor);
+      else this._clearSelection();
+      this._updateSidebar();
+      this.onRedraw();
     }
   }
 
@@ -2368,6 +2390,26 @@ export class UIController {
         case ActionType.MOVE:
         case ActionType.BATTLE:
           break; // handled via hex clicks
+        case ActionType.MARCH: {
+          const n = action.passengers ?? 0;
+          arcItems.push({ group: 'scout', label: 'March',
+            fullLabel: `March — move and bring ${n} soldier${n === 1 ? '' : 's'} on this hex along (1 action)`,
+            desc: 'Move; every soldier on this hex marches to the destination with the captain. Overflow soldiers hold position.',
+            color: '#7eccd6', dis, cost: 1, attrs: 'data-action="march"' });
+          break;
+        }
+        case ActionType.BUILD_SIEGE: {
+          const siegeInv  = projInv ? projInv.hero : state.inventory.hero;
+          const canAfford = getItemCountOf(siegeInv, ResourceType.WOOD)  >= SIEGE_WOOD_COST &&
+                            getItemCountOf(siegeInv, ResourceType.METAL) >= SIEGE_METAL_COST;
+          arcItems.push({ group: 'defense', label: 'Build Catapult',
+            fullLabel: `Build Catapult — assemble an immobile siege engine (range 4) on an adjacent hex (1 action, ${SIEGE_WOOD_COST} wood + ${SIEGE_METAL_COST} metal)`,
+            desc: 'Assemble an immobile catapult beside the captain. It hurls stones up to 4 hexes but can never move.',
+            color: '#e0a832', dis: !canAfford || dis, cost: 1,
+            resCost: `${SIEGE_WOOD_COST} ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.WOOD])} ${SIEGE_METAL_COST} ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.METAL])}`,
+            attrs: 'data-action="build_siege"' });
+          break;
+        }
         case ActionType.EXPLORE:
           arcItems.push({ group: 'scout', label: 'Explore', fullLabel: 'Explore tile — search for resources, loot, or hidden survivors (1 action)',
             desc: 'Search this tile for resources, loot, or hidden survivors.',
@@ -2515,6 +2557,21 @@ export class UIController {
           color: '#9b59b6', dis: !s.afford || !hasAct, cost: 1, resCost: s.res,
           attrs: `data-action="summon" data-summon-type="${s.st}"` });
       }
+    }
+
+    // Day-side summoner (Captain): CALL REINFORCEMENTS — one action,
+    // 2 food, 2 soldiers muster on/beside the captain. Gated on the SUMMON
+    // valid action (only leaders with the innate 'summon' ability get one),
+    // so paladin/rogue leaders never see it.
+    if (isLeaderType(entity.type) && entity.owner === 'hero' && actions.some(a => a.type === ActionType.SUMMON)) {
+      const projHero = projInv ? projInv.hero : state.inventory.hero;
+      const projFood = getItemCountOf(projHero, ResourceType.FOOD);
+      arcItems.push({ group: 'summon', label: 'Call Reinforcements',
+        fullLabel: `Call Reinforcements — ${CAPTAIN_REINFORCEMENT_COUNT} soldiers muster beside the captain (1 action, ${CAPTAIN_REINFORCEMENT_COST} food)`,
+        desc: `${CAPTAIN_REINFORCEMENT_COUNT} soldiers muster on or beside the captain.`,
+        color: '#3f78c4', dis: projFood < CAPTAIN_REINFORCEMENT_COST || !hasAct, cost: 1,
+        resCost: `${CAPTAIN_REINFORCEMENT_COST} ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.FOOD])}`,
+        attrs: `data-action="summon" data-summon-type="${EntityType.SOLDIER}"` });
     }
 
     if (arcItems.length === 0) {
@@ -2906,10 +2963,12 @@ export class UIController {
     const GLYPHS = {
       hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003',
       zombie: '\uE005', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007',
+      catapult: '\uE0B9',
     };
     const COLORS = {
       hero: '#d4a72c', witch: '#9b59b6', survivor: '#4caf7d', soldier: '#3f78c4',
       zombie: '#7c9a57', minion: '#c0392b', wood_golem: '#8B5E3C', iron_golem: '#607D8B',
+      catapult: '#8a7a5c',
     };
 
     const glyph = GLYPHS[entity.type] ?? '?';
@@ -3283,6 +3342,7 @@ export class UIController {
       const labels = {
         [ActionType.BATTLE]:     'Tap an enemy to attack',
         [ActionType.BATTLE_HEX]: 'Tap a hex to attack (skips if empty)',
+        [ActionType.MARCH]:      'Tap a destination — soldiers here march along',
       };
       hint.textContent = labels[this._awaitingTarget.actionType] ?? '';
     }
@@ -3496,6 +3556,29 @@ export class UIController {
         this._updateSidebar();
         this.onRedraw();
         break;
+      }
+
+      case 'march': {
+        // Destination picker — mirrors attack_hex: highlight the march
+        // targets and wait for a hex click (_handleTargetClick MARCH branch).
+        delayedHide();
+        const marchAction = this._validActions.find(a => a.type === ActionType.MARCH);
+        const marchTargets = marchAction?.targets ?? [];
+        this._awaitingTarget = { actionType: ActionType.MARCH, actor: entity };
+        this._clearTargetOverlays();
+        this._setTargetOverlay('march-targets', 'rgba(126,204,214,0.50)', marchTargets);
+        state.addLog('Click a destination — soldiers on this hex march along.');
+        this._updateSidebar();
+        this.onRedraw();
+        break;
+      }
+
+      case 'build_siege': {
+        this._addToPlan({ type: PlanActionType.BUILD_SIEGE, entityId: entity.id });
+        delayedHide();
+        if (entity.alive) this._selectEntity(entity);
+        else this._clearSelection();
+        this._updateSidebar(); this.onRedraw(); break;
       }
 
       case 'attack_hex': {
@@ -4081,7 +4164,7 @@ export class UIController {
     const dialog = this._el('encounter-dialog');
     const card   = this._el('encounter-card');
 
-    const GLYPHS = { hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003', zombie: '\uE005', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007' };
+    const GLYPHS = { hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003', zombie: '\uE005', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007', catapult: '\uE0B9' };
     const glyph  = GLYPHS[encounterUnit.type] ?? '?';
     const color  = encounterUnit.color || '#d4c9b0';
 
@@ -6662,7 +6745,7 @@ function _entityPortraitId(snap) {
  * @param {number}  [opts.portraitSize] Portrait diameter in px (default 36).
  */
 function _unitCardHTML(entity, { renderer = null, selectable = false, showStats = true, portraitSize = 36 } = {}) {
-  const GLYPHS = { hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003', zombie: '\uE005', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007' };
+  const GLYPHS = { hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003', zombie: '\uE005', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007', catapult: '\uE0B9' };
   const color  = ENTITY_COLOR[entity.type] || '#888';
   const glyph  = GLYPHS[entity.type] ?? '?';
   const label  = (entity.type === 'survivor' && entity.name) ? entity.name

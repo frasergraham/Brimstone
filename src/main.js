@@ -55,7 +55,7 @@ import { MissionConductor, areHintsSuppressed, markHintsSeen, resetAllHintsForCa
 import {
   buildLearnMap, placeLearnUnits, LEARN_STEPS, LEARN_CONDUCTOR_CONFIG,
 } from './learn/learn-config.js';
-import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR, applyLevel, getEquippedWeaponIdOf, normalizeItems, flattenItemCounts } from './entities.js';
+import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, createSoldier, createCatapult, EntityType, ENTITY_COLOR, applyLevel, getEquippedWeaponIdOf, normalizeItems, flattenItemCounts, addItemInItems } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, CAMPAIGN_SLOT_COUNT, getActiveSlot, setActiveSlot, buildVictoryDelegate, effectiveAiBudgetBonus, snapshotSurvivor, processWaves, reconcileRosterAfterMission, collectFallenAfterMission, applyCarriedHeroLoadout, deploySpots, resolveDeployIndices } from './campaign/campaign.js';
 import { CAMPAIGNS } from './campaign/campaign-registry.js';
@@ -2442,7 +2442,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // _stepHasAction tests the digest so the highlight only fires (and clears
     // the prior group) when this phase actually has visible cards to show.
     const _stepHasAction = (t) => !!stepDigest?.[i]?.entries.some(e => e.actionType === t);
-    if (_stepHasAction(PlanActionType.MOVE)) ui?.highlightReplayActions?.(i, ['move']);
+    if (_stepHasAction(PlanActionType.MOVE) || _stepHasAction(PlanActionType.MARCH)) {
+      ui?.highlightReplayActions?.(i, ['move', 'march']);
+    }
     let hadMove = false;
     const pendingDialogs = [];
 
@@ -2459,7 +2461,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     const deferredMoveAnims = []; // attacker out-sped a fleeing mover — walk after the battle
     for (const ev of events) {
       const { action, result } = ev;
-      if (action.type !== PlanActionType.MOVE) continue;
+      if (action.type !== PlanActionType.MOVE && action.type !== PlanActionType.MARCH) continue;
 
       const preSnap = step.entitySnapshot?.find(e => e.id === action.entityId);
       // Moves are visible if origin or destination is within sight range.
@@ -2471,6 +2473,24 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         : [{ col: action.toCol, row: action.toRow }];
 
       if (visible) (deferIds.has(action.entityId) ? deferredMoveAnims : moveAnims).push({ ev, preSnap, path });
+
+      // MARCH: walk each carried soldier along the captain's path too, as a
+      // synthesized move anim (passenger id + its destination slot).
+      if (action.type === PlanActionType.MARCH && visible) {
+        for (const mp of result?.marchPassengers ?? []) {
+          const pSnap = step.entitySnapshot?.find(e => e.id === mp.id);
+          if (!pSnap) continue;
+          moveAnims.push({
+            ev: {
+              ...ev,
+              action: { ...action, entityId: mp.id },
+              result: { ...result, slot: mp.slot ?? 0, encounterLog: [], encounterSurvivor: null },
+            },
+            preSnap: pSnap,
+            path,
+          });
+        }
+      }
 
       if ((!humanFaction || ev.faction === humanFaction) && result?.encounterLog?.length) {
         if (!myPlayerId || preSnap?.ownerId === myPlayerId) {
@@ -2589,11 +2609,16 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     } else {
       // No visible moves — still need to patch display entities to final positions
       for (const ev of events) {
-        if (ev.action.type !== PlanActionType.MOVE) continue;
+        if (ev.action.type !== PlanActionType.MOVE && ev.action.type !== PlanActionType.MARCH) continue;
         const path = ev.result?.path;
         const finalPos = path?.length > 0 ? path[path.length - 1] : { col: ev.action.toCol, row: ev.action.toRow };
         const ent = displayEntities.find(e => e.id === ev.action.entityId);
         if (ent) { ent.col = finalPos.col; ent.row = finalPos.row; }
+        // MARCH passengers relocate with the captain.
+        for (const mp of ev.result?.marchPassengers ?? []) {
+          const p = displayEntities.find(e => e.id === mp.id);
+          if (p) { p.col = mp.col; p.row = mp.row; p.slot = mp.slot ?? 0; }
+        }
       }
       state.entities = displayEntities;
       redrawFn();
@@ -2832,7 +2857,20 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         // appears on the summoner's own hex) — matches the SUMMON card's gate.
         if (actorSnap && _evVisible(ev, step.entitySnapshot, postEntities)) {
           await _actionGate();
-          renderer.addSpawnAnim(actorSnap.col, actorSnap.row, '#b39ddb');
+          // Day-side reinforcements muster in steel blue; night conjuring in violet.
+          const spawnColor = ev.faction === 'hero' ? '#7ba7d8' : '#b39ddb';
+          renderer.addSpawnAnim(actorSnap.col, actorSnap.row, spawnColor);
+          audio.play('summon');
+          hadBattle = true;
+          _presentedSinceGate = true;
+        }
+      } else if (action.type === PlanActionType.BUILD_SIEGE) {
+        // Catapult assembly — spawn flash on the BUILT hex (adjacent to the
+        // captain), mirroring the summon gate.
+        const builtAt = result?.built;
+        if (builtAt && _evVisible(ev, step.entitySnapshot, postEntities)) {
+          await _actionGate();
+          renderer.addSpawnAnim(builtAt.col, builtAt.row, '#c9a86a');
           audio.play('summon');
           hadBattle = true;
           _presentedSinceGate = true;
@@ -4447,6 +4485,10 @@ function _createEnemyEntity(type, col, row, state = null) {
 //   }
 function _createScenarioUnit(type, col, row, owner, state) {
   if (owner === 'hero') {
+    // Captain troops place as their real types (soldier / catapult); any
+    // other hero-side type falls back to a recruited survivor.
+    if (type === EntityType.SOLDIER)  return createSoldier(col, row, state.hero?.ownerId ?? null, state);
+    if (type === EntityType.CATAPULT) return createCatapult(col, row, state.hero?.ownerId ?? null, state);
     // createSurvivor's third param is the player UUID, not the faction —
     // recruit explicitly (same as createDiscoveryEntity) or the unit stays
     // neutral and every planned action fails with "Wrong faction."
@@ -4467,6 +4509,14 @@ function _scenarioPlan(planDefs, byRef) {
     } else if (p.attack != null) {
       const target = byRef.get(p.attack);
       if (target) out.push({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id });
+    } else if (Array.isArray(p.march)) {
+      // Captain March — soldiers on the actor's hex are carried along.
+      out.push({ type: PlanActionType.MARCH, entityId: actor.id, toCol: p.march[0], toRow: p.march[1] });
+    } else if (p.summon) {
+      // `summon: true` auto-picks; `summon: 'soldier'` (captain) etc. forces a type.
+      out.push({ type: PlanActionType.SUMMON, entityId: actor.id, summonType: typeof p.summon === 'string' ? p.summon : undefined });
+    } else if (p.buildSiege) {
+      out.push({ type: PlanActionType.BUILD_SIEGE, entityId: actor.id });
     } else if (p.guard) {
       out.push({ type: PlanActionType.GUARD, entityId: actor.id });
     } else if (p.explore) {
@@ -4524,6 +4574,12 @@ function initScenario(def) {
   // makes fog/replay bugs unreproducible in scenario mode.
   state = new GameState(true, def.pov !== 'hero', 'skirmish', null, { ...mapData, noWitch: !def.witch });
   state.fogOfWar = def.fog ?? 'none';
+
+  // Visual-testing hook: play the scenario as a specific day/night faction
+  // (e.g. heroFaction:'captain' to verify March / Call Reinforcements /
+  // Build Siege). Mirrors the skirmish setup's swapLeaderToFaction call.
+  if (def.heroFaction)  state.swapLeaderToFaction('day', def.heroFaction);
+  if (def.witchFaction) state.swapLeaderToFaction('night', def.witchFaction);
 
   // Visual-testing hook for the leaders (scenario `units` are witch-side or
   // unrecruited survivors): heroEffects / witchEffects pre-apply status
@@ -4595,6 +4651,14 @@ function initScenario(def) {
     state.phase = phaseForRound(state.round, state.cycleConfig);
   }
 
+  // Visual-testing hook: seed the shared faction pools so resource-gated
+  // actions (Call Reinforcements, Build Siege, fortify) can be exercised.
+  //   inventory: { hero: { food: 4, wood: 4, metal: 1 }, witch: { … } }
+  for (const [fac, res] of Object.entries(def.inventory ?? {})) {
+    if (!state.inventory[fac]) continue;
+    for (const [id, n] of Object.entries(res)) addItemInItems(state.inventory[fac], id, n);
+  }
+
   _setupLocalUI(canvas, null, null, false);  // also drives the loading reveal
   redraw();
 
@@ -4624,6 +4688,11 @@ function initScenario(def) {
     setTimeout(() => {
       _runLocalResolution(!def.summary).catch(e => console.error('scenario resolve error:', e));
     }, 900);
+  } else if (def.planning) {
+    // `planning: true` — enter a real hero planning phase after the reveal so
+    // drivers can exercise plan-mode UI (arc action popup, March targeting)
+    // through genuine clicks. Opt-in: plain view scenarios stay unchanged.
+    setTimeout(() => _startLocalPlanningPhase(), 900);
   }
 }
 

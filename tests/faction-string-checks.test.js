@@ -65,7 +65,7 @@ const ALLOWLIST = Object.freeze({
   // golem) from a hero-only mission. A genuine night-side count on a plain JSON
   // snapshot (no Entity/Faction methods available there). Ratchet down if a
   // snapshot-side helper is adopted.
-  'src/main.js':                 51,
+  'src/main.js':                 52,   // +1: captain reinforcement spawn-anim color keys on ev.faction
   'src/ui.js':                   25,
 
   // Pre-existing core modules — generalized in Finding 1, residual checks
@@ -113,7 +113,7 @@ const ALLOWLIST = Object.freeze({
   'server/notifications.js':      3,
   'src/ai-debug.js':              2,  // debug glyph + summary rows
   'src/map.js':                   2,
-  'src/planner.js':               2,
+  'src/planner.js':               4,   // +2: captain SUMMON ghost/projected-inventory branch on the day side
   'server/admin.js':              2,
   'server/game-stats.js':         2,
   'server/resolver.js':           2,

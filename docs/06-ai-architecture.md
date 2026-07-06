@@ -139,6 +139,8 @@ CONTROL_NODES score:
 **Trigger:** Few survivors, unexplored buildings, daylight
 **Actions:** Explore current hex, sound horn (recruit), move to buildings, fortify
 
+Captain leaders additionally run `_tryReinforcements` at the top of `genExplore` — the day-side mirror of the witch's `_trySummons`: when the leader's concrete faction `canSummon()` and the ledger holds ≥3 food (keeps 1 in horn reserve), queue `SUMMON summonType: SOLDIER` actions (2 food → 2 soldiers each) up to a 6-soldier standing cap. Soldiers join the hero board's commandable-unit list (`board.survivors`, SURVIVOR + SOLDIER types) so the generic node-duty/escort generators give them orders; `survivorCount` stays SURVIVOR-only for horn/recruit scoring. The AI does not use MARCH or BUILD_SIEGE (graceful no-op — human-only tools for now).
+
 ### CONTROL_NODES
 **Trigger:** Always active (0.5 base score), scoring proximity, contested nodes
 **Actions:** Send hero + survivors to nodes, fight enemies en route, fortify node buildings

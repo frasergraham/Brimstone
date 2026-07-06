@@ -694,6 +694,20 @@
       ]
     },
     {
+      "id": "catapult",
+      "category": "unit",
+      "name": "The Catapult",
+      "parameters": {
+        "prompt": "Output must contain exactly one subject, centered in the frame. No secondary objects, no duplicates, no construction sheets, no variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one siege engine only, with no people or crew anywhere in the image. A rugged colonial-era wooden catapult: a heavy timber frame of dark oak beams lashed and bolted with blackened iron bands, a long throwing arm cocked back with a worn leather sling cradling a rough grey boulder, thick rope torsion coils, iron-rimmed wooden wheels caked in dried mud, axe-hewn joinery, a few spare stones stacked at its base. Weathered, battle-worn, splintered edges, moss in the joints. Three-quarter view, machine centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+      },
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
+    },
+    {
       "id": "cycle_dawn",
       "name": "Dawn",
       "category": "icon"

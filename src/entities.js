@@ -86,6 +86,7 @@ export const EntityType = Object.freeze({
   BRUTE:       'brute',
   SURVIVOR:    'survivor',
   SOLDIER:     'soldier',
+  CATAPULT:    'catapult',
   ZOMBIE:      'zombie',
   MINION:      'minion',
   WOOD_GOLEM:  'wood_golem',
@@ -991,6 +992,8 @@ const _DEFAULT_DISPLAY_NAMES = {
   [EntityType.NECROMANCER]: 'The Necromancer',
   [EntityType.BRUTE]:       'The Brute',
   [EntityType.SURVIVOR]:    'Survivor',
+  [EntityType.SOLDIER]:     'Soldier',
+  [EntityType.CATAPULT]:    'Catapult',
   [EntityType.ZOMBIE]:      'Zombie',
   [EntityType.MINION]:      'Minion',
   [EntityType.WOOD_GOLEM]:  'Wood Golem',
@@ -1151,6 +1154,17 @@ export function createIronGolem(col, row, ownerId = null, state = null) {
 // off the same construction path as other non-leader units.
 export function createSoldier(col, row, ownerId = null, state = null) {
   return new Entity(EntityType.SOLDIER, 'hero', col, row, ownerId, state);
+}
+
+// Catapult — the Captain's built siege engine (executeBuildSiege). Immobile
+// (see the 'immobile' tag in UNIT_TYPES); its range-4 attack comes entirely
+// from the innate catapult_stone weapon equipped here — the non-leader
+// analog of Faction.innateLeaderWeapon wiring in createLeader. Deserialize
+// bypasses this factory and restores the saved items/weapon instead.
+export function createCatapult(col, row, ownerId = null, state = null) {
+  const e = new Entity(EntityType.CATAPULT, 'hero', col, row, ownerId, state);
+  e.equipWeapon('catapult_stone');
+  return e;
 }
 
 /**

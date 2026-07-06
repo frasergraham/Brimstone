@@ -34,7 +34,10 @@ export const UNIT_TYPES = Object.freeze({
     tags: ['living', 'leader', 'day-leader'],
   },
   captain: {
-    baseStats: { maxHp: 84, attack: 2, defense: 3 },
+    // Deliberately weaker than the paladin (98 HP / effective ATK 4 with
+    // sword): the Captain wins through troops (soldiers, catapults), not
+    // personal prowess. 70 = 10×7; sword brings effective ATK to 3.
+    baseStats: { maxHp: 70, attack: 1, defense: 2 },
     agility: 5,
     color: '#e8c660',
     tags: ['living', 'leader', 'day-leader'],
@@ -73,6 +76,16 @@ export const UNIT_TYPES = Object.freeze({
     color: '#3f78c4',
     tags: ['living', 'soldier', 'summoned'],
   },
+  // Catapult — the Captain's built siege engine. IMMOBILE (the 'immobile'
+  // tag gates MOVE / March pickup in getValidActions + executeMove); its
+  // reach comes entirely from the innate catapult_stone weapon (range 4)
+  // equipped by createCatapult. 28 = 4×7.
+  catapult: {
+    baseStats: { maxHp: 28, attack: 2, defense: 1 },
+    agility: 1,
+    color: '#8a7a5c',
+    tags: ['construct', 'immobile'],
+  },
   zombie: {
     baseStats: { maxHp: 14, attack: 2, defense: 0 },
     agility: 2,
@@ -101,4 +114,14 @@ export const UNIT_TYPES = Object.freeze({
 
 export function getUnitType(type) {
   return UNIT_TYPES[type];
+}
+
+/**
+ * True if units of this type can never move (no MOVE action, never picked
+ * up as a March passenger). Driven by the 'immobile' tag — the catapult is
+ * the first such unit. Kept here (tag metadata) so actions/planner/AI all
+ * share one predicate.
+ */
+export function isImmobileType(type) {
+  return UNIT_TYPES[type]?.tags?.includes('immobile') ?? false;
 }

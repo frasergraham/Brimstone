@@ -8,7 +8,7 @@ import {
   executeMove, executeExplore, executeBattle,
   executeFortify, executeSummon, executeHeal, executeUseItem, executeUseAbility,
   executeGuard, executeSoundHorn, executeFortAssault,
-  executeSentTo,
+  executeSentTo, executeMarch, executeBuildSiege,
   hasLineOfSight,
 } from '../src/actions.js';
 import { FORT_IMPASSABLE_THRESHOLD } from '../src/tiles.js';
@@ -18,7 +18,7 @@ import { hexDistance, hexKey } from '../src/hex.js';
 import { PlanActionType, snapEntity, groupPlanByEntity } from '../src/planner.js';
 import { Phase, countHeldNodes } from '../src/game.js';
 import { ResourceType } from '../src/tiles.js';
-import { getFaction, sightRangeForEntity } from '../src/factions.js';
+import { getFaction, concreteFactionOf, sightRangeForEntity } from '../src/factions.js';
 import { effectsBlockActions } from '../src/effects.js';
 
 // groupByEntity removed — now uses groupPlanByEntity from planner.js
@@ -56,7 +56,8 @@ function computeTurnEndPositions(candidates) {
   const map = new Map();
   for (const c of candidates) {
     const front = c.queue[0];
-    if (front && front.type === PlanActionType.MOVE &&
+    if (front &&
+        (front.type === PlanActionType.MOVE || front.type === PlanActionType.MARCH) &&
         Number.isInteger(front.toCol) && Number.isInteger(front.toRow)) {
       map.set(c.entityId, { col: front.toCol, row: front.toRow });
     }
@@ -98,9 +99,22 @@ function _emitXpEvents(result, faction, subEvents) {
 // Mirrors computeActions / computeActionsForPlayer in game.js without importing
 // them directly (avoiding circular dependencies).
 
+/** Resolve the CONCRETE faction for a budget: stub-faction budget overrides
+ *  (captain baseBudget 4 / cap 9) live on the concrete class, but callers
+ *  key budgets by the side owner string ('hero'/'witch'). Find the live
+ *  leader (optionally the one owned by `playerId`) and use its factionId;
+ *  fall back to the side faction when no leader is found. */
+function budgetFaction(state, faction, playerId = null) {
+  const leader = state.entities.find(e =>
+    e.alive && e.owner === faction && isLeaderType(e.type) &&
+    (playerId === null || e.ownerId === playerId)
+  );
+  return leader ? concreteFactionOf(leader) : getFaction(faction);
+}
+
 /** Faction-level budget — used by the legacy 2-player resolvePlans wrapper. */
 function budgetFor(state, faction) {
-  const factionObj = getFaction(faction);
+  const factionObj = budgetFaction(state, faction);
   const extras = state.entities.filter(
     e => e.alive && e.owner === faction && e.type !== factionObj.leaderType
   ).length;
@@ -110,7 +124,7 @@ function budgetFor(state, faction) {
 
 /** Per-player budget — used by resolvePlansMP. */
 function budgetForPlayer(state, playerId, faction) {
-  const factionObj = getFaction(faction);
+  const factionObj = budgetFaction(state, faction, playerId);
   const extras = state.entities.filter(
     e => e.alive && e.ownerId === playerId && e.type !== factionObj.leaderType
   ).length;
@@ -170,6 +184,22 @@ function runAction(state, action, faction, playerId = null) {
         blockedBy: r.blockedBy ?? null,
         blockedByFort: r.blockedByFort ?? null,
       };
+      return { kind: 'ok', result: r };
+    }
+
+    case PlanActionType.MARCH: {
+      const r = executeMarch(state, entity, action.toCol, action.toRow);
+      if (!r.success) return {
+        kind: 'fail', reason: r.log[0],
+        blockedBy: r.blockedBy ?? null,
+        blockedByFort: r.blockedByFort ?? null,
+      };
+      return { kind: 'ok', result: r };
+    }
+
+    case PlanActionType.BUILD_SIEGE: {
+      const r = executeBuildSiege(state, entity);
+      if (!r.success) return { kind: 'fail', reason: r.log[0] };
       return { kind: 'ok', result: r };
     }
 
@@ -543,7 +573,7 @@ function drainOneStep(state, queue, budget) {
 function _checkGuardStrikes(state, action, actor, faction, subEvents) {
   // Determine the "trigger hex" — where the acting entity performed its action
   let triggerCol, triggerRow;
-  if (action.type === PlanActionType.MOVE) {
+  if (action.type === PlanActionType.MOVE || action.type === PlanActionType.MARCH) {
     triggerCol = action.toCol;
     triggerRow = action.toRow;
   } else {

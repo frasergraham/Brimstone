@@ -1446,6 +1446,14 @@ export function _serializeEvents(events) {
         lootItems:         ev.result.lootItems        ?? [],
         lootItemIds:       ev.result.lootItemIds      ?? [],
       };
+      // Captain faction extras (strictly additive):
+      //  - MARCH carries the relocated-soldier list + who stayed behind,
+      //  - BUILD_SIEGE carries the built catapult's placement,
+      //  - CALL REINFORCEMENTS (SUMMON of soldiers) carries the spawned ids.
+      if (ev.result.marchPassengers) out.result.marchPassengers = ev.result.marchPassengers;
+      if (ev.result.marchLeftBehind) out.result.marchLeftBehind = ev.result.marchLeftBehind;
+      if (ev.result.built)           out.result.built           = ev.result.built;
+      if (ev.result.summonedIds)     out.result.summonedIds     = ev.result.summonedIds;
       // SENT_TO surfaces extra fields on its result so BOTH cards
       // (sender + recipient) can render with proper names. Keep purely
       // additive — the SENT_TO ACTION_OK base shape above stays unchanged.
