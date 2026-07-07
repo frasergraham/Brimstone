@@ -15256,6 +15256,30 @@ export class Renderer3D {
         style: { color: ownerColor, alpha: 1 },
         meta: { stepIndex: stepNumber, badge: String(stepNumber), entityId },
       }));
+      // MARCH passengers: one arrow per soldier the march actually carries
+      // (computeGhostState already applied the capacity-overflow rule, so a
+      // stay-behind soldier has no entry here). Every passenger arrow shares
+      // the captain's from→to hexes, so each rides in its own lane — offset
+      // by the soldier's current tile slot (where its standee stands) — and
+      // renders path-only (variant 'march': no waypoint puck, no badge; the
+      // captain's arrow carries the step number for the whole column).
+      if (step.marchArrows?.length) {
+        for (const ma of step.marchArrows) {
+          const pent = this.state?.entities?.find?.(e => e.id === ma.entityId);
+          const pColor = entityBaseColor(pent ?? {}, this.state?.entities ?? null);
+          const slotOff = TILE_SLOTS[pent?.slot ?? 0] ?? TILE_SLOTS[CENTRE_SLOT_INDEX];
+          const pid = `plan-move-${ma.entityId}-${stepNumber}`;
+          this.setOverlay(pid, makeOverlay({
+            id: pid, kind: 'plan-arrow', layer: 'plan-arrow',
+            path: [{ col: ma.fromCol, row: ma.fromRow }, { col: ma.toCol, row: ma.toRow }],
+            style: { color: pColor, alpha: 1 },
+            meta: {
+              stepIndex: stepNumber, entityId: ma.entityId, variant: 'march',
+              laneX: slotOff.x, laneZ: slotOff.z,
+            },
+          }));
+        }
+      }
     }
   }
 
@@ -15338,9 +15362,13 @@ export class Renderer3D {
     // marker geometry without z-fight.
     for (const [entityId, e] of byEntity) {
       const path = [];
+      // March-passenger lane: overlay meta carries a per-waypoint world-space
+      // offset (the soldier's tile-slot position) so co-located passenger
+      // arrows draw beside the captain's instead of stacking on it.
       e.steps.forEach((ov, i) => {
-        if (i === 0) path.push(parseKey(ov.path[0]));
-        path.push(parseKey(ov.path[1]));
+        const lx = ov.meta?.laneX ?? 0, lz = ov.meta?.laneZ ?? 0;
+        if (i === 0) path.push({ ...parseKey(ov.path[0]), lx, lz });
+        path.push({ ...parseKey(ov.path[1]), lx, lz });
       });
       if (path.length < 2) continue;
       const [r, g, b] = cssHexToRgb01(e.color);
@@ -15362,7 +15390,8 @@ export class Renderer3D {
         const a = hexToWorld(path[i].col,     path[i].row);
         const b = hexToWorld(path[i + 1].col, path[i + 1].row);
         const segs = computeDashSegments(
-          { x: a.x, z: a.z }, { x: b.x, z: b.z },
+          { x: a.x + path[i].lx,     z: a.z + path[i].lz },
+          { x: b.x + path[i + 1].lx, z: b.z + path[i + 1].lz },
           PLAN_LINE_DASH_SIZE, PLAN_LINE_GAP_SIZE, PLAN_LINE_Y,
         );
         for (let s = 0; s < segs.length; s++) {
@@ -15390,10 +15419,11 @@ export class Renderer3D {
       this._planArrowMeshes.push({ dashes, dashMat });
     }
 
-    // Waypoint puck + numbered badge per move step. Ghost (hover) arrows are
-    // path-only — no puck, no badge.
+    // Waypoint puck + numbered badge per move step. Ghost (hover) arrows and
+    // march-passenger arrows are path-only — no puck, no badge (the captain's
+    // arrow badges the whole marching column).
     for (const ov of moveOvs) {
-      if (ov.meta?.variant === 'ghost') continue;
+      if (ov.meta?.variant === 'ghost' || ov.meta?.variant === 'march') continue;
       const entityId   = ov.meta?.entityId;
       const stepNumber = ov.meta?.stepIndex ?? 0;
       const badgeLabel = ov.meta?.badge ?? String(stepNumber);
@@ -21902,16 +21932,26 @@ export function planArrowsSignature(steps, entities) {
     const { entityId, fromCol, fromRow, toCol, toRow } = s.arrow;
     out += `${entityId};${fromCol},${fromRow};${toCol},${toRow};${s.stepNumber ?? ''}|`;
     seenIds.add(entityId);
+    // MARCH passenger arrows publish extra move overlays, so they must feed
+    // the signature too — adding/removing a passenger (or its overflow
+    // eligibility) has to trigger a rebuild.
+    if (Array.isArray(s.marchArrows)) {
+      for (const ma of s.marchArrows) {
+        out += `M${ma.entityId};${ma.fromCol},${ma.fromRow};${ma.toCol},${ma.toRow};${s.stepNumber ?? ''}|`;
+        seenIds.add(ma.entityId);
+      }
+    }
   }
   if (out === '') return '';
-  // Append per-acting-entity owner colour. Looking up via `find` matches the
-  // renderer's own lookup (`state.entities.find(e => e.id === entityId)`), so
-  // the colour we sign matches the colour the rebuild will read.
+  // Append per-acting-entity owner colour + tile slot. Looking up via `find`
+  // matches the renderer's own lookup (`state.entities.find(...)`), so the
+  // values we sign match what the rebuild will read: colour tints every
+  // arrow, and the slot positions a march-passenger's lane offset.
   if (Array.isArray(entities) && seenIds.size > 0) {
     const ids = [...seenIds].sort();
     for (const id of ids) {
       const ent = entities.find(e => e?.id === id);
-      out += `${id}=${entityBaseColor(ent ?? {}, entities)}|`;
+      out += `${id}=${entityBaseColor(ent ?? {}, entities)};s${ent?.slot ?? ''}|`;
     }
   }
   return out;

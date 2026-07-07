@@ -595,20 +595,23 @@ export function genProtectHero(sim, board, budget, config = null) {
 // Day-side mirror of the witch's _trySummons: when the leader's concrete
 // faction can summon (captain) and the ledger holds enough food, queue
 // SUMMON actions for soldier pairs. Caps the standing soldier count so the
-// AI doesn't convert its whole food economy into chaff, and keeps 1 food in
-// reserve for a Sound Horn / ration. No-op for paladin/rogue leaders.
+// AI doesn't convert its whole food economy into chaff. A 1-food reserve is
+// kept for a Sound Horn / ration ONLY when the faction may actually sound
+// the horn (canSoundHorn — the captain can't, so he spends down to zero).
+// No-op for paladin/rogue leaders.
 const AI_SOLDIER_CAP = 6;
 function _tryReinforcements(actions, sim, board, remaining) {
   if (remaining <= 0 || !board.hero) return 0;
   const heroEntity = sim.entities.find(e => e.id === board.hero.id);
   if (!heroEntity || !concreteFactionOf(heroEntity).canSummon()) return 0;
+  const hornReserve = concreteFactionOf(heroEntity).canSoundHorn() ? 1 : 0;
   const ledger = sim.resourceLedger;
   let soldiers = sim.entities.filter(e =>
     e.alive && e.owner === 'hero' && e.type === EntityType.SOLDIER
   ).length;
   let queued = 0;
   while (remaining - queued > 0 && soldiers < AI_SOLDIER_CAP &&
-         getItemCountOf(ledger, ResourceType.FOOD) >= 3) {
+         getItemCountOf(ledger, ResourceType.FOOD) >= 2 + hornReserve) {
     removeItemInItems(ledger, ResourceType.FOOD, 2);
     actions.push({
       type: PlanActionType.SUMMON, entityId: board.hero.id,
@@ -658,12 +661,15 @@ export function genExplore(sim, board, budget, config = null) {
   }
 
   // Sound Horn: spend 1 food + 1 AP to recruit hidden survivors — do it aggressively.
+  // Faction-vetoed leaders (canSoundHorn false — the captain) never queue it:
+  // the resolver would reject the doomed action anyway.
   // NvN: tighten the ceiling so survivor growth doesn't scale faster with team
   // size than minion growth (hidden survivors + horning compound otherwise).
   const nodeCount = board.nodes.length || 3;
   const heroCount = board.heroPlayerCount || 1;
   const survivorCeiling = heroCount > 1 ? nodeCount : nodeCount + 1;
-  if (remaining > 0 && board.foodCount >= 1 && board.unexploredBuildings.length >= 1 &&
+  if (remaining > 0 && concreteFactionOf(heroEntity).canSoundHorn() &&
+      board.foodCount >= 1 && board.unexploredBuildings.length >= 1 &&
       board.survivorCount < survivorCeiling) {
     actions.push({
       type: PlanActionType.SOUND_HORN, entityId: board.hero.id,
@@ -1156,8 +1162,9 @@ export function fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositi
     left--;
   }
 
-  // 2b. Sound Horn
-  if (left > 0 && heroEntity && board.foodCount >= 1 &&
+  // 2b. Sound Horn (skipped for faction-vetoed leaders — see canSoundHorn)
+  if (left > 0 && heroEntity && concreteFactionOf(heroEntity).canSoundHorn() &&
+      board.foodCount >= 1 &&
       board.unexploredBuildings.length >= 1 && board.survivorCount < nodeCount) {
     plan.push({ type: PlanActionType.SOUND_HORN, entityId: heroEntity.id });
     sim.applySoundHorn();

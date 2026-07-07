@@ -2,7 +2,7 @@
 import { hexKey, getNeighbors, hexDistance } from './hex.js';
 import { concreteFactionOf } from './factions.js';
 import { getReachableHexes, getVisiblePositions, POSSESS_RANGE, TELEPORT_RANGE } from './actions.js';
-import { ResourceType, isRiver } from './tiles.js';
+import { ResourceType, isRiver, tileCapacityRemaining } from './tiles.js';
 import { EntityType, normalizeItems, getItemCountOf, removeItemInItems, getEquippedWeaponIdOf } from './entities.js';
 import { isImmobileType } from './unit-types.js';
 import { ITEMS } from './items.js';
@@ -133,6 +133,9 @@ export function snapEntity(entity) {
 //     positions,        // Map<entityId, {col,row}> after this step
 //     weapons,          // Map<entityId, weaponId> equipped after this step
 //     arrow,            // {entityId, fromCol, fromRow, toCol, toRow} | null
+//     marchArrows,      // [{entityId, fromCol, fromRow, toCol, toRow}] | null —
+//                       //   one arrow per soldier a MARCH actually carries
+//                       //   (overflow-stayers get none); null on non-MARCH steps
 //     stepNumber,       // 1-based index among MOVE steps only (for rendering)
 //     attackArrow,      // {fromCol, fromRow, toCol, toRow} | null  (for BATTLE_* steps)
 //     summonInfo,       // {col, row, type: EntityType} | null      (for SUMMON steps)
@@ -195,6 +198,7 @@ export function computeGhostState(state, plan) {
 
   for (const action of plan) {
     let arrow = null;
+    let marchArrows = null;
     let stepNumber = null;
     let attackArrow = null;
     let summonInfo = null;
@@ -204,30 +208,55 @@ export function computeGhostState(state, plan) {
       if (pos) {
         moveStepNumber++;
         stepNumber = moveStepNumber;
+        const startCol = pos.col, startRow = pos.row;
         arrow = {
           entityId: action.entityId,
-          fromCol:  pos.col,
-          fromRow:  pos.row,
+          fromCol:  startCol,
+          fromRow:  startRow,
           toCol:    action.toCol,
           toRow:    action.toRow,
         };
+        // Advance the leader's projected position FIRST — during resolution
+        // the captain arrives (executeMove) before any passenger relocates,
+        // so he claims a destination slot ahead of them.
+        positions.set(action.entityId, { col: action.toCol, row: action.toRow });
         // MARCH: soldiers standing on the captain's projected START hex are
         // carried along — advance their projected positions too, or a later
         // MARCH/attack planned from the destination would project passengers
-        // still standing on the origin (breaks multi-step planning).
+        // still standing on the origin (breaks multi-step planning). Each
+        // carried soldier gets its own plan arrow (marchArrows). Passengers
+        // relocate in entity order until the destination's slot capacity is
+        // exhausted — the same overflow rule as executeMarch — and a
+        // projected stay-behind keeps its position and gets NO arrow.
+        // (Capacity here is a planning projection: tile slots minus units
+        // already projected onto the hex; the resolver re-checks it
+        // authoritatively via isTileFullForMove.)
         if (action.type === PlanActionType.MARCH) {
           const marchOwner = state.entities.find(e => e.id === action.entityId)?.owner ?? 'hero';
+          const destTile = state.tiles?.get?.(hexKey(action.toCol, action.toRow));
+          let occupied = 0;
+          for (const p of positions.values()) {
+            if (p.col === action.toCol && p.row === action.toRow) occupied++;
+          }
+          marchArrows = [];
           for (const e of state.entities) {
             if (!e.alive || e.id === action.entityId) continue;
             if (e.type !== EntityType.SOLDIER || e.owner !== marchOwner) continue;
+            if (isImmobileType(e.type)) continue;   // mirrors the executeMarch passenger filter
             const pPos = positions.get(e.id);
-            if (pPos && pPos.col === pos.col && pPos.row === pos.row) {
-              positions.set(e.id, { col: action.toCol, row: action.toRow });
-            }
+            if (!pPos || pPos.col !== startCol || pPos.row !== startRow) continue;
+            if (destTile && tileCapacityRemaining(destTile, occupied) <= 0) continue; // stays behind
+            occupied++;
+            positions.set(e.id, { col: action.toCol, row: action.toRow });
+            marchArrows.push({
+              entityId: e.id,
+              fromCol:  startCol,
+              fromRow:  startRow,
+              toCol:    action.toCol,
+              toRow:    action.toRow,
+            });
           }
         }
-        // Advance the projected position.
-        positions.set(action.entityId, { col: action.toCol, row: action.toRow });
       }
     } else if (action.type === PlanActionType.BATTLE_UNIT) {
       const fromPos = positions.get(action.entityId);
@@ -309,6 +338,7 @@ export function computeGhostState(state, plan) {
       positions: new Map(positions),
       weapons:   new Map(weapons),
       arrow,
+      marchArrows,
       stepNumber,
       attackArrow,
       summonInfo,

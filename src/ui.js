@@ -15,7 +15,7 @@ import {
 } from './factions.js';
 import {
   ActionType, getValidActions, getVisiblePositions, computeCombatOdds,
-  getTeleportClump, hasRaisableCorpse, POSSESS_RANGE, TELEPORT_RANGE,
+  getTeleportClump, POSSESS_RANGE, TELEPORT_RANGE,
 } from './actions.js';
 import { possessorOf } from './effects.js';
 import * as audio from './audio.js';
@@ -2621,19 +2621,18 @@ export class UIController {
           .getSummonOptions({ [ResourceType.METAL]: { count: 99 }, [ResourceType.WOOD]: { count: 99 } })
           .map(o => o.summonType)
       );
-      // Raise-dead corpse availability (necromancer): the Zombie option needs
-      // an unconsumed, raisable corpse within reach of where the plan LEAVES
-      // the caster. Uses the live position — close enough for greying; the
-      // resolver re-checks authoritatively and falls back to a skeleton.
-      const corpseInReach = hasRaisableCorpse(state, entity);
       // Any-resource summon cost comes from the concrete faction (witch 2,
       // brute/necromancer 1) so labels + grey-outs track the real economics.
+      // Raise Dead greys ONLY on affordability: a corpse in reach is a
+      // positioning perk (the zombie rises at its death hex), never a
+      // prerequisite — with no grave nearby a fresh zombie claws up beside
+      // the caster, so the option always stays live.
       const anyCost = concreteFactionOf(entity).getMinionCost();
       const anyRes  = `${anyCost} res`;
       const ALL_SUMMONS = [
         { st: EntityType.IRON_GOLEM, label: 'Summon Iron Golem',  full: 'Summon Iron Golem (2 metal)',  afford: projMetal >= 2, res: `2 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.METAL])}` },
         { st: EntityType.WOOD_GOLEM, label: 'Summon Wood Golem', full: 'Summon Wood Golem (2 wood)',   afford: projWood >= 2, res: `2 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.WOOD])}` },
-        { st: EntityType.ZOMBIE,     label: 'Raise Dead',         full: `Raise Dead — Zombie at a corpse within 3 (${anyCost} any resource)`, afford: projTotal >= anyCost && corpseInReach, res: anyRes },
+        { st: EntityType.ZOMBIE,     label: 'Raise Dead',         full: `Raise Dead — Zombie at a corpse within 3, or fresh nearby (${anyCost} any resource)`, afford: projTotal >= anyCost, res: anyRes },
         { st: EntityType.SKELETON,   label: 'Summon Skeleton',    full: `Summon Skeleton — appears nearby (${anyCost} any resource)`, afford: projTotal >= anyCost, res: anyRes },
         { st: EntityType.MINION,     label: 'Summon Minion',      full: `Summon Minion (${anyCost} any resource)`, afford: projTotal >= anyCost, res: anyRes },
       ];
