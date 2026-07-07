@@ -4,6 +4,7 @@ import { concreteFactionOf } from './factions.js';
 import { getReachableHexes, getVisiblePositions, POSSESS_RANGE, TELEPORT_RANGE } from './actions.js';
 import { ResourceType, isRiver } from './tiles.js';
 import { EntityType, normalizeItems, getItemCountOf, removeItemInItems, getEquippedWeaponIdOf } from './entities.js';
+import { isImmobileType } from './unit-types.js';
 import { ITEMS } from './items.js';
 import { effectsBlockActions, canCommandEntity, possessorOf } from './effects.js';
 
@@ -17,6 +18,12 @@ import { effectsBlockActions, canCommandEntity, possessorOf } from './effects.js
 
 export const PlanActionType = Object.freeze({
   MOVE:         'move',
+  // Captain-only: the leader moves and every friendly soldier on his
+  // starting hex moves with him. Shape: { type, entityId, toCol, toRow }.
+  MARCH:        'march',
+  // Captain-only: 4 wood + 1 metal → immobile Catapult on an adjacent hex.
+  // Shape: { type, entityId }.
+  BUILD_SIEGE:  'build-siege',
   BATTLE_UNIT:  'battle-unit',
   BATTLE_HEX:   'battle-hex',
   EXPLORE:      'explore',
@@ -192,7 +199,7 @@ export function computeGhostState(state, plan) {
     let attackArrow = null;
     let summonInfo = null;
 
-    if (action.type === PlanActionType.MOVE) {
+    if (action.type === PlanActionType.MOVE || action.type === PlanActionType.MARCH) {
       const pos = positions.get(action.entityId);
       if (pos) {
         moveStepNumber++;
@@ -204,6 +211,21 @@ export function computeGhostState(state, plan) {
           toCol:    action.toCol,
           toRow:    action.toRow,
         };
+        // MARCH: soldiers standing on the captain's projected START hex are
+        // carried along — advance their projected positions too, or a later
+        // MARCH/attack planned from the destination would project passengers
+        // still standing on the origin (breaks multi-step planning).
+        if (action.type === PlanActionType.MARCH) {
+          const marchOwner = state.entities.find(e => e.id === action.entityId)?.owner ?? 'hero';
+          for (const e of state.entities) {
+            if (!e.alive || e.id === action.entityId) continue;
+            if (e.type !== EntityType.SOLDIER || e.owner !== marchOwner) continue;
+            const pPos = positions.get(e.id);
+            if (pPos && pPos.col === pos.col && pPos.row === pos.row) {
+              positions.set(e.id, { col: action.toCol, row: action.toRow });
+            }
+          }
+        }
         // Advance the projected position.
         positions.set(action.entityId, { col: action.toCol, row: action.toRow });
       }
@@ -224,10 +246,15 @@ export function computeGhostState(state, plan) {
       let summonType = action.summonType ?? null;
       if (!summonType) {
         const ownerFaction = (state.entities ?? []).find(e => e.id === action.entityId)?.owner ?? 'witch';
-        const inv = state.inventory?.[ownerFaction] ?? {};
-        summonType = getItemCountOf(inv, ResourceType.METAL) >= 2 ? EntityType.IRON_GOLEM
-                   : getItemCountOf(inv, ResourceType.WOOD)  >= 2 ? EntityType.WOOD_GOLEM
-                   : EntityType.MINION;
+        if (ownerFaction === 'hero') {
+          // Day-side summoner (captain) — the only summon is soldiers.
+          summonType = EntityType.SOLDIER;
+        } else {
+          const inv = state.inventory?.[ownerFaction] ?? {};
+          summonType = getItemCountOf(inv, ResourceType.METAL) >= 2 ? EntityType.IRON_GOLEM
+                     : getItemCountOf(inv, ResourceType.WOOD)  >= 2 ? EntityType.WOOD_GOLEM
+                     : EntityType.MINION;
+        }
       }
       // Summoned unit appears on the witch's current projected position.
       const witchPos = positions.get(action.entityId);
@@ -259,6 +286,15 @@ export function computeGhostState(state, plan) {
       const toPos   = positions.get(action.targetId);
       if (fromPos && toPos) {
         attackArrow = { fromCol: fromPos.col, fromRow: fromPos.row, toCol: toPos.col, toRow: toPos.row };
+      }
+    } else if (action.type === PlanActionType.BUILD_SIEGE) {
+      // Catapult ghost on the builder's projected hex (the real spawn picks
+      // an adjacent hex at resolution; the marker just previews "a catapult
+      // appears here-ish").
+      const builderPos = positions.get(action.entityId);
+      if (builderPos) {
+        summonInfo = { col: builderPos.col, row: builderPos.row, type: EntityType.CATAPULT };
+        positions.set(`ghost-siege-${steps.length}`, { col: builderPos.col, row: builderPos.row });
       }
     } else {
       // Project a weapon switch — a USE_ITEM of a weapon (the real UI path) or a
@@ -349,9 +385,14 @@ export function computeProjectedInventory(state, plan) {
   for (const action of plan) {
     switch (action.type) {
       case PlanActionType.SUMMON: {
+        const caster = (state.entities ?? []).find(e => e.id === action.entityId);
+        // Captain reinforcements: 2 food from the day-side pool.
+        if (action.summonType === EntityType.SOLDIER || caster?.owner === 'hero') {
+          removeItemInItems(hero, ResourceType.FOOD, 2);
+          break;
+        }
         // Faction-aware spend — projectSummonSpend mirrors executeSummon
         // (witch 2 metal → 2 wood → 2 any; necromancer/brute 1 of any).
-        const caster = (state.entities ?? []).find(e => e.id === action.entityId);
         projectSummonSpend(caster, witch);
         break;
       }
@@ -359,6 +400,11 @@ export function computeProjectedInventory(state, plan) {
         // Metal preferred, then wood — mirrors executeFortify
         if (getItemCountOf(hero, ResourceType.METAL) > 0) removeItemInItems(hero, ResourceType.METAL, 1);
         else if (getItemCountOf(hero, ResourceType.WOOD) > 0) removeItemInItems(hero, ResourceType.WOOD, 1);
+        break;
+      case PlanActionType.BUILD_SIEGE:
+        // Mirrors executeBuildSiege spending (4 wood + 1 metal).
+        removeItemInItems(hero, ResourceType.WOOD, 4);
+        removeItemInItems(hero, ResourceType.METAL, 1);
         break;
       case PlanActionType.HEAL: {
         const healEntity = (state.entities ?? []).find(e => e.id === action.entityId);
@@ -442,7 +488,10 @@ export function validatePlanAction(state, action, projectedPositions = null) {
     ?? { col: entity.col, row: entity.row };
 
   switch (action.type) {
-    case PlanActionType.MOVE: {
+    case PlanActionType.MOVE:
+    case PlanActionType.MARCH: {
+      if (isImmobileType(entity.type))
+        return { valid: false, reason: `${entity.displayName ?? 'Unit'} cannot move.` };
       const t = state.tiles.get(hexKey(action.toCol, action.toRow));
       if (!t || isRiver(t))
         return { valid: false, reason: 'Cannot move there.' };
@@ -479,6 +528,9 @@ export function validatePlanAction(state, action, projectedPositions = null) {
       return { valid: true };
 
     case PlanActionType.SUMMON:
+    case PlanActionType.BUILD_SIEGE:
+      // Authoritative cost/placement checks run at resolution
+      // (executeSummon / executeBuildSiege).
       return { valid: true };
 
     case PlanActionType.USE_ITEM: {

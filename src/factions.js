@@ -107,6 +107,10 @@ export class Faction {
   canFortify()  { return false; }
   /** Can this faction summon units? */
   canSummon()   { return false; }
+  /** Can this faction's leader March (move with co-located soldiers)? */
+  canMarch()    { return false; }
+  /** Can this faction's leader build siege engines (BUILD_SIEGE)? */
+  canBuildSiege() { return false; }
   /** Can this faction use hero-side shared items (food, silver, scripture)? */
   canUseItems() { return false; }
   /** Can this faction batter down enemy fortifications (BATTLE_HEX on an empty wall)? */
@@ -240,6 +244,15 @@ export class Faction {
 
   /** Can this entity perform the explore action? */
   canExplore(_entity) { return true; }
+
+  /**
+   * Multiplier applied to the hidden-survivor discovery chance when a unit
+   * of this faction moves through / explores a survivor tile. Keys off the
+   * ACTING unit's concrete faction (see survivorFindMultiplier in
+   * actions.js) — the Captain's 0.4 makes survivors much harder to find
+   * for him without touching other day-side factions.
+   */
+  survivorFindMultiplier() { return 1.0; }
 
   /** Can this faction discover and recruit NPCs (survivors) through exploration? */
   canDiscoverNPCs() { return false; }
@@ -907,15 +920,57 @@ export class RogueFaction extends HeroFaction {
   }
 }
 
+// ── Captain economy constants ───────────────────────────────────────────────
+// CALL REINFORCEMENTS: one action, CAPTAIN_REINFORCEMENT_COST food, spawns
+// CAPTAIN_REINFORCEMENT_COUNT soldiers on/next to the captain. 2 food → 2
+// soldiers undercuts the witch's 2-any-resources-per-minion rate per body,
+// but is locked to the single day-side flavor resource that also funds
+// Sound Horn and +1-action rations — a real economic tradeoff.
+export const CAPTAIN_REINFORCEMENT_COST  = 2;  // food
+export const CAPTAIN_REINFORCEMENT_COUNT = 2;  // soldiers per call
+// BUILD SIEGE: one action, 4 wood + 1 metal, places a Catapult adjacent.
+export const SIEGE_WOOD_COST  = 4;
+export const SIEGE_METAL_COST = 1;
+
 export class CaptainFaction extends HeroFaction {
   get id()         { return 'captain'; }
   get name()       { return 'Captain'; }
   get leaderType() { return EntityType.CAPTAIN; }
-  isStub()         { return true; }
-  // Stub melee leader — no starting weapon (keeps base stats unchanged).
-  get innateLeaderWeapon() { return null; }
+  // No isStub() override — the captain has real distinct behaviour now:
+  // troop summoning (CALL REINFORCEMENTS), March, siege engineering, a
+  // bigger action economy, and a much weaker eye for hidden survivors.
+
   _buildLeader(col, row, ownerId, state = null) {
     return createCaptain(col, row, ownerId, state);
+  }
+
+  // The Captain carries the day-side sword (inherited innateLeaderWeapon)
+  // but his base stats sit well below the paladin's — he fights through
+  // troops. 'summon' gates the CALL REINFORCEMENTS action in
+  // getValidActions, exactly like the night-side leaders.
+  get innateLeaderAbilities() { return [...super.innateLeaderAbilities, 'summon']; }
+
+  // Action economy: an officer directs more hands. +1 base action over the
+  // paladin (4 vs 3) and a higher hard cap (9 vs 8) so soldier unit
+  // bonuses aren't immediately clipped. Validated via headless runs.
+  get baseBudget() { return 4; }
+  get actionCap()  { return 9; }
+
+  canSummon()     { return true; }
+  canMarch()      { return true; }
+  canBuildSiege() { return true; }
+
+  // Civilians don't rally to a military requisition officer the way they
+  // do to a paladin — hidden survivors are much harder for him to find.
+  survivorFindMultiplier() { return 0.4; }
+
+  // CALL REINFORCEMENTS is the captain's only summon: 2 food → 2 soldiers.
+  getSummonOptions(inventory) {
+    const food = getItemCountOf(inventory, ResourceType.FOOD);
+    return [{
+      summonType: EntityType.SOLDIER,
+      affordable: food >= CAPTAIN_REINFORCEMENT_COST,
+    }];
   }
 }
 

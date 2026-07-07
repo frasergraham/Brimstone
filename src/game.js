@@ -6,7 +6,7 @@ import { BuildingType, ResourceType, hasBuilding, isRiver } from './tiles.js';
 import { hexKey, hexDistance, getNeighbors, setMapDimensions, MAP_COLS, MAP_ROWS } from './hex.js';
 import { applyPostRoundEffects, attritionForCycle } from './post-round-effects.js';
 import { sightRange, computeLineOfSight, hasLineOfSight } from './actions.js';
-import { getFaction, allFactions, getFactionsForSide, sightRangeForEntity, isPlaceableTile } from './factions.js';
+import { getFaction, allFactions, getFactionsForSide, sightRangeForEntity, isPlaceableTile, concreteFactionOf } from './factions.js';
 import { allSides } from './sides.js';
 
 /**
@@ -105,9 +105,24 @@ export const Player = Object.freeze({ HERO: 'hero', WITCH: 'witch' });
 // Hero  — base 3 + 1 in DAWN/DAY + 1 per survivor (cap +5) + 1 per held power node; hard cap 8
 // Witch — base 3 + 1 in NIGHT + 1 per unit (cap +3) + 1 per held power node; hard cap 10
 export function computeActions(player, phase, entities, nodeBonus = 0) {
-  const faction    = getFaction(player);
-  const extras     = entities.filter(e => e.alive && e.owner === faction.id && e.type !== faction.leaderType).length;
+  const faction    = budgetFactionFor(entities, player);
+  const extras     = entities.filter(e => e.alive && e.owner === player && e.type !== faction.leaderType).length;
   return faction.computeBudget(phase, extras, nodeBonus);
+}
+
+/**
+ * Budget-relevant faction: stub-faction leaders carry their own budget
+ * overrides (captain: base 4 / cap 9) on the CONCRETE faction class, so
+ * budgets must resolve through the live leader's factionId rather than the
+ * side owner string. Falls back to the side faction when no live leader
+ * matches (e.g. leader just died — game is ending anyway).
+ */
+export function budgetFactionFor(entities, faction, playerId = null) {
+  const leader = entities.find(e =>
+    e.alive && e.owner === faction && isLeaderType(e.type) &&
+    (playerId === null || e.ownerId === playerId)
+  );
+  return leader ? concreteFactionOf(leader) : getFaction(faction);
 }
 
 /**
@@ -115,7 +130,7 @@ export function computeActions(player, phase, entities, nodeBonus = 0) {
  * Counts only entities owned by that player (ownerId match), not the whole faction.
  */
 export function computeActionsForPlayer(playerId, faction, phase, entities, nodeBonus = 0) {
-  const factionObj = getFaction(faction);
+  const factionObj = budgetFactionFor(entities, faction, playerId);
   const extras = entities.filter(
     e => e.alive && e.ownerId === playerId && e.type !== factionObj.leaderType
   ).length;
@@ -683,7 +698,8 @@ export class GameState {
   /** Increment the summon counter for the given side by `n` (default 1). */
   recordSummonForSide(sideId, n = 1) {
     if (sideId === 'night') this.witchSummonCount += n;
-    // Day side has no summon mechanic today — counter is not tracked.
+    // Day-side summons (captain CALL REINFORCEMENTS) route through here as a
+    // deliberate no-op — only night-side summons feed witchSummonCount.
   }
 
   /** Cumulative node-scoring points held by the given side. */

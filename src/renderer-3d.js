@@ -20166,6 +20166,7 @@ export const DISCOVERY_CARD_BG_ALPHA     = 0.72;
 export const DISCOVERY_GLYPHS = Object.freeze({
   hero: ICON.hero, witch: ICON.witch, survivor: ICON.survivor, soldier: ICON.soldier,
   zombie: ICON.zombie, skeleton: ICON.skeleton, minion: ICON.minion, wood_golem: ICON.woodGolem, iron_golem: ICON.ironGolem,
+  catapult: ICON.catapult,
 });
 
 /** Compute the local-space XZ offset for a combat card so attacker and

@@ -174,6 +174,7 @@ export const ICONS = [
   { name: 'pentacle',   code: 0xE0B0, gi: 'lorc/pentacle',          glyphs: ['⛧'] },
   { name: 'flag',       code: 0xE0B1, gi: 'delapouite/flying-flag',        glyphs: ['⚑'] },
   { name: 'wardShield',  code: 0xE0B2, gi: 'lorc/shield-impact',     glyphs: ['⛨'], note: 'renderer.js captain/ward placeholder (distinct from ICON.captain if needed).' },
+  { name: 'catapult',   code: 0xE0B9, gi: 'lorc/catapult',          glyphs: [], note: 'Catapult siege unit (Captain faction) — entity glyph + Build Siege action + Catapult Stone weapon label.' },
 ];
 
 // Sanity: no duplicate names or codes.

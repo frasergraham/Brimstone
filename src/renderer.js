@@ -331,7 +331,7 @@ export class Renderer {
        'survivor_gravedigger','survivor_midwife','survivor_farmhand',
        'survivor_tanner','survivor_chandler','survivor_goodwife',
        'survivor_constable','survivor_weaver','survivor_carpenter',
-       'survivor_apothecary','survivor_fisherman'],
+       'survivor_apothecary','survivor_fisherman','catapult','soldier'],
       ['cycle_dawn','cycle_day','cycle_dusk','cycle_night'],
     ];
 
@@ -3653,6 +3653,7 @@ function entityGlyph(type) {
     case EntityType.BRUTE:       return '▲';   // stub — placeholder glyph
     case EntityType.SURVIVOR:    return ICON.survivor;
     case EntityType.SOLDIER:     return ICON.soldier;
+    case EntityType.CATAPULT:    return ICON.catapult;
     case EntityType.ZOMBIE:      return ICON.zombie;
     case EntityType.SKELETON:    return ICON.skeleton;
     case EntityType.MINION:      return ICON.minion;

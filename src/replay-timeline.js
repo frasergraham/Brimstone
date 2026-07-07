@@ -37,6 +37,7 @@ function weaponName(weaponId) {
 const GLYPHS = Object.freeze({
   hero: ICON.hero, witch: ICON.witch, survivor: ICON.survivor, soldier: ICON.soldier,
   zombie: ICON.zombie, skeleton: ICON.skeleton, minion: ICON.minion, wood_golem: ICON.woodGolem, iron_golem: ICON.ironGolem,
+  catapult: ICON.catapult,
 });
 
 /** Presentation outcome kinds for a battle row. */
@@ -154,9 +155,9 @@ export function buildRollTip(result, ranged = false) {
 
 /** Display label per PlanActionType value. */
 const ACTION_LABEL = Object.freeze({
-  'move': 'MOVE', 'battle-unit': 'BATTLE', 'battle-hex': 'BATTLE',
+  'move': 'MOVE', 'march': 'MARCH', 'battle-unit': 'BATTLE', 'battle-hex': 'BATTLE',
   'explore': 'EXPLORE', 'fortify': 'FORTIFY', 'summon': 'SUMMON',
-  'heal': 'HEAL', 'use-item': 'ITEM', 'equip-weapon': 'EQUIP',
+  'build-siege': 'BUILD', 'heal': 'HEAL', 'use-item': 'ITEM', 'equip-weapon': 'EQUIP',
   'use-ability': 'ABILITY', 'guard': 'GUARD', 'sound-horn': 'HORN',
   'sent-to': 'SEND',
 });
@@ -174,8 +175,8 @@ const RECV_ACTION_TYPE = 'survivor-received';
  * order a horn can be listed first yet animate after the battles.)
  */
 const PHASE_RANK = Object.freeze({
-  'move': 1,
-  'battle-unit': 2, 'battle-hex': 2, 'summon': 2,
+  'move': 1, 'march': 1,
+  'battle-unit': 2, 'battle-hex': 2, 'summon': 2, 'build-siege': 2,
   'explore': 3, 'sound-horn': 4, 'fortify': 5, 'heal': 6,
   // Free actions (no budget cost) — list near the top so the transfer reads
   // before any of the recipient's downstream actions.
@@ -576,7 +577,7 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
       }
 
       // ── Blocked moves (ACTION_FAIL with a blocker) → "BLOCKED" note ────────
-      if (ev.type === RE.ACTION_FAIL && ev.action?.type === PA.MOVE
+      if (ev.type === RE.ACTION_FAIL && (ev.action?.type === PA.MOVE || ev.action?.type === PA.MARCH)
           && (ev.blockedBy || ev.blockedByFort)) {
         const actorSnap = ents.find(e => e.id === ev.action.entityId);
         if (!actorSnap) continue;
@@ -584,8 +585,8 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
           entityId: ev.action.entityId,
           actor:    unitRef(actorSnap),
           target:   null,
-          actionType: PA.MOVE,
-          label:    'MOVE',
+          actionType: ev.action.type,
+          label:    ACTION_LABEL[ev.action.type] ?? 'MOVE',
           outcomeKind: null,
           targetDmg: 0, actorDmg: 0, killed: false,
           note:     { text: 'BLOCKED', kind: 'blocked' },
@@ -683,10 +684,13 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
         continue;
       }
 
-      // Summon shows the conjured unit as the "target" chip.
+      // Summon shows the conjured unit as the "target" chip; Build Siege
+      // shows the freshly assembled catapult the same way.
       let target = null;
       if (a.type === PA.SUMMON && a.summonType) {
         target = unitRef({ type: a.summonType });
+      } else if (a.type === PA.BUILD_SIEGE) {
+        target = unitRef({ type: ev.result?.built?.type ?? 'catapult' });
       }
 
       // Explore reports the loot gained with its full name + stats when the id
@@ -732,9 +736,19 @@ export function buildStepDigest(steps, finalEntities, { isVisible, PlanActionTyp
 
       // Hover highlight: the actor's hex, plus — for moves — every hex the
       // unit crossed (movePath drives the ghost arrow on the map).
+      // MARCH: surface how many soldiers were carried (and any left behind).
+      if (a.type === PA.MARCH && !note) {
+        const carried = ev.result?.marchPassengers?.length ?? 0;
+        const stayed  = ev.result?.marchLeftBehind?.length ?? 0;
+        note = {
+          text: `WITH ${carried} SOLDIER${carried === 1 ? '' : 'S'}${stayed ? ` · ${stayed} HELD BACK` : ''}`,
+          kind: 'info',
+        };
+      }
+
       const hexes = [{ col: actorSnap.col, row: actorSnap.row }];
       let movePath = null;
-      if (a.type === PA.MOVE) {
+      if (a.type === PA.MOVE || a.type === PA.MARCH) {
         const waypoints = Array.isArray(ev.result?.path) && ev.result.path.length
           ? ev.result.path
           : (Number.isFinite(a.toCol) && Number.isFinite(a.toRow)

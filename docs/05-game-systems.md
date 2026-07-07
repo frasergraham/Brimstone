@@ -36,6 +36,16 @@ The Brute is also no longer a stub — `BruteFaction` overrides:
 - `splashSparesAllies` — `true`; witch-side units on splash hexes take no damage (and no knockback)
 - `splashKnockback` — `true`; surviving splashed bystanders are pushed one hex outward from the target when the destination is open
 
+The Captain is also no longer a stub — `CaptainFaction` overrides:
+- `canSummon` / `getSummonOptions` — **CALL REINFORCEMENTS**: one action + 2 food spawns **2 Soldiers** on/next to the captain (shares the SUMMON plumbing; `executeSummon` has a soldier branch)
+- `canMarch` — **MARCH** (`PlanActionType.MARCH`): the captain moves and every friendly soldier on his starting hex moves with him for one action; overflow passengers (destination at capacity) stay behind
+- `canBuildSiege` — **BUILD_SIEGE** (`PlanActionType.BUILD_SIEGE`): 4 wood + 1 metal places an immobile **Catapult** (innate `catapult_stone` weapon, range 4) on an adjacent hex
+- `baseBudget` 4 / `actionCap` 9 — bigger action economy (budgets resolve through the live leader's concrete faction, see `budgetFactionFor` in game.js)
+- `survivorFindMultiplier` — 0.4; hidden survivors are much harder for the captain to stumble on (move/explore discovery only — Sound Horn remains a deliberate, full-strength recruit tool)
+- Personally weaker than the paladin (70 HP / base ATK 1 + sword) — he wins through troops.
+
+The **immobile** unit tag (`UNIT_TYPES[type].tags` → `isImmobileType()`) is a general mechanic introduced with the catapult: immobile units never get MOVE (or a March pickup) in `getValidActions`, `executeMove` refuses them, and `validatePlanAction` rejects queued moves.
+
 Splash damage scales with the attacker's roll margin: `clamp(floor(margin / 3), 1, 3) × DAMAGE_SCALE`. Crushing blows additionally apply the **wounded** effect to surviving targets — that's a universal rule (any attacker), not a brute-only one.
 
 The Necromancer is also no longer a stub — `NecromancerFaction` deals exclusively with the undead:
@@ -105,7 +115,7 @@ See `src/sides.js` for the Side enum and `src/factions.js` for the Faction regis
 |------|----|-----|-----|------|------------|
 | Paladin (default day leader) | 14 | 3 | 2 | day | Game start |
 | Rogue (stub) | 10 | 3 | 1 | day | Game start (when picked) |
-| Captain (stub) | 12 | 2 | 3 | day | Game start (when picked) |
+| Captain | 10 | 1 | 2 | day | Game start (when picked) |
 | Witch (default night leader) | 10 | 2 | 2 | night | Game start |
 | Necromancer | 10 | 1 | 2 | night | Game start (when picked) |
 | Brute        | 18 | 4 | 3 | night | Game start (when picked) |
@@ -115,6 +125,8 @@ See `src/sides.js` for the Side enum and `src/factions.js` for the Faction regis
 | Minion | 2 | 1 | 0 | night | Summon (no resource cost) |
 | Wood Golem | 3 | 2 | 3 | night | Summon (2 wood) |
 | Iron Golem | 5 | 3 | 2 | night | Summon (2 metal) |
+| Soldier | 2 | 1 | 1 | day | Call Reinforcements (2 food → 2 soldiers, captain only) |
+| Catapult | 4 | 2 | 1 | day | Build Siege (4 wood + 1 metal, captain only); immobile, range 4 |
 
 **HP note:** the HP values above are the *logical* base; actual `maxHp` in code
 is each value **× `DAMAGE_SCALE` (7)** (paladin 98, zombie 14…) — see the combat
@@ -296,6 +308,7 @@ The caller then calls `state.spendAction(result.cost)` to deduct from the budget
 ├──────────────┬──────────────────────────────────────────────┤
 │ MOVEMENT     │ MOVE — adjacent hex (1 AP, road discount)    │
 │              │        range 2 with horse                    │
+│              │ MARCH — captain + co-located soldiers (1 AP) │
 ├──────────────┼──────────────────────────────────────────────┤
 │ EXPLORATION  │ EXPLORE — reveal tile contents (1 AP)        │
 │              │ SOUND_HORN — reveal hero, recruit (1 AP+food)│
@@ -309,7 +322,8 @@ The caller then calls `state.spendAction(result.cost)` to deduct from the budget
 │ DEFENSE      │ FORTIFY — build defense (+1-2 DEF) (1 AP)    │
 │              │ GUARD — stance with reactive strikes (1 AP)   │
 ├──────────────┼──────────────────────────────────────────────┤
-│ ECONOMY      │ SUMMON — witch creates unit (1 AP)           │
+│ ECONOMY      │ SUMMON — witch unit / captain soldiers (1 AP)│
+│              │ BUILD_SIEGE — captain catapult (1 AP+res)    │
 │              │ HEAL — use herbs (+2D10 HP) (1 AP)           │
 │              │ USE_ITEM — food/silver/scripture (0 AP)       │
 │              │ EQUIP_WEAPON — from pack (0 AP, 1×/round)    │

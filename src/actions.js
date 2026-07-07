@@ -26,18 +26,29 @@ const isWeaponId = (id) => ITEMS[id]?.kind === 'weapon';
 import {
   EntityType, SurvivorAbility, Entity,
   createZombie, createMinion, createSurvivor, createSkeleton,
-  createWoodGolem, createIronGolem,
+  createWoodGolem, createIronGolem, createSoldier, createCatapult,
   nextDie, ADVANTAGE_CAP, isLeaderType, abilityStatMod, rollDamage, awardXP,
   getEquippedWeaponIdOf,
   getItemCountOf, totalItemCount, addItemInItems, removeItemInItems,
 } from './entities.js';
+import { isImmobileType } from './unit-types.js';
 import { Phase } from './game.js';
-import { getFaction, concreteFactionOf, sightRangeForEntity, isPlaceableTile } from './factions.js';
+import {
+  getFaction, concreteFactionOf, sightRangeForEntity, isPlaceableTile,
+  CAPTAIN_REINFORCEMENT_COST, CAPTAIN_REINFORCEMENT_COUNT,
+  SIEGE_WOOD_COST, SIEGE_METAL_COST,
+} from './factions.js';
 import { dispatchTrigger, applyEffect, effectStatMod } from './effects.js';
 import { triggerSurvivorEncounter } from './survivor-discovery.js';
 
 export const ActionType = Object.freeze({
   MOVE:         'move',
+  // Captain-only: move the leader and carry every friendly soldier on his
+  // starting hex along to the destination in the same single action.
+  MARCH:        'march',
+  // Captain-only: spend 4 wood + 1 metal to place an immobile Catapult on
+  // an adjacent hex.
+  BUILD_SIEGE:  'build_siege',
   EXPLORE:      'explore',
   BATTLE:       'battle',
   BATTLE_HEX:   'battle_hex',  // Blind attack on a hex — for use through fog of war
@@ -436,18 +447,36 @@ export function getValidActions(state, actor) {
   const t = tile(state, actor.col, actor.row);
   const faction = getFaction(actor.owner);
 
-  // Move — range 2 if actor has a horse in personal items, otherwise 1
+  // Move — range 2 if actor has a horse in personal items, otherwise 1.
+  // Immobile units (catapults) never get a MOVE (or March) option.
+  const immobile = isImmobileType(actor.type);
   const hasHorse = faction.hasHorse(actor);
   const visibleHexes = state.fogOfWar !== 'none'
     ? getVisiblePositions(state, actor.owner)
     : null;
-  const moveTargets = getReachableHexes(state, actor, hasHorse ? 2 : 1, null, visibleHexes);
+  const moveTargets = immobile ? [] : getReachableHexes(state, actor, hasHorse ? 2 : 1, null, visibleHexes);
   if (moveTargets.length) actions.push({ type: ActionType.MOVE, targets: moveTargets });
+
+  // March — captain-only: move and carry every friendly (mobile) soldier on
+  // the starting hex along. Same destinations as MOVE; surfaced only when
+  // at least one soldier shares the tile.
+  if (moveTargets.length && concreteFactionOf(actor).canMarch()) {
+    const passengers = state.entities.filter(e =>
+      e.alive && e.id !== actor.id && e.owner === actor.owner &&
+      e.type === EntityType.SOLDIER && !isImmobileType(e.type) &&
+      e.col === actor.col && e.row === actor.row
+    ).length;
+    if (passengers > 0) {
+      actions.push({ type: ActionType.MARCH, targets: moveTargets, passengers });
+    }
+  }
 
   // Explore — available on any unexplored tile; faction determines eligibility.
   // Building-footprint hexes are impassable (no entity can stand on one) and
   // hold no building of their own — exploration belongs to the entrance.
-  if (t && !t.explored && !isBuildingFootprint(t) && faction.canExplore(actor)) {
+  // Immobile units (catapults) never explore — a stationary siege engine
+  // doesn't scout the ground it's bolted to.
+  if (t && !t.explored && !isBuildingFootprint(t) && !immobile && faction.canExplore(actor)) {
     actions.push({ type: ActionType.EXPLORE, targets: [{ col: actor.col, row: actor.row }] });
   }
 
@@ -512,6 +541,20 @@ export function getValidActions(state, actor) {
     const metalCount = getItemCountOf(inv, ResourceType.METAL);
     const affordable = woodCount > 0 || metalCount > 0;
     actions.push({ type: ActionType.FORTIFY, targets: [{ col: actor.col, row: actor.row }], affordable });
+  }
+
+  // Build Siege — captain-only: 4 wood + 1 metal places a Catapult on an
+  // adjacent hex. Always surfaced for the capable leader when a spawn hex
+  // exists; affordable=false greys it out (mirrors the fortify pattern).
+  if (concreteFactionOf(actor).canBuildSiege() && isLeaderType(actor.type)) {
+    const spawnHex = findSiegeSpawnHex(state, actor);
+    if (spawnHex) {
+      const inv = faction.getInventory(state);
+      const affordable =
+        getItemCountOf(inv, ResourceType.WOOD)  >= SIEGE_WOOD_COST &&
+        getItemCountOf(inv, ResourceType.METAL) >= SIEGE_METAL_COST;
+      actions.push({ type: ActionType.BUILD_SIEGE, targets: [spawnHex], affordable });
+    }
   }
 
   // Summon — Phase 5 gate: any unit whose innate abilities include 'summon'.
@@ -667,11 +710,19 @@ const SURVIVOR_FIND_CHANCE = Object.freeze({
 
 // Diminishing returns: each active survivor on the map reduces find chance by 10%.
 // At 10+ survivors the chance drops to zero.
-export function survivorFindMultiplier(state) {
+//
+// `actor` (optional, backwards-compatible) further scales the chance by the
+// ACTING unit's concrete-faction multiplier — the Captain (0.4) barely
+// notices hidden survivors, while every other faction stays at 1.0. Keyed
+// off the actor, never global state, so a captain and a paladin sharing a
+// day side (NvN) each roll with their own odds.
+export function survivorFindMultiplier(state, actor = null) {
   const active = state.entities.filter(
     e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR
   ).length;
-  return Math.max(0, 1 - 0.10 * active);
+  const base = Math.max(0, 1 - 0.10 * active);
+  const factionMult = actor ? concreteFactionOf(actor).survivorFindMultiplier() : 1.0;
+  return base * factionMult;
 }
 
 // Survivor encounter logic moved to src/survivor-discovery.js so faction
@@ -680,6 +731,11 @@ export function survivorFindMultiplier(state) {
 const _triggerSurvivorEncounter = triggerSurvivorEncounter;
 
 export function executeMove(state, actor, targetCol, targetRow) {
+  // Immobile units (catapults) can never move — authoritative guard so a
+  // stale/forged MOVE plan action fails here regardless of UI gating.
+  if (isImmobileType(actor.type)) {
+    return { success: false, log: [`${actor.displayName} cannot move.`] };
+  }
   actor.guarding = 0;  // Moving breaks guard stance
   const log = [];
 
@@ -727,8 +783,9 @@ export function executeMove(state, actor, targetCol, targetRow) {
     actor.row = step.row;
     walkedPath.push({ col: step.col, row: step.row });
 
-    // Hidden survivor encounter — phase-based chance on movement, reduced by active survivors
-    if (st.hiddenSurvivor && Math.random() < (SURVIVOR_FIND_CHANCE[state.phase] ?? 0.5) * survivorFindMultiplier(state)) {
+    // Hidden survivor encounter — phase-based chance on movement, reduced by
+    // active survivors and the acting faction's own discovery multiplier.
+    if (st.hiddenSurvivor && Math.random() < (SURVIVOR_FIND_CHANCE[state.phase] ?? 0.5) * survivorFindMultiplier(state, actor)) {
       const enc = _triggerSurvivorEncounter(state, actor, step.col, step.row);
       if (enc) { encounterLog.push(...enc.encounterLog); encounterSurvivor = enc.encounterSurvivor; }
     }
@@ -809,7 +866,7 @@ export function executeExplore(state, actor) {
   // Exploring reveals a hidden survivor — chance reduced by active survivors on the map.
   let encounterLog = [];
   let encounterSurvivor = null;
-  if (t.hiddenSurvivor && Math.random() < survivorFindMultiplier(state)) {
+  if (t.hiddenSurvivor && Math.random() < survivorFindMultiplier(state, actor)) {
     const enc = _triggerSurvivorEncounter(state, actor, actor.col, actor.row);
     if (enc) { encounterLog = enc.encounterLog; encounterSurvivor = enc.encounterSurvivor; }
   }
@@ -1066,9 +1123,12 @@ function _applySplashDamage(state, col, row, excludeIds, log, opts = {}) {
 
 // Compute the hex one step outward from `centerCol/centerRow` in the
 // direction of `entity`, in axial space (handles odd-r stagger). Returns
-// null if the destination is off-map, a river, a fortified wall the
-// entity can't enter, or already occupied by another live unit.
+// null if the entity is immobile (immobile means immobile — a catapult
+// cannot be shoved by a blast), or if the destination is off-map, a river,
+// a fortified wall the entity can't enter, or already occupied by another
+// live unit.
 function _knockbackDestination(state, entity, centerCol, centerRow) {
+  if (isImmobileType(entity.type)) return null;
   const center = offsetToAxial(centerCol, centerRow);
   const here   = offsetToAxial(entity.col, entity.row);
   const dq = here.q - center.q;
@@ -1772,9 +1832,11 @@ export function executeFortify(state, actor) {
 export function executeSummon(state, actor, requestedType = null) {
   // Learn-to-Play caps the witch's TOTAL summons so the post-tutorial AI can't
   // raise an unbeatable horde (set by _learnHandoff; null in every other game,
-  // so normal/online/headless play is unaffected). Only the witch summons, so a
-  // bare count check needs no faction-string comparison.
-  if (state.maxWitchSummons != null && state.witchSummonCount >= state.maxWitchSummons) {
+  // so normal/online/headless play is unaffected). Scoped to night-side
+  // summoners — the Captain's CALL REINFORCEMENTS shares this code path but
+  // not the witch's tutorial leash.
+  if (state.maxWitchSummons != null && actor.owner === 'witch' &&
+      state.witchSummonCount >= state.maxWitchSummons) {
     return { success: false, log: ['The witch\'s power is spent — she can summon no more.'] };
   }
   const faction         = getFaction(actor.owner);
@@ -1804,6 +1866,7 @@ export function executeSummon(state, actor, requestedType = null) {
   const corpse = allowedTypes.has(EntityType.ZOMBIE)
     ? _findRaisableCorpse(state, actor)
     : null;
+  const food = getItemCountOf(inv, ResourceType.FOOD);
 
   // Resolve final type: honour request if affordable AND allowed, else
   // fall back to auto-pick. A ZOMBIE request without a corpse in reach
@@ -1815,15 +1878,69 @@ export function executeSummon(state, actor, requestedType = null) {
   if (resolvedType === EntityType.MINION      && total < minionCost) resolvedType = null;
   if (resolvedType === EntityType.ZOMBIE   && (total < minionCost || !corpse)) resolvedType = null;
   if (resolvedType === EntityType.SKELETON &&  total < minionCost)   resolvedType = null;
+  if (resolvedType === EntityType.SOLDIER  && food  < CAPTAIN_REINFORCEMENT_COST) resolvedType = null;
   if (!resolvedType) {
     // Auto-pick priority: iron > wood > zombie (corpse) > skeleton > minion,
-    // restricted to allowed types.
+    // restricted to allowed types. Day-side (captain) summoners only ever
+    // have SOLDIER in their allowed set, so the auto-pick is unambiguous there.
     if      (allowedTypes.has(EntityType.IRON_GOLEM) && metal >= 2)          resolvedType = EntityType.IRON_GOLEM;
     else if (allowedTypes.has(EntityType.WOOD_GOLEM) && wood  >= 2)          resolvedType = EntityType.WOOD_GOLEM;
     else if (allowedTypes.has(EntityType.ZOMBIE)     && total >= minionCost && corpse) resolvedType = EntityType.ZOMBIE;
     else if (allowedTypes.has(EntityType.SKELETON)   && total >= minionCost) resolvedType = EntityType.SKELETON;
     else if (allowedTypes.has(EntityType.MINION)     && total >= minionCost) resolvedType = EntityType.MINION;
+    else if (allowedTypes.has(EntityType.SOLDIER)    && food  >= CAPTAIN_REINFORCEMENT_COST) resolvedType = EntityType.SOLDIER;
+    else if (allowedTypes.has(EntityType.SOLDIER)) {
+      return { success: false, log: [`Need ${CAPTAIN_REINFORCEMENT_COST} food to call reinforcements.`] };
+    }
     else return { success: false, log: [`Need at least ${minionCost} resource${minionCost === 1 ? '' : 's'} to summon.`] };
+  }
+
+  // ── CALL REINFORCEMENTS (Captain): one action, 2 food, 2 soldiers ────────
+  if (resolvedType === EntityType.SOLDIER) {
+    // Spawn on the captain's own hex while capacity remains, then overflow
+    // onto adjacent placeable hexes. If NO soldier fits anywhere, fail
+    // without spending; if only one fits, spawn one (full cost — the other
+    // recruit deserted for lack of ground).
+    const spawnHexes = [];
+    const roomAt = (col, row) => {
+      const t = tile(state, col, row);
+      if (!t) return false;
+      const units = state.entities.filter(e => e.alive && e.col === col && e.row === row).length
+        + spawnHexes.filter(h => h.col === col && h.row === row).length;
+      return tileCapacityRemaining(t, units) > 0;
+    };
+    for (let i = 0; i < CAPTAIN_REINFORCEMENT_COUNT; i++) {
+      if (roomAt(actor.col, actor.row)) {
+        spawnHexes.push({ col: actor.col, row: actor.row });
+        continue;
+      }
+      const n = getNeighbors(actor.col, actor.row).find(nb =>
+        isPlaceableTile(state, nb.col, nb.row, actor.owner) &&
+        !state.entities.some(e => e.alive && e.owner !== actor.owner && e.col === nb.col && e.row === nb.row) &&
+        roomAt(nb.col, nb.row)
+      );
+      if (n) spawnHexes.push({ col: n.col, row: n.row });
+    }
+    if (spawnHexes.length === 0) {
+      return { success: false, log: ['No open ground for reinforcements to muster.'] };
+    }
+    removeItemInItems(inv, ResourceType.FOOD, CAPTAIN_REINFORCEMENT_COST);
+    const summonedIds = [];
+    for (const h of spawnHexes) {
+      const s = createSoldier(h.col, h.row, ownerId, state);
+      state.entities.push(s);
+      assignSlotOnTile(state, s);
+      summonedIds.push(s.id);
+    }
+    faction.trackSummon(state);
+    const n = summonedIds.length;
+    return {
+      success: true,
+      log: [`${actor.displayName} calls reinforcements — ${n === 1 ? 'a soldier musters' : `${n} soldiers muster`}!`],
+      cost: 1,
+      spent: [{ type: ResourceType.FOOD, amount: CAPTAIN_REINFORCEMENT_COST }],
+      summonedIds,
+    };
   }
 
   if (resolvedType === EntityType.IRON_GOLEM) {
@@ -1889,6 +2006,7 @@ export function executeSummon(state, actor, requestedType = null) {
   faction.trackSummon(state);
   return { success: true, log: [`The witch raises a ${unitName}!`], cost: 1, spent: [{ type: res, amount: 2 }] };
 }
+
 
 // Spend `amount` from any resources in `inv`, largest stacks first (the
 // witch's minion economics — shared by minion, skeleton, and raise-dead).
@@ -2046,6 +2164,94 @@ export function executeTeleport(state, actor, targetCol, targetRow) {
     toCol: dest.col, toRow: dest.row,
     centerCol: targetCol, centerRow: targetRow,
     slot: actor.slot,
+  };
+}
+
+// ── MARCH (Captain) ─────────────────────────────────────────────────────────
+// One action: the captain moves (full executeMove semantics — pathing, roads,
+// blockers, encounters) and every friendly soldier standing on his STARTING
+// hex is carried along to wherever he actually stops (which may be short of
+// the target if blocked). Overflow rule: passengers relocate one at a time in
+// entity order; any soldier the destination hex can no longer hold (capacity
+// exhausted) simply stays behind on the starting hex — never dropped mid-path.
+export function executeMarch(state, actor, targetCol, targetRow) {
+  if (!concreteFactionOf(actor).canMarch()) {
+    return { success: false, log: [`${actor.displayName} cannot march troops.`] };
+  }
+  const startCol = actor.col, startRow = actor.row;
+  const passengers = state.entities.filter(e =>
+    e.alive && e.id !== actor.id && e.owner === actor.owner &&
+    e.type === EntityType.SOLDIER && !isImmobileType(e.type) &&
+    e.col === startCol && e.row === startRow
+  );
+
+  const moveRes = executeMove(state, actor, targetCol, targetRow);
+  if (!moveRes.success) return moveRes;
+
+  const marchPassengers = [];
+  const marchLeftBehind = [];
+  for (const p of passengers) {
+    if (isTileFullForMove(state, p, actor.col, actor.row)) {
+      marchLeftBehind.push(p.id);
+      continue;
+    }
+    p.col = actor.col;
+    p.row = actor.row;
+    p.guarding = 0; // marching breaks guard, same as moving
+    assignSlotOnTile(state, p);
+    marchPassengers.push({ id: p.id, col: p.col, row: p.row, slot: p.slot });
+  }
+
+  const log = [...moveRes.log];
+  if (marchPassengers.length > 0) {
+    log.push(`${actor.displayName} marches with ${marchPassengers.length} soldier${marchPassengers.length === 1 ? '' : 's'}.`);
+  }
+  if (marchLeftBehind.length > 0) {
+    log.push(`${marchLeftBehind.length} soldier${marchLeftBehind.length === 1 ? ' holds' : 's hold'} position — no room ahead.`);
+  }
+  return { ...moveRes, log, marchPassengers, marchLeftBehind };
+}
+
+// ── BUILD SIEGE (Captain) ───────────────────────────────────────────────────
+// First open adjacent hex that can host a fresh catapult: placeable terrain
+// (no river/building/full hex) and no enemy standing on it.
+export function findSiegeSpawnHex(state, actor) {
+  return getNeighbors(actor.col, actor.row).find(nb =>
+    isPlaceableTile(state, nb.col, nb.row, actor.owner) &&
+    !state.entities.some(e => e.alive && e.owner !== actor.owner && e.col === nb.col && e.row === nb.row)
+  ) ?? null;
+}
+
+// One action + 4 wood + 1 metal from the shared day-side pool → an immobile
+// ranged Catapult on an adjacent hex. Fails without spending when the
+// resources are short or no adjacent hex can host it.
+export function executeBuildSiege(state, actor) {
+  if (!concreteFactionOf(actor).canBuildSiege() || !isLeaderType(actor.type)) {
+    return { success: false, log: [`${actor.displayName} cannot build siege engines.`] };
+  }
+  const inv = getFaction(actor.owner).getInventory(state);
+  if (getItemCountOf(inv, ResourceType.WOOD)  < SIEGE_WOOD_COST ||
+      getItemCountOf(inv, ResourceType.METAL) < SIEGE_METAL_COST) {
+    return { success: false, log: [`Building a catapult needs ${SIEGE_WOOD_COST} wood and ${SIEGE_METAL_COST} metal.`] };
+  }
+  const spawn = findSiegeSpawnHex(state, actor);
+  if (!spawn) {
+    return { success: false, log: ['No open ground beside the captain for a catapult.'] };
+  }
+  removeItemInItems(inv, ResourceType.WOOD,  SIEGE_WOOD_COST);
+  removeItemInItems(inv, ResourceType.METAL, SIEGE_METAL_COST);
+  const cat = createCatapult(spawn.col, spawn.row, actor.ownerId, state);
+  state.entities.push(cat);
+  assignSlotOnTile(state, cat);
+  return {
+    success: true,
+    log: [`${actor.displayName} oversees the assembly of a catapult!`],
+    cost: 1,
+    spent: [
+      { type: ResourceType.WOOD,  amount: SIEGE_WOOD_COST },
+      { type: ResourceType.METAL, amount: SIEGE_METAL_COST },
+    ],
+    built: { id: cat.id, type: cat.type, col: cat.col, row: cat.row, slot: cat.slot },
   };
 }
 

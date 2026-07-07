@@ -79,6 +79,10 @@ export function describePlanAction(action, entities, index = 0) {
   switch (action.type) {
     case PlanActionType.MOVE:
       return `${who} → (${action.toCol},${action.toRow})`;
+    case PlanActionType.MARCH:
+      return `${who} marches → (${action.toCol},${action.toRow})`;
+    case PlanActionType.BUILD_SIEGE:
+      return `${who} builds a catapult`;
     case PlanActionType.BATTLE_UNIT: {
       const target = entities.find(e => e.id === action.targetId);
       return `${who} attacks ${target?.displayName ?? '?'}`;
@@ -149,6 +153,8 @@ export function describePlanActionParts(action, entities, index = 0) {
   const rangeOf = e => (typeof e?.getRange === 'function' ? e.getRange() : (e?.range ?? 1));
   switch (action.type) {
     case PlanActionType.MOVE:         return { verb: 'Move',       target: null };
+    case PlanActionType.MARCH:        return { verb: 'March',      target: null };
+    case PlanActionType.BUILD_SIEGE:  return { verb: 'Build Catapult', target: null };
     case PlanActionType.EXPLORE:      return { verb: 'Explore',    target: null };
     case PlanActionType.FORTIFY:      return { verb: 'Fortify',    target: null };
     case PlanActionType.GUARD:        return { verb: 'Guard',      target: null };
@@ -341,14 +347,18 @@ export function computeFadeFlags({ scrollTop = 0, clientHeight = 0, scrollHeight
 function _stepCostLabel(action, projShared, projWitch, projEntityItems, entities = null) {
   switch (action.type) {
     case PlanActionType.SUMMON: {
+      const caster = entities?.find?.(e => e.id === action.entityId);
+      // Captain reinforcements draw 2 food from the day-side pool.
+      if (action.summonType === 'soldier') return `−2 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.FOOD])}`;
       // Faction-aware cost preview — projectSummonSpend (apply=false) reports
       // what executeSummon will charge without touching the projected pool.
-      const caster = entities?.find?.(e => e.id === action.entityId);
       const { amount, resource } = projectSummonSpend(caster, projWitch, false);
       return resource
         ? `−${amount} ${coloredResourceLabel(RESOURCE_LABEL[resource])}`
         : `−${amount} res`;
     }
+    case PlanActionType.BUILD_SIEGE:
+      return `−4 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.WOOD])} −1 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.METAL])}`;
     case PlanActionType.FORTIFY:
       if (getItemCountOf(projShared, ResourceType.METAL) > 0) return `−1 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.METAL])}`;
       if (getItemCountOf(projShared, ResourceType.WOOD)  > 0) return `−1 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.WOOD])}`;
@@ -450,8 +460,11 @@ export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entit
 
 const UNIT_GLYPH = {
   [EntityType.HERO]:       '\uE000',
+  [EntityType.CAPTAIN]:    '\uE008',
   [EntityType.WITCH]:      '\uE001',
   [EntityType.SURVIVOR]:   '\uE002',
+  [EntityType.SOLDIER]:    '\uE003',
+  [EntityType.CATAPULT]:   '\uE0B9',
   [EntityType.ZOMBIE]:     '\uE005',
   [EntityType.MINION]:     '\uE004',
   [EntityType.WOOD_GOLEM]: '\uE006',
@@ -715,10 +728,12 @@ export function buildUnitPlanBlocksHtml(
 function _advanceProjectedInventory(a, projShared, projWitch, projEntityItems, entities) {
   switch (a.type) {
     case PlanActionType.SUMMON: {
+      const caster = entities?.find?.(e => e.id === a.entityId);
+      // Captain reinforcements: 2 food from the day-side pool.
+      if (a.summonType === 'soldier') { removeItemInItems(projShared, ResourceType.FOOD, 2); break; }
       // Faction-aware spend (witch 2, necromancer/brute 1) — shared with
       // computeProjectedInventory so the plan panel's projected pool matches
       // what the resolver will actually deduct.
-      const caster = entities?.find?.(e => e.id === a.entityId);
       projectSummonSpend(caster, projWitch);
       break;
     }

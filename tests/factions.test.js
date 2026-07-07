@@ -110,14 +110,15 @@ describe('Stub factions (PR 5)', () => {
   });
 
   test('stub factions report isStub() === true; side defaults do not', () => {
-    // Rogue and Brute have grown real distinct behaviour (rogue: ranged
-    // attack, melee-weapon ban, sight bonus, agility-loot bonus,
-    // building-survivor auto-detect, no Sound Horn; brute: lumbering
-    // movement, minions-only summons, building-survivor auto-zombify,
-    // crushing-blow blast splash) — no longer stubs. The remaining
-    // day/night stubs still inherit their parent's behaviour wholesale.
+    // Rogue, Captain and Brute have grown real distinct behaviour (rogue:
+    // ranged attack, melee-weapon ban, sight bonus, agility-loot bonus,
+    // building-survivor auto-detect, no Sound Horn; captain: soldier
+    // reinforcements, March, siege engineering, bigger action economy,
+    // weak survivor discovery; brute: lumbering movement, minions-only
+    // summons, building-survivor auto-zombify, crushing-blow blast splash)
+    // — no longer stubs. The necromancer still inherits the witch wholesale.
     assert.equal(getFaction('rogue').isStub(),       false);
-    assert.equal(getFaction('captain').isStub(),     true);
+    assert.equal(getFaction('captain').isStub(),     false); // real faction since the CALL REINFORCEMENTS / MARCH / siege PR
     assert.equal(getFaction('necromancer').isStub(), false); // real faction since the RAISE DEAD / POSSESS / TELEPORT PR
     assert.equal(getFaction('brute').isStub(),       false);
     assert.equal(getFaction('hero').isStub(),        false);

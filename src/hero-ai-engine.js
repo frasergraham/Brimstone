@@ -134,10 +134,20 @@ export function assessHeroBoard(sim) {
   const heroMaxHp = hero?.maxHp ?? hero?.hp ?? 1;
   const heroHpRatio = hero ? heroHp / (heroMaxHp || 1) : 1;
 
+  // "survivors" doubles as the hero AI's commandable-troop list: captain
+  // soldiers join it so the generic generators (node duty, escorts,
+  // opportunistic fights) give them orders. survivorCount stays SURVIVOR-only
+  // — it feeds the Sound Horn ceiling and recruit-goal scoring, which are
+  // about civilians, not mustered troops.
+  // TODO: AI-controlled catapults never fire — CATAPULT is excluded from this
+  // list (and every other unit loop), so an AI captain's siege engines sit
+  // idle after being built. Add a fire-at-target goal for immobile ranged
+  // units before letting the AI build them.
   const survivors = sim.entities.filter(e =>
-    e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR
+    e.alive && e.owner === 'hero' &&
+    (e.type === EntityType.SURVIVOR || e.type === EntityType.SOLDIER)
   );
-  const survivorCount = survivors.length;
+  const survivorCount = survivors.filter(e => e.type === EntityType.SURVIVOR).length;
 
   // Fog-of-war awareness — line-of-sight aware (forests/buildings block
   // vision past them). Per-entity sight so stub-faction bonuses (rogue +1)
@@ -581,6 +591,36 @@ export function genProtectHero(sim, board, budget, config = null) {
 // ── Generator: EXPLORE ──────────────────────────────────────────────────────
 // Find survivors, loot buildings, sound horn. Also fortify buildings.
 
+// ── CALL REINFORCEMENTS (Captain) ────────────────────────────────────────────
+// Day-side mirror of the witch's _trySummons: when the leader's concrete
+// faction can summon (captain) and the ledger holds enough food, queue
+// SUMMON actions for soldier pairs. Caps the standing soldier count so the
+// AI doesn't convert its whole food economy into chaff, and keeps 1 food in
+// reserve for a Sound Horn / ration. No-op for paladin/rogue leaders.
+const AI_SOLDIER_CAP = 6;
+function _tryReinforcements(actions, sim, board, remaining) {
+  if (remaining <= 0 || !board.hero) return 0;
+  const heroEntity = sim.entities.find(e => e.id === board.hero.id);
+  if (!heroEntity || !concreteFactionOf(heroEntity).canSummon()) return 0;
+  const ledger = sim.resourceLedger;
+  let soldiers = sim.entities.filter(e =>
+    e.alive && e.owner === 'hero' && e.type === EntityType.SOLDIER
+  ).length;
+  let queued = 0;
+  while (remaining - queued > 0 && soldiers < AI_SOLDIER_CAP &&
+         getItemCountOf(ledger, ResourceType.FOOD) >= 3) {
+    removeItemInItems(ledger, ResourceType.FOOD, 2);
+    actions.push({
+      type: PlanActionType.SUMMON, entityId: board.hero.id,
+      summonType: EntityType.SOLDIER,
+      _priority: 2, _goal: HeroGoal.EXPLORE,
+    });
+    soldiers += 2;
+    queued++;
+  }
+  return queued;
+}
+
 export function genExplore(sim, board, budget, config = null) {
   const actions = [];
   if (budget <= 0 || !board.hero) return actions;
@@ -588,6 +628,10 @@ export function genExplore(sim, board, budget, config = null) {
 
   const heroEntity = sim.entities.find(e => e.id === board.hero.id);
   if (!heroEntity) return actions;
+
+  // Captain: muster soldiers before anything else — troops fund the rest of
+  // the plan (unit action bonus) and the cost check reserves horn food.
+  remaining -= _tryReinforcements(actions, sim, board, remaining);
 
   // Always use herbs when injured — too valuable to skip (from shared supply)
   const herbs = getItemCountOf(sim.inventory?.hero, ResourceType.HERBS);
