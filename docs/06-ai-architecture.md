@@ -67,7 +67,8 @@ Both `WitchAIEngine` and `HeroAIEngine` follow the same pipeline:
 │  Produce PlanAction[] for each goal within its budget.           │
 │  Uses PlanSimState to project moves without mutating real state. │
 │                                                                  │
-│  Witch: genBuildArmy(), genControlNodes(), genDefendWitch()      │
+│  Witch: genPossess() [ability-gated], genDefendWitch(),          │
+│         genBuildArmy(), genControlNodes(), genHuntHeroes()       │
 │  Hero:  genExplore(), genControlNodes(), genProtectHero()        │
 │                                                                  │
 │  Output: PlanAction[] per goal (with priority tags)              │
@@ -104,9 +105,19 @@ Both `WitchAIEngine` and `HeroAIEngine` follow the same pipeline:
 **Trigger:** Few minions, high resources, unexplored buildings
 **Actions:** Summon units (prioritize iron golem > wood golem > minion by affordability), explore buildings, move toward unexplored areas
 
+The summon ledger (`_trySummons`, `assessBoard.canAffordSummon`, `PlanSimState.applySummon`) is **faction-aware**: the affordability threshold and per-summon spend come from the concrete leader faction's `getMinionCost()` (witch 2, necromancer/brute 1), and golem preference only applies to rosters that contain golems (`getUnitTypes()`). The plain witch's numbers are unchanged by construction.
+
 ### CONTROL_NODES
 **Trigger:** Uncontrolled nodes, approaching scoring checkpoint, hero holding nodes
 **Actions:** Move minions to nodes, fight adjacent enemies at nodes, guard when threatened
+
+### Necromancer leader spells (ability-gated, witch-neutral)
+
+Leaders that carry the `possess`/`teleport` abilities (the necromancer) get three extra behaviours, each keyed on **ability presence** — never on a faction string — so the plain witch pipeline is a guaranteed no-op:
+
+- **`genPossess`** (runs first in `getGenerators`, ≤1 plan slot, priority 1): seizes the most valuable enemy non-leader within `POSSESS_RANGE` — armed units (equipped weapon) outrank chaff; unarmed weak targets are skipped as not worth the action.
+- **Thrall command:** `assessBoard` surfaces enemy units possessed by this commander (via `canCommandEntity`, the same gate the planner/resolver use) as `board.possessedUnits`, excludes them from `visibleHeroes` (never attack your own thrall), and `genHuntHeroes`/`_closestUncommitted` command them like minions for the one round the possession lasts.
+- **TELEPORT:** two triggers — *escape* in `genDefendWitch` (fleeing with an enemy adjacent → warp to the safest in-range clump away from all visible enemies) and *node-grab* in `genControlNodes` (uncontested node 3–4 hexes away → one warp instead of a multi-round walk). Both project position via `PlanSimState.applyTeleport` (optimistic center landing; real resolution scatters to the clump).
 
 ### Goal Scoring Factors
 

@@ -9,12 +9,15 @@
 //   DEFEND_WITCH    — flee when health low or outnumbered
 
 import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, bestWitchObjective, nearestBuilding, roundsUntilScoring, scoreNodeFeasibility, WITCH_PERSONALITIES, adjacentBlockingFortToward } from './ai.js';
-import { hexDistance, hexKey, getNeighbors } from './hex.js';
+import { hexDistance, hexKey, hexRange, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
-import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf, rangeOf, getItemCountOf, totalItemCount, removeItemInItems } from './entities.js';
+import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf, rangeOf, getItemCountOf, totalItemCount, removeItemInItems, getEquippedWeaponIdOf } from './entities.js';
 import { ResourceType, hasBuilding, isRiver, isBuildingFootprint } from './tiles.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
 import { DAMAGE_SCALE } from './balance.js';
+import { concreteFactionOf } from './factions.js';
+import { POSSESS_RANGE, TELEPORT_RANGE, getTeleportClump } from './actions.js';
+import { possessorOf, canCommandEntity } from './effects.js';
 
 // ── Goal names ───────────────────────────────────────────────────────────────
 
@@ -129,7 +132,22 @@ export function assessBoard(sim) {
   const WITCH_MINION_SIGHT = sim.noWitchMission ? Infinity : 2;
   const allHeroes = sim.entities.filter(e => e.alive && e.owner === 'hero');
   const witchSideUnits = sim.entities.filter(e => e.alive && e.owner === 'witch');
+
+  // Thralls: enemy units currently POSSESSED by this commander — checked via
+  // canCommandEntity, the same gate planner/resolver consult, so the AI's
+  // notion of "commandable" can never drift from the rules. They fight for
+  // the witch side this round: command them like minions, never attack them.
+  // Empty for the plain witch (no possess ability), so this is a no-op there.
+  const commander = sim._playerId != null
+    ? { playerId: sim._playerId }
+    : { faction: sim._faction };
+  const possessedUnits = allHeroes.filter(h =>
+    possessorOf(h) != null && canCommandEntity(sim, h, commander)
+  );
+  const possessedIds = new Set(possessedUnits.map(p => p.id));
+
   const visibleHeroes = allHeroes.filter(hero =>
+    !possessedIds.has(hero.id) &&
     witchSideUnits.some(w => {
       // Any night-side leader (Witch, Necromancer, Brute) gets leader sight;
       // summoned units get minion sight.
@@ -186,12 +204,25 @@ export function assessBoard(sim) {
   const metalCount = getItemCountOf(inv, ResourceType.METAL);
   const woodCount = getItemCountOf(inv, ResourceType.WOOD);
   const totalResources = totalItemCount(inv);
-  const canAffordSummon = totalResources >= 2;
+  // Faction-aware summon economics: the concrete night faction sets the
+  // chaff price (witch 2, necromancer/brute 1) and the roster (golems are
+  // witch-only). Leaderless boards keep the witch-side defaults.
+  const concreteLeaderFaction = witch ? concreteFactionOf(witch) : null;
+  const minionCost = concreteLeaderFaction ? concreteLeaderFaction.getMinionCost() : 2;
+  const leaderRoster = concreteLeaderFaction ? concreteLeaderFaction.getUnitTypes() : null;
+  const summonsGolems = !leaderRoster ||
+    leaderRoster.includes(EntityType.IRON_GOLEM) || leaderRoster.includes(EntityType.WOOD_GOLEM);
+  const canAffordSummon = totalResources >= minionCost;
   let bestSummonType = null;
   if (canAffordSummon) {
-    if (metalCount >= 2) bestSummonType = EntityType.IRON_GOLEM;
-    else if (woodCount >= 2) bestSummonType = EntityType.WOOD_GOLEM;
-    else bestSummonType = EntityType.MINION;
+    if (summonsGolems && metalCount >= 2) bestSummonType = EntityType.IRON_GOLEM;
+    else if (summonsGolems && woodCount >= 2) bestSummonType = EntityType.WOOD_GOLEM;
+    else if (summonsGolems) bestSummonType = EntityType.MINION;
+    else {
+      // Golem-less roster (necromancer/brute): first affordable summon option.
+      bestSummonType = concreteLeaderFaction.getSummonOptions(inv)[0]?.summonType
+        ?? EntityType.MINION;
+    }
   }
 
   // Unexplored buildings
@@ -236,13 +267,14 @@ export function assessBoard(sim) {
     witchHp: witch?.hp ?? 0,
     witchMaxHp: witch?.maxHp ?? witch?.hp ?? 1,
     witchHpRatio: witch ? witch.hp / (witch.maxHp || witch.hp || 1) : 1,
-    minions, minionCount, armyStrength,
+    minions, minionCount, armyStrength, possessedUnits,
     visibleHeroes, heroDistance, heroHpRatio, enemiesNearWitch,
     heroLeader, heroSurvivors, visibleSurvivors, woundedEnemies,
     witchArmyTotal, minionsNearWitch,
     nodes, witchHeldCount, heroHeldCount, heroOnNodeCount,
     witchScore, heroScore,
     totalResources, metalCount, woodCount, canAffordSummon, bestSummonType,
+    minionCost, summonsGolems,
     unexploredBuildings,
     // Difficulty delta floors at 1 so an Easy AI still acts every round.
     totalBudget: Math.max(1, sim.actionsLeft + (sim.campaignAIBudgetBonus ?? 0) + (sim.aiDifficultyDelta ?? 0)),
@@ -475,11 +507,21 @@ export function estimateCombat(attacker, defender, board) {
 
 // ── Helper: pick uncommitted unit closest to a target ───────────────────────
 
+// Ability gate for leader spells (possess/teleport). Sim clones are
+// re-parented onto Entity.prototype, so hasAbility() resolves against the
+// cloned `abilities` array. Keyed on ability presence — never on a faction
+// string — so the plain witch (no spell abilities) is untouched by design.
+function _leaderCasts(entity, abilityId) {
+  return !!entity && typeof entity.hasAbility === 'function' && entity.hasAbility(abilityId);
+}
+
 function _closestUncommitted(sim, board, target, preferMinions = false) {
   let best = null, bestDist = Infinity;
+  // Thralls (possessed enemies) fight alongside the minions this round.
+  const thralls = board.possessedUnits ?? [];
   const candidates = preferMinions
-    ? [...board.minions, board.witch].filter(e => e && e.alive)
-    : [board.witch, ...board.minions].filter(e => e && e.alive);
+    ? [...board.minions, ...thralls, board.witch].filter(e => e && e.alive)
+    : [board.witch, ...board.minions, ...thralls].filter(e => e && e.alive);
   for (const e of candidates) {
     if (sim.unitCommitments.has(e.id)) continue;
     const d = hexDistance(e.col, e.row, target.col, target.row);
@@ -525,6 +567,25 @@ export function genDefendWitch(sim, board, budget, config = null) {
 
     if (nearestHero) {
       sim.unitCommitments.set(board.witch.id, Goal.DEFEND_WITCH);
+
+      // Escape teleport (necromancer): cornered — an enemy stands adjacent —
+      // so walking away just trades blows. Fold to the safest clump in range
+      // instead. Ability-gated; the plain witch walks exactly as before.
+      const enemyAdjacent = board.visibleHeroes.some(h =>
+        hexDistance(witchEntity.col, witchEntity.row, h.col, h.row) <= 1);
+      if (enemyAdjacent && _leaderCasts(witchEntity, 'teleport')) {
+        const center = _bestEscapeCenter(sim, board, witchEntity);
+        if (center) {
+          actions.push({
+            type: PlanActionType.TELEPORT, entityId: board.witch.id,
+            targetCol: center.col, targetRow: center.row,
+            _priority: 1, _goal: Goal.DEFEND_WITCH,
+          });
+          sim.applyTeleport(board.witch.id, center.col, center.row);
+          remaining--;
+        }
+      }
+
       // Keep fleeing until budget exhausted or out of sight range (>4 hexes)
       while (remaining > 0) {
         const currentWitch = sim.entities.find(e => e.id === board.witch.id);
@@ -578,6 +639,54 @@ export function genDefendWitch(sim, board, budget, config = null) {
   return actions;
 }
 
+// Pick the escape-teleport center: the in-range hex (with a landable clump)
+// that maximises distance from every visible enemy, tie-broken toward fuller
+// clumps (more landing hexes = a more predictable warp). Returns null when no
+// center actually gains ground on the nearest enemy — then walking is no worse.
+function _bestEscapeCenter(sim, board, leader) {
+  let best = null, bestScore = -Infinity;
+  for (const h of hexRange(leader.col, leader.row, TELEPORT_RANGE)) {
+    if (h.col === leader.col && h.row === leader.row) continue;
+    if (!sim.tiles.get(hexKey(h.col, h.row))) continue;
+    const clump = getTeleportClump(sim, leader, h.col, h.row);
+    if (clump.length === 0) continue;
+    let nearestEnemy = Infinity;
+    for (const e of board.visibleHeroes) {
+      nearestEnemy = Math.min(nearestEnemy, hexDistance(h.col, h.row, e.col, e.row));
+    }
+    const score = nearestEnemy * 10 + clump.length;
+    if (score > bestScore) { bestScore = score; best = h; }
+  }
+  if (best && board.visibleHeroes.length > 0) {
+    const now = Math.min(...board.visibleHeroes.map(e =>
+      hexDistance(leader.col, leader.row, e.col, e.row)));
+    const after = Math.min(...board.visibleHeroes.map(e =>
+      hexDistance(best.col, best.row, e.col, e.row)));
+    if (after <= now) return null;
+  }
+  return best;
+}
+
+// Pick an approach-teleport center toward a distant objective: the in-range
+// hex (with a landable clump, no visible enemy within 2) that lands closest
+// to `target`. Returns null unless the warp saves >= 3 steps of walking —
+// below that, walking is cheaper than gambling on the scatter.
+function _bestApproachCenter(sim, board, leader, target) {
+  const walkDist = hexDistance(leader.col, leader.row, target.col, target.row);
+  let best = null, bestDist = Infinity;
+  for (const h of hexRange(leader.col, leader.row, TELEPORT_RANGE)) {
+    if (h.col === leader.col && h.row === leader.row) continue;
+    if (!sim.tiles.get(hexKey(h.col, h.row))) continue;
+    const d = hexDistance(h.col, h.row, target.col, target.row);
+    if (d >= bestDist) continue;
+    if (board.visibleHeroes.some(e => hexDistance(h.col, h.row, e.col, e.row) <= 2)) continue;
+    if (getTeleportClump(sim, leader, h.col, h.row).length === 0) continue;
+    best = h; bestDist = d;
+  }
+  if (!best || walkDist - bestDist < 3) return null;
+  return best;
+}
+
 // ── Generator: HUNT_HEROES ─────────────────────────────────────────────────
 // Proactively seek and destroy hero units — especially survivors — to cripple
 // hero action budget. Coordinates gang-up attacks for maximum damage.
@@ -611,8 +720,10 @@ export function genHuntHeroes(sim, board, budget) {
   for (const target of targets) {
     if (remaining <= 0) break;
 
-    // Find uncommitted witch units closest to this target
-    const availableUnits = [board.witch, ...board.minions]
+    // Find uncommitted witch units closest to this target. Thralls (possessed
+    // enemies, board.possessedUnits) fight for us this round — turn their
+    // muskets on their own side.
+    const availableUnits = [board.witch, ...board.minions, ...(board.possessedUnits ?? [])]
       .filter(e => e && e.alive && !sim.unitCommitments.has(e.id) && !assignedUnits.has(e.id))
       .map(e => ({
         entity: e,
@@ -880,6 +991,15 @@ export function genBuildArmy(sim, board, budget) {
 function _trySummons(actions, sim, board, remaining) {
   if (!board.witch || remaining <= 0) return actions;
 
+  // Faction-aware economics: the chaff price and golem access come from the
+  // concrete night faction (witch: 2 + golems; necromancer/brute: 1, chaff
+  // only). The plain witch's numbers are unchanged by construction.
+  const summonerFaction = concreteFactionOf(board.witch);
+  const minionCost = summonerFaction.getMinionCost();
+  const summonerRoster = summonerFaction.getUnitTypes();
+  const summonsGolems = summonerRoster.includes(EntityType.IRON_GOLEM) ||
+    summonerRoster.includes(EntityType.WOOD_GOLEM);
+
   // Minion cap scales with witch team size so NvN witches aren't rationed to
   // a solo-witch ceiling. 1v1 baseline unchanged; each extra witch adds +4
   // (tuned alongside the scaled hidden-survivor pool so both sides field a
@@ -895,11 +1015,11 @@ function _trySummons(actions, sim, board, remaining) {
     const wood = getItemCountOf(ledger, ResourceType.WOOD);
     const total = totalItemCount(ledger);
 
-    if (total < 2) break;
+    if (total < minionCost) break;
 
     let summonType;
-    if (metal >= 2) summonType = EntityType.IRON_GOLEM;
-    else if (wood >= 2) summonType = EntityType.WOOD_GOLEM;
+    if (summonsGolems && metal >= 2) summonType = EntityType.IRON_GOLEM;
+    else if (summonsGolems && wood >= 2) summonType = EntityType.WOOD_GOLEM;
     else summonType = EntityType.MINION;
 
     if (summonType === EntityType.IRON_GOLEM) {
@@ -907,9 +1027,11 @@ function _trySummons(actions, sim, board, remaining) {
     } else if (summonType === EntityType.WOOD_GOLEM) {
       removeItemInItems(ledger, ResourceType.WOOD, 2);
     } else {
+      // Chaff summon (minion / zombie / skeleton): spend the faction's minion
+      // cost from the largest stacks first — mirrors executeSummon.
       const keys = Object.keys(ledger).filter(k => getItemCountOf(ledger, k) > 0)
         .sort((a, b) => getItemCountOf(ledger, b) - getItemCountOf(ledger, a));
-      let spend = 2;
+      let spend = minionCost;
       for (const k of keys) {
         const take = Math.min(getItemCountOf(ledger, k), spend);
         removeItemInItems(ledger, k, take);
@@ -927,6 +1049,48 @@ function _trySummons(actions, sim, board, remaining) {
     remaining--;
   }
 
+  return actions;
+}
+
+// ── Generator: POSSESS (necromancer) ─────────────────────────────────────────
+// Seize the most valuable enemy non-leader within POSSESS_RANGE. Ability-
+// gated: only leaders that carry `possess` (necromancer) ever emit it, so the
+// plain witch pipeline is a guaranteed no-op. Emitted at priority 1 from the
+// leader's pre-move position, so it resolves before repositioning invalidates
+// the range. The payoff lands NEXT round: assessBoard surfaces the thrall in
+// board.possessedUnits and the normal generators command it like a minion.
+
+export function genPossess(sim, board) {
+  const actions = [];
+  if (!board.witch) return actions;
+  const leader = sim.entities.find(e => e.id === board.witch.id);
+  if (!_leaderCasts(leader, 'possess')) return actions;
+
+  // Candidates: visible enemy non-leaders in range, not already possessed
+  // (board.visibleHeroes already excludes our own thralls).
+  const candidates = board.visibleHeroes.filter(h =>
+    !isLeaderType(h.type) &&
+    possessorOf(h) == null &&
+    hexDistance(leader.col, leader.row, h.col, h.row) <= POSSESS_RANGE
+  );
+
+  // Value: armed units (equipped weapon) are worth stealing — a turned musket
+  // swings a battle. Unarmed weak chaff is never worth the action: killing it
+  // outright costs the same and is permanent.
+  let best = null, bestValue = -Infinity;
+  for (const h of candidates) {
+    const armed = !!getEquippedWeaponIdOf(h.items);
+    if (!armed && attackOf(h) < 2) continue; // worthless — skip
+    const value = attackOf(h) + (armed ? 2 : 0);
+    if (value > bestValue) { bestValue = value; best = h; }
+  }
+  if (!best) return actions;
+
+  actions.push({
+    type: PlanActionType.POSSESS, entityId: leader.id, targetId: best.id,
+    _priority: 1, _goal: Goal.HUNT_HEROES,
+  });
+  sim.applyPossess();
   return actions;
 }
 
@@ -1039,6 +1203,39 @@ export function genControlNodes(sim, board, budget) {
 
       // Move toward node, attacking enemies encountered en route
       sim.unitCommitments.set(simUnit.id, Goal.CONTROL_NODES);
+
+      // Node-grab teleport (necromancer): an uncontested node within warp
+      // range is one action instead of a multi-round walk; a distant node
+      // gets an approach warp when it saves >= 3 steps of walking. Only
+      // fires when the landing clump exists. Ability-gated — minions and
+      // the plain witch keep walking.
+      if (!enemyOnNode && !heroThreatenedNode(node) && _leaderCasts(simUnit, 'teleport')) {
+        const jumpHex = node.obj.hexes
+          ? node.obj.hexes.reduce((bh, h) =>
+              hexDistance(simUnit.col, simUnit.row, h.col, h.row) <
+              hexDistance(simUnit.col, simUnit.row, bh.col, bh.row) ? h : bh,
+            node.obj.hexes[0])
+          : node.obj;
+        const jump = hexDistance(simUnit.col, simUnit.row, jumpHex.col, jumpHex.row);
+        let center = null;
+        if (jump >= 3 && jump <= TELEPORT_RANGE &&
+            getTeleportClump(sim, simUnit, jumpHex.col, jumpHex.row).length > 0) {
+          center = jumpHex; // lands on (or beside) the node itself
+        } else if (jump > TELEPORT_RANGE) {
+          center = _bestApproachCenter(sim, board, simUnit, jumpHex);
+        }
+        if (center) {
+          actions.push({
+            type: PlanActionType.TELEPORT, entityId: simUnit.id,
+            targetCol: center.col, targetRow: center.row,
+            _priority: 3, _goal: Goal.CONTROL_NODES,
+          });
+          sim.applyTeleport(simUnit.id, center.col, center.row);
+          remaining--;
+          continue; // committed — next unit takes the walking route
+        }
+      }
+
       let stepsForUnit = Math.min(remaining, maxStepsPerUnit);
       const enRouteUnitRange = rangeOf(simUnit);
       while (stepsForUnit > 0) {
@@ -1470,6 +1667,9 @@ export class WitchAIEngine extends BaseAIEngine {
 
   getGenerators(sim, board, budget, cfg) {
     return [
+      // POSSESS first: cast from the leader's pre-move position (one plan
+      // slot max). Ability-gated inside — a guaranteed no-op for the witch.
+      { goal: Goal.HUNT_HEROES,   fn: () => genPossess(sim, board) },
       { goal: Goal.DEFEND_WITCH,  fn: () => genDefendWitch(sim, board, budget[Goal.DEFEND_WITCH], cfg) },
       { goal: Goal.BUILD_ARMY,    fn: () => genBuildArmy(sim, board, budget[Goal.BUILD_ARMY]) },
       { goal: Goal.CONTROL_NODES, fn: () => genControlNodes(sim, board, budget[Goal.CONTROL_NODES]) },
