@@ -290,14 +290,45 @@ describe('RAISE DEAD — necromancer summons', () => {
     assert.ok(z, 'zombie stands on the grave');
     assert.equal(z.owner, 'witch');
     assert.equal(state.deathLocations[0].consumed, true, 'corpse consumed');
-    // A second raise finds no corpse → falls back to a skeleton.
+    // A second raise finds no corpse — a FRESH zombie claws up nearby instead.
     assert.equal(hasRaisableCorpse(state, necro), false);
     const r2 = executeSummon(state, necro, EntityType.ZOMBIE);
     assert.equal(r2.success, true);
-    assert.equal(r2.summonedType, EntityType.SKELETON, 'consumed corpse cannot rise twice');
+    assert.equal(r2.summonedType, EntityType.ZOMBIE, 'a zombie summon no longer needs a corpse');
+    assert.ok(!r2.raisedFromCorpse, 'flagged as a fresh summon, not a corpse raise');
+    assert.ok(hexDistance(necro.col, necro.row, r2.spawnCol, r2.spawnRow) <= SKELETON_CONJURE_RANGE,
+      'fresh zombie rises within conjure range of the necromancer');
   });
 
-  test('corpses beyond RAISE_DEAD_RANGE and leader corpses are never raised', () => {
+  test('a corpse-less ZOMBIE summon conjures fresh on a seeded-random open hex within 2, at skeleton cost', () => {
+    const { state, necro } = necroState(6, 6);
+    isolateArena(state, [necro]);
+    assert.equal(state.deathLocations.length, 0, 'fixture: no graves anywhere');
+    // Recompute the executor's candidate list independently to pin the pick
+    // (same enumeration as the skeleton-conjure test above).
+    const candidates = hexRange(necro.col, necro.row, SKELETON_CONJURE_RANGE).filter(h => {
+      if (h.col === necro.col && h.row === necro.row) return false;
+      if (!isPlaceableTile(state, h.col, h.row, necro.owner)) return false;
+      return !state.entities.some(e => e.alive && e.col === h.col && e.row === h.row);
+    });
+    assert.ok(candidates.length >= 3, 'arena has open hexes');
+    state.setForcedDice(3); // nextDie(candidates.length) → 3 → candidates[2]
+    const r = executeSummon(state, necro, EntityType.ZOMBIE);
+    assert.equal(r.success, true);
+    assert.equal(r.summonedType, EntityType.ZOMBIE);
+    assert.ok(!r.raisedFromCorpse);
+    assert.deepEqual({ col: r.spawnCol, row: r.spawnRow },
+      { col: candidates[2].col, row: candidates[2].row },
+      'fresh zombie rides the same seeded spawn pick as the skeleton path (state.nextDie, never Math.random)');
+    const z = state.entities.find(e => e.type === EntityType.ZOMBIE);
+    assert.ok(z, 'zombie on the board');
+    assert.equal(z.ownerId, necro.ownerId);
+    assert.equal(r.spent.reduce((s, e) => s + e.amount, 0), 1,
+      'same 1-any-resource cost as a skeleton (getMinionCost)');
+    assert.equal(state.witchSummonCount, 1);
+  });
+
+  test('corpses beyond RAISE_DEAD_RANGE and leader corpses are never raised — the zombie rises fresh instead', () => {
     const { state, necro } = necroState(6, 6);
     isolateArena(state, [necro]);
     state.deathLocations.push(
@@ -307,8 +338,10 @@ describe('RAISE DEAD — necromancer summons', () => {
     assert.equal(hasRaisableCorpse(state, necro), false);
     const r = executeSummon(state, necro, EntityType.ZOMBIE);
     assert.equal(r.success, true);
-    assert.equal(r.summonedType, EntityType.SKELETON, 'fell back to skeleton');
+    assert.equal(r.summonedType, EntityType.ZOMBIE, 'fresh conjure — no grave in reach');
+    assert.ok(!r.raisedFromCorpse);
     assert.ok(!state.deathLocations.some(d => d.consumed), 'no grave consumed');
+    assert.ok(hexDistance(necro.col, necro.row, r.spawnCol, r.spawnRow) <= SKELETON_CONJURE_RANGE);
   });
 
   test('auto-pick (summonType null — the AI path) prefers a corpse raise, else skeleton', () => {

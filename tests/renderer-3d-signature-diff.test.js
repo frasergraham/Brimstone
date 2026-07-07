@@ -95,6 +95,22 @@ describe('planArrowsSignature — changes when any input changes', () => {
     ];
     assert.notEqual(planArrowsSignature(extended, entities), baseSig);
   });
+
+  test('MARCH passenger arrows (marchArrows) feed the signature too', () => {
+    const soldier = { id: 8, owner: 'hero', slot: 3 };
+    const marched = [{
+      arrow: { ...base[0].arrow },
+      marchArrows: [{ entityId: 8, fromCol: 1, fromRow: 1, toCol: 2, toRow: 1 }],
+      stepNumber: 1,
+    }];
+    const withSoldier = [...entities, soldier];
+    const sig = planArrowsSignature(marched, withSoldier);
+    assert.notEqual(sig, planArrowsSignature(base, withSoldier),
+      'adding a passenger arrow must trigger a rebuild');
+    // A passenger slot change moves its arrow lane → different signature.
+    const resloted = [...entities, { ...soldier, slot: 5 }];
+    assert.notEqual(planArrowsSignature(marched, resloted), sig);
+  });
 });
 
 // ── Pure helpers: planBattleOverlaySignature ─────────────────────────────────

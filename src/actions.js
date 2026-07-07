@@ -605,8 +605,10 @@ export function getValidActions(state, actor) {
   // consumed). Horn-trained leaders are issued one at creation; campaign
   // heroes find theirs at the Ch1 M4 church. The old 'sound_horn' ability
   // marks who's trained to wield a horn and so who gets issued one, but the
-  // action itself surfaces strictly on possession of the item.
-  if (actor.hasItem('horn')) {
+  // action itself surfaces strictly on possession of the item — minus the
+  // faction veto (canSoundHorn: the Captain carries his horn but never blows
+  // it; executeSoundHorn enforces the same gate authoritatively).
+  if (actor.hasItem('horn') && concreteFactionOf(actor).canSoundHorn()) {
     const food = getItemCountOf(faction.getInventory(state), 'food');
     actions.push({ type: ActionType.SOUND_HORN, affordable: food >= 1 });
   }
@@ -1862,25 +1864,27 @@ export function executeSummon(state, actor, requestedType = null) {
 
   // RAISE DEAD (necromancer): a ZOMBIE summon raises an unconsumed, non-leader
   // corpse within RAISE_DEAD_RANGE at its death hex. Resolve the corpse ONCE
-  // here so the request gate and the auto-pick agree.
+  // here so the raise branch and the auto-pick agree. A corpse is a
+  // positioning perk, not a prerequisite: with no grave in reach an explicit
+  // ZOMBIE request conjures a fresh zombie nearby (skeleton spawn rules).
   const corpse = allowedTypes.has(EntityType.ZOMBIE)
     ? _findRaisableCorpse(state, actor)
     : null;
   const food = getItemCountOf(inv, ResourceType.FOOD);
 
   // Resolve final type: honour request if affordable AND allowed, else
-  // fall back to auto-pick. A ZOMBIE request without a corpse in reach
-  // degrades to the auto-pick (which lands on SKELETON for the necromancer).
+  // fall back to auto-pick.
   let resolvedType = requestedType;
   if (resolvedType && !allowedTypes.has(resolvedType)) resolvedType = null;
   if (resolvedType === EntityType.IRON_GOLEM && metal < 2)          resolvedType = null;
   if (resolvedType === EntityType.WOOD_GOLEM && wood  < 2)          resolvedType = null;
   if (resolvedType === EntityType.MINION      && total < minionCost) resolvedType = null;
-  if (resolvedType === EntityType.ZOMBIE   && (total < minionCost || !corpse)) resolvedType = null;
+  if (resolvedType === EntityType.ZOMBIE   &&  total < minionCost)   resolvedType = null;
   if (resolvedType === EntityType.SKELETON &&  total < minionCost)   resolvedType = null;
   if (resolvedType === EntityType.SOLDIER  && food  < CAPTAIN_REINFORCEMENT_COST) resolvedType = null;
   if (!resolvedType) {
-    // Auto-pick priority: iron > wood > zombie (corpse) > skeleton > minion,
+    // Auto-pick priority: iron > wood > zombie (only when a corpse is in
+    // reach — the raise is the perk worth auto-picking) > skeleton > minion,
     // restricted to allowed types. Day-side (captain) summoners only ever
     // have SOLDIER in their allowed set, so the auto-pick is unambiguous there.
     if      (allowedTypes.has(EntityType.IRON_GOLEM) && metal >= 2)          resolvedType = EntityType.IRON_GOLEM;
@@ -1952,21 +1956,40 @@ export function executeSummon(state, actor, requestedType = null) {
     summonedUnit = createWoodGolem(actor.col, actor.row, ownerId, state);
     unitName = 'Wood Golem';
   } else if (resolvedType === EntityType.ZOMBIE) {
-    // RAISE DEAD — the corpse rises where it fell; the grave is spent.
     const spent = _spendAnyResources(inv, minionCost);
-    corpse.consumed = true;
-    summonedUnit = createZombie(corpse.col, corpse.row, ownerId, state);
+    if (corpse) {
+      // RAISE DEAD — the corpse rises where it fell; the grave is spent.
+      corpse.consumed = true;
+      summonedUnit = createZombie(corpse.col, corpse.row, ownerId, state);
+      state.entities.push(summonedUnit);
+      assignSlotOnTile(state, summonedUnit);
+      faction.trackSummon(state);
+      return {
+        success: true,
+        log: [`${actor.displayName} calls a corpse back from death — a Zombie claws upright where it fell!`],
+        cost: 1,
+        spent,
+        summonedType: EntityType.ZOMBIE,
+        spawnCol: corpse.col, spawnRow: corpse.row,
+        raisedFromCorpse: true,
+      };
+    }
+    // No grave in reach — a fresh zombie claws up from bare sod on a
+    // seeded-random open hex, sharing the skeleton's spawn helper and die
+    // stream (state.nextDie keeps resolution sealed). Same cost either way.
+    const spawn = _pickSkeletonSpawnHex(state, actor);
+    summonedUnit = createZombie(spawn.col, spawn.row, ownerId, state);
     state.entities.push(summonedUnit);
     assignSlotOnTile(state, summonedUnit);
     faction.trackSummon(state);
     return {
       success: true,
-      log: [`${actor.displayName} calls a corpse back from death — a Zombie claws upright where it fell!`],
+      log: [`${actor.displayName} drags a Zombie up from the cold earth!`],
       cost: 1,
       spent,
       summonedType: EntityType.ZOMBIE,
-      spawnCol: corpse.col, spawnRow: corpse.row,
-      raisedFromCorpse: true,
+      spawnCol: spawn.col, spawnRow: spawn.row,
+      raisedFromCorpse: false,
     };
   } else if (resolvedType === EntityType.SKELETON) {
     // Fresh conjuration — bones knit together on a seeded-random open hex
@@ -2045,8 +2068,9 @@ function _findRaisableCorpse(state, actor) {
   return best;
 }
 
-/** True iff RAISE DEAD currently has a raisable corpse in reach of `actor` —
- *  drives the UI's "Raise Dead (Zombie)" affordability grey-out. */
+/** True iff RAISE DEAD currently has a raisable corpse in reach of `actor`.
+ *  No longer a UI grey-out (a corpse-less zombie summon conjures fresh
+ *  instead) — kept for tooling/tests that probe corpse availability. */
 export function hasRaisableCorpse(state, actor) {
   return !!_findRaisableCorpse(state, actor);
 }
@@ -2056,7 +2080,8 @@ export function hasRaisableCorpse(state, actor) {
 // hexRange enumerates candidates in a fixed order and the pick routes through
 // state.nextDie, so forced dice / replay / online resolution all agree. Falls
 // back to the necromancer's own hex when no open hex exists (mirrors the
-// witch's own-tile summon and consumes no die).
+// witch's own-tile summon and consumes no die). Shared by the skeleton
+// conjure AND the corpse-less fresh-zombie summon.
 function _pickSkeletonSpawnHex(state, actor) {
   const candidates = hexRange(actor.col, actor.row, SKELETON_CONJURE_RANGE).filter(h => {
     if (h.col === actor.col && h.row === actor.row) return false;
@@ -2494,6 +2519,11 @@ export function executeSoundHorn(state, actor) {
   // Gated on the Horn key item (reusable — never consumed below).
   if (!actor.hasItem('horn')) {
     return { success: false, log: ['You need a horn to sound the call.'] };
+  }
+  // Faction veto (canSoundHorn) — authoritative twin of the getValidActions
+  // gate, so a hand-crafted online plan can't sound a vetoed horn (Captain).
+  if (!concreteFactionOf(actor).canSoundHorn()) {
+    return { success: false, log: [`${actor.displayName} does not sound horn calls.`] };
   }
 
   const inv = getFaction('hero').getInventory(state);

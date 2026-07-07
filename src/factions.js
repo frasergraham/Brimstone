@@ -113,6 +113,14 @@ export class Faction {
   canBuildSiege() { return false; }
   /** Can this faction use hero-side shared items (food, silver, scripture)? */
   canUseItems() { return false; }
+  /**
+   * May this faction's units SOUND THE HORN? The action itself still gates on
+   * holding the Horn key item (see getValidActions / executeSoundHorn); this
+   * predicate is a faction-level veto layered on top — default true so any
+   * horn-holder may blow it, overridden false where the faction's economy
+   * routes that food elsewhere (Captain → CALL REINFORCEMENTS).
+   */
+  canSoundHorn() { return true; }
   /** Can this faction batter down enemy fortifications (BATTLE_HEX on an empty wall)? */
   canAssaultFortifications() { return false; }
   /** Is this faction blocked from moving onto impassable fortification walls? */
@@ -960,6 +968,15 @@ export class CaptainFaction extends HeroFaction {
   canMarch()      { return true; }
   canBuildSiege() { return true; }
 
+  // Operator veto: the captain never SOUNDS THE HORN — his food is a troop
+  // budget (CALL REINFORCEMENTS, rations), not a survivor-calling fund. He
+  // stays horn-TRAINED (keeps `sound_horn` + the issued Horn item so leader
+  // creation and campaign loadouts are untouched); this predicate strips the
+  // action from his arc and from the resolver (getValidActions +
+  // executeSoundHorn), and the hero AI reads it to skip horn goals and the
+  // 1-food horn reserve in _tryReinforcements.
+  canSoundHorn()  { return false; }
+
   // Civilians don't rally to a military requisition officer the way they
   // do to a paladin — hidden survivors are much harder for him to find.
   survivorFindMultiplier() { return 0.4; }
@@ -1006,14 +1023,16 @@ export class NecromancerFaction extends WitchFaction {
 
   /**
    * RAISE DEAD — replaces the witch's summon list wholesale:
-   *   • ZOMBIE   — raise an unconsumed corpse (recorded in state.deathLocations)
-   *                within RAISE_DEAD_RANGE, at its death hex. Falls back to a
-   *                skeleton at resolution when no corpse is in reach.
+   *   • ZOMBIE   — always available. When an unconsumed corpse (recorded in
+   *                state.deathLocations) lies within RAISE_DEAD_RANGE it rises
+   *                at its death hex (consuming the grave); with no corpse in
+   *                reach a fresh zombie claws up on a seeded-random open hex
+   *                within SKELETON_CONJURE_RANGE, exactly like the skeleton.
    *   • SKELETON — conjure fresh bones on a seeded-random open hex within
    *                SKELETON_CONJURE_RANGE of the necromancer.
    * Both cost the witch's minion economics (getMinionCost() of any resource,
-   * largest stacks first). Corpse availability is state-dependent, so it is
-   * checked in executeSummon — this options list only gates on affordability.
+   * largest stacks first) — a corpse is a positioning perk, never a
+   * prerequisite, so this options list only gates on affordability.
    */
   getSummonOptions(inventory) {
     const total = totalItemCount(inventory);

@@ -9,9 +9,13 @@ import assert from 'node:assert/strict';
 import { GameState, Phase, computeActions, computeActionsForPlayer } from '../src/game.js';
 import {
   executeMove, executeMarch, executeSummon, executeBuildSiege, executeBattle,
+  executeSoundHorn,
   findSiegeSpawnHex, survivorFindMultiplier, getValidActions, getReachableHexes,
   ActionType,
 } from '../src/actions.js';
+import {
+  HeroEnginePlanSimState, assessHeroBoard, genExplore, fillGapsHero,
+} from '../src/hero-ai-engine.js';
 import {
   Entity, EntityType, createSoldier, createCatapult, createZombie,
 } from '../src/entities.js';
@@ -103,6 +107,69 @@ describe('CaptainFaction — shape', () => {
     assert.equal(captain.survivorFindMultiplier(), 0.4);
     assert.equal(getFaction('hero').survivorFindMultiplier(), 1.0);
     assert.equal(getFaction('witch').survivorFindMultiplier(), 1.0);
+  });
+
+  test('canSoundHorn(): captain vetoed, every other faction keeps the default', () => {
+    assert.equal(captain.canSoundHorn(), false);
+    assert.equal(getFaction('hero').canSoundHorn(), true);
+    assert.equal(getFaction('witch').canSoundHorn(), true);
+    assert.equal(getFaction('rogue').canSoundHorn(), true);
+  });
+});
+
+// ── Sound Horn veto ──────────────────────────────────────────────────────────
+// The captain stays horn-TRAINED (keeps the day-side `sound_horn` ability and
+// the issued Horn item, so leader creation and campaign loadouts are stable)
+// but the ACTION is faction-vetoed via `canSoundHorn()`: his food funds
+// troops, not horn calls.
+
+describe('Sound Horn — captain veto (canSoundHorn predicate)', () => {
+  test('getValidActions never offers SOUND_HORN to the captain, even with horn + food', () => {
+    const state = captainState();
+    giveFood(state, 5);
+    assert.ok(state.hero.hasItem('horn'), 'fixture: the captain still carries the Horn item');
+    const acts = getValidActions(state, state.hero);
+    assert.equal(acts.find(a => a.type === ActionType.SOUND_HORN), undefined,
+      'no Sound Horn on the captain\'s action arc');
+
+    // Control: the paladin (default day faction) keeps the action.
+    const palState = new GameState(true, true);
+    giveFood(palState, 5);
+    assert.ok(getValidActions(palState, palState.hero).find(a => a.type === ActionType.SOUND_HORN),
+      'the paladin\'s Sound Horn is untouched');
+  });
+
+  test('executeSoundHorn rejects the captain server-side without spending food', () => {
+    const state = captainState();
+    giveFood(state, 5);
+    const r = executeSoundHorn(state, state.hero);
+    assert.equal(r.success, false, 'a hand-crafted online SOUND_HORN plan cannot slip through');
+    assert.equal(state.inventory.hero[ResourceType.FOOD].count, 5, 'no food spent');
+    assert.ok(!state.heroRevealedByHorn, 'a vetoed horn never reveals the hero');
+  });
+
+  test('hero AI: captain plans call reinforcements at 2 food (horn reserve dropped), never a horn', () => {
+    const state = captainState();
+    giveFood(state, CAPTAIN_REINFORCEMENT_COST);   // exactly the summon cost — no horn reserve needed
+    const sim = new HeroEnginePlanSimState(state);
+    const board = assessHeroBoard(sim);
+    const actions = genExplore(sim, board, 4);
+    assert.equal(actions.find(a => a.type === PlanActionType.SOUND_HORN), undefined,
+      'the AI never queues a doomed horn action as captain');
+    const summon = actions.find(a => a.type === PlanActionType.SUMMON);
+    assert.ok(summon, '2 food suffices for CALL REINFORCEMENTS once the 1-horn food reserve is dropped');
+    assert.equal(summon.summonType, EntityType.SOLDIER);
+  });
+
+  test('hero AI gap-fill never queues a horn for the captain', () => {
+    const state = captainState();
+    giveFood(state, 5);
+    const sim = new HeroEnginePlanSimState(state);
+    const board = assessHeroBoard(sim);
+    const heroEntity = sim.entities.find(e => e.id === board.hero.id);
+    const plan = [];
+    fillGapsHero(plan, sim, board, heroEntity, 3, new Map());
+    assert.equal(plan.find(a => a.type === PlanActionType.SOUND_HORN), undefined);
   });
 });
 
@@ -283,6 +350,51 @@ describe('MARCH (executeMarch)', () => {
       assert.deepEqual(steps[0].positions.get(id), { col: dest.col, row: dest.row },
         `ghost position of ${id} advanced to the march destination`);
     }
+  });
+
+  test('computeGhostState emits a plan arrow for the captain AND every marching passenger', () => {
+    const { state, cap, s1, s2 } = marchFixture();
+    const dest = clearNeighbor(state, cap);
+    assert.ok(dest);
+    const steps = computeGhostState(state,
+      [{ type: PlanActionType.MARCH, entityId: cap.id, toCol: dest.col, toRow: dest.row }]);
+    const step = steps[0];
+    assert.equal(step.arrow.entityId, cap.id, 'the captain keeps the classic move arrow');
+    const ids = (step.marchArrows ?? []).map(a => a.entityId).sort();
+    assert.deepEqual(ids, [s1.id, s2.id].sort(), 'one passenger arrow per marching soldier');
+    for (const a of step.marchArrows) {
+      assert.deepEqual(
+        { fromCol: a.fromCol, fromRow: a.fromRow, toCol: a.toCol, toRow: a.toRow },
+        { fromCol: cap.col, fromRow: cap.row, toCol: dest.col, toRow: dest.row },
+        'passenger arrows share the captain\'s from → to');
+    }
+    // A plain MOVE never carries passenger arrows.
+    const moveSteps = computeGhostState(state,
+      [{ type: PlanActionType.MOVE, entityId: cap.id, toCol: dest.col, toRow: dest.row }]);
+    assert.equal(moveSteps[0].marchArrows, null);
+  });
+
+  test('overflow-stayers get no ghost arrow and their projected position holds the start hex', () => {
+    const { state, cap, s1, s2 } = marchFixture();
+    const dest = clearNeighbor(state, cap);
+    assert.ok(dest);
+    // Leave exactly TWO free slots at the destination (captain + one
+    // passenger), mirroring the executeMarch overflow test above.
+    const destTile = state.tiles.get(hexKey(dest.col, dest.row));
+    const free = tileCapacityRemaining(destTile, 0);
+    assert.ok(free >= 3, `fixture: destination needs >=3 free slots (has ${free})`);
+    for (let i = 0; i < free - 2; i++) {
+      state.entities.push(new Entity(EntityType.SURVIVOR, 'hero', dest.col, dest.row, null, state));
+    }
+    const steps = computeGhostState(state,
+      [{ type: PlanActionType.MARCH, entityId: cap.id, toCol: dest.col, toRow: dest.row }]);
+    const step = steps[0];
+    assert.equal(step.marchArrows.length, 1, 'only the passenger that fits gets an arrow');
+    // Passengers relocate in entity order (same rule as executeMarch): s1 fits.
+    assert.equal(step.marchArrows[0].entityId, s1.id);
+    assert.deepEqual(step.positions.get(s1.id), { col: dest.col, row: dest.row });
+    assert.deepEqual(step.positions.get(s2.id), { col: cap.col, row: cap.row },
+      'overflow soldier projected to hold the start hex');
   });
 
   test('validatePlanAction accepts a reachable MARCH and range-checks it like MOVE', () => {
