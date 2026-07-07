@@ -205,6 +205,53 @@ describe('Captain AI — catapults fire', () => {
   });
 });
 
+// ── NvN seat scoping ─────────────────────────────────────────────────────────
+// Online NvN validates every order by ownerId (canCommandEntity): an AI hero
+// teammate must not enumerate a HUMAN captain's catapults — the resolver
+// rejects those orders and each one wastes a plan slot every round.
+
+describe('Captain AI — NvN seat scoping (catapults)', () => {
+  // This seat ('p1') owns the captain and one catapult; a teammate ('p2')
+  // owns the other. The witch is within range 4 of both engines.
+  const seatEntities = () => [
+    makeCaptain({ ownerId: 'p1' }),                                    // (3,3)
+    makeCatapult('cat-own', 2, 3),
+    makeCatapult('cat-foreign', 3, 4),
+    makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch',
+      ownerId: 'w1', col: 5, row: 3, hp: 8, maxHp: 8 }),
+  ].map(e => {
+    if (e.id === 'cat-own') e.ownerId = 'p1';
+    if (e.id === 'cat-foreign') e.ownerId = 'p2';
+    return e;
+  });
+
+  test('MP sim (playerId set): a teammate-owned catapult is not enumerated', () => {
+    const sim = new HeroEnginePlanSimState(
+      makeFakeState({ entities: seatEntities() }), 'p1');
+    const board = assessHeroBoard(sim);
+    assert.deepEqual(board.catapults.map(c => c.id), ['cat-own'],
+      'board.catapults must only list engines this seat can command');
+  });
+
+  test('MP full engine plan: no orders for the foreign catapult, own one still fires', () => {
+    const engine = new HeroAIEngine(
+      makeFakeState({ entities: seatEntities() }), () => {}, 0, 'p1');
+    const plan = engine.generatePlan();
+    assert.deepEqual(plan.filter(a => a.entityId === 'cat-foreign'), [],
+      'no plan slot burned on a catapult this player cannot command');
+    assert.ok(plan.some(a => a.entityId === 'cat-own' &&
+        a.type === PlanActionType.BATTLE_UNIT),
+      'own catapult still fires');
+  });
+
+  test('offline sim (no playerId): all friendly catapults enumerated — unchanged', () => {
+    const sim = new HeroEnginePlanSimState(makeFakeState({ entities: seatEntities() }));
+    const board = assessHeroBoard(sim);
+    assert.deepEqual(board.catapults.map(c => c.id).sort(),
+      ['cat-foreign', 'cat-own']);
+  });
+});
+
 // ── MARCH ────────────────────────────────────────────────────────────────────
 
 describe('Captain AI — MARCH', () => {

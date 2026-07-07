@@ -100,7 +100,7 @@ function _emitXpEvents(result, faction, subEvents) {
 // them directly (avoiding circular dependencies).
 
 /** Resolve the CONCRETE faction for a budget: stub-faction budget overrides
- *  (captain baseBudget 4 / cap 9) live on the concrete class, but callers
+ *  (captain baseBudget 4 / cap 8) live on the concrete class, but callers
  *  key budgets by the side owner string ('hero'/'witch'). Find the live
  *  leader (optionally the one owned by `playerId`) and use its factionId;
  *  fall back to the side faction when no leader is found. */

@@ -161,13 +161,19 @@ export function assessHeroBoard(sim) {
   // Immobile siege engines (catapults) are enumerated SEPARATELY: they get
   // fire orders (_tryCatapultFire) but must never receive MOVE / EXPLORE /
   // node-duty orders, so they stay out of `survivors` and out of every
-  // mobile-unit loop.
+  // mobile-unit loop. Seat scoping (online NvN): when the sim plans for a
+  // specific player, only THAT seat's engines are commandable — the resolver
+  // validates every order by ownerId (canCommandEntity), so an order queued
+  // for a human teammate's catapult is rejected and wastes the plan slot.
+  // Same "playerId set → ownerId match, else faction-wide" pattern as
+  // budgetFactionFor / computeActionsForPlayer (src/game.js).
   const survivors = [];
   const catapults = [];
   for (const e of sim.entities) {
     if (!e.alive || e.owner !== 'hero') continue;
     if (e.type === EntityType.SURVIVOR || e.type === EntityType.SOLDIER) survivors.push(e);
-    else if (isImmobileType(e.type)) catapults.push(e);
+    else if (isImmobileType(e.type) &&
+             (sim._playerId == null || e.ownerId === sim._playerId)) catapults.push(e);
   }
   const survivorCount = survivors.filter(e => e.type === EntityType.SURVIVOR).length;
 

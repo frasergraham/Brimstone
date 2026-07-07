@@ -4091,13 +4091,13 @@ export class UIController {
    * capped `total`, and the spare-`food` count. Resolves the faction through the
    * live leader (budgetFactionFor) and uses the SAME faction math the game uses
    * for the budget (Faction.computeBudgetBreakdown), so stub-faction overrides
-   * (captain: base 4 / cap 9) apply and the pips/total always match `_planBudget`.
+   * (captain: base 4 / cap 8) apply and the pips/total always match `_planBudget`.
    */
   _computeActionBudget() {
     const faction    = this._planFaction;
     const entities   = this.state.entities;
     // Concrete faction via the live leader — a captain game must show base 4 /
-    // cap 9 and count extras against CAPTAIN, exactly like computeActions().
+    // cap 8 and count extras against CAPTAIN, exactly like computeActions().
     const factionObj = budgetFactionFor(entities, faction);
     const phase      = this.state.phase;
     const phaseIcon  = PHASE_ICON[phase] ?? '';

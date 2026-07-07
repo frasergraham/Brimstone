@@ -54,6 +54,18 @@ function makeWitch(overrides = {}) {
   });
 }
 
+// Brute leader fixture — inherits the witch's golem-bearing getUnitTypes()
+// roster but its getSummonOptions() is minion-only at cost 1, which is
+// exactly the trap the summon ledger must not fall into.
+function makeBrute(overrides = {}) {
+  return makeEntity({
+    id: 'brute1', type: EntityType.BRUTE, factionId: 'brute',
+    abilities: ['summon'],
+    displayName: 'The Brute', hp: 20, maxHp: 20, ownerId: 'witch',
+    ...overrides,
+  });
+}
+
 function makeFakeState(overrides = {}) {
   const tiles = new Map();
   const size = overrides.mapSize ?? 9;
@@ -160,6 +172,27 @@ describe('faction-aware summon economics', () => {
     assert.ok(board.bestSummonType, 'necromancer with resources has a summon type');
   });
 
+  test('brute converts 2 metal into 2 cost-1 minions — never a golem', () => {
+    const sim = makeSim({
+      entities: [makeBrute({ col: 4, row: 4 })],
+      inventory: { witch: { [ResourceType.METAL]: 2 }, hero: {} },
+    });
+    const board = assessBoard(sim);
+    const actions = genBuildArmy(sim, board, 3);
+    assert.equal(summonsIn(actions).length, 2,
+      'brute must book getSummonOptions economics (2 × 1-cost minion), ' +
+      'not the inherited golem roster (1 × 2-metal iron golem)');
+  });
+
+  test('assessBoard.bestSummonType for the brute is MINION even with golem resources', () => {
+    const sim = makeSim({
+      entities: [makeBrute({ col: 4, row: 4 })],
+      inventory: { witch: { [ResourceType.METAL]: 2, [ResourceType.WOOD]: 2 }, hero: {} },
+    });
+    assert.equal(assessBoard(sim).bestSummonType, EntityType.MINION,
+      'the brute auto-pick is always the 1-cost minion — golems are unreachable');
+  });
+
   test('assessBoard.bestSummonType golem preference unchanged for the witch', () => {
     const sim = makeSim({
       entities: [makeWitch({ col: 4, row: 4 })],
@@ -237,6 +270,37 @@ describe('genPossess', () => {
     const sim = makeSim({ entities: [necro, heroLeader, farArmed] });
     const board = assessBoard(sim);
     assert.equal(possessesIn(genPossess(sim, board)).length, 0);
+  });
+
+  test('pending possess target leaves board.visibleHeroes — no same-round BATTLE on the fresh thrall', () => {
+    const necro = makeNecromancer({ col: 4, row: 4 });
+    const armed = makeEntity({
+      id: 'surv1', type: EntityType.SURVIVOR, owner: 'hero', ownerId: 'hero',
+      col: 5, row: 4, hp: 3, maxHp: 3, attack: 1, defense: 1,
+      displayName: 'Armed Survivor',
+      items: { musket: { count: 1, equipped: true } },
+    });
+    // Zombie adjacent to the survivor: without the fix, genHuntHeroes (and
+    // gap-fill) happily queue a BATTLE on the very unit being possessed,
+    // killing the thrall the same round it is seized.
+    const zombie = makeEntity({
+      id: 'zom1', type: EntityType.ZOMBIE, owner: 'witch', ownerId: 'witch',
+      col: 5, row: 5, hp: 7, maxHp: 7, attack: 2, defense: 1,
+      displayName: 'Zombie',
+    });
+    const sim = makeSim({ entities: [necro, armed, zombie] });
+    const board = assessBoard(sim);
+
+    const poss = possessesIn(genPossess(sim, board));
+    assert.equal(poss.length, 1, 'fixture: POSSESS queued on the survivor');
+    assert.equal(poss[0].targetId, 'surv1');
+    assert.ok(!board.visibleHeroes.some(h => h.id === 'surv1'),
+      'pending possess target must be removed from board.visibleHeroes');
+
+    const battles = genHuntHeroes(sim, board, 4).filter(a =>
+      a.type === PlanActionType.BATTLE_UNIT && a.targetId === 'surv1');
+    assert.equal(battles.length, 0,
+      'no witch unit may battle the unit being possessed this round');
   });
 
   test('plain witch never emits POSSESS', () => {
