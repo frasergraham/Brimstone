@@ -409,6 +409,21 @@ When scoring is ≤2 rounds away and a node has feasibility ≥0.6, the hero AI 
 
 > Weapons-overhaul note: ranged weapons only benefit the hero's roster (summons/zombies/golems can't equip), which skewed NvN toward the hero. The witch's `unitBonusCap` was raised 3→4 so its swarm converts to actions and keeps contesting nodes; Magic Bolt carries +1 ATK so the witch leader keeps the same ~1-ATK duel gap vs the now-sword-armed Paladin.
 
+> Stub-faction budget-semantics note (2026-07-06, captain-faction branch): the
+> action budget now resolves the **concrete** faction through the live leader
+> (`budgetFactionFor` in `game.js` / `budgetFaction` in `server/resolver.js`).
+> Two deliberate consequences, kept as-is: (1) faction budget overrides now
+> actually apply — the captain's base 4 / cap 9 relies on this; (2) a concrete
+> leader whose type differs from the side default (rogue, brute, and the
+> in-flight necromancer) **no longer counts itself toward the unit bonus** —
+> it is excluded via the concrete `leaderType`, so those factions effectively
+> lose one action vs the old math. Default paladin/witch budgets are verified
+> byte-identical. Measured impact (150 games each, Standard, this branch vs
+> dev): rogue-vs-witch 26.0% rogue (dev 27.3%, −1.3pp — noise); hero-vs-brute
+> 58.0% brute (dev 64.7%, −6.7pp — direction consistent with the lost action,
+> still inside the 38–62% band). No retuning performed or planned with this
+> change; treat these as the stub factions' current baselines.
+
 ### Combat & Economy Baseline
 
 | Metric | Value |

@@ -666,7 +666,8 @@ export class GameState {
   /** Increment the summon counter for the given side by `n` (default 1). */
   recordSummonForSide(sideId, n = 1) {
     if (sideId === 'night') this.witchSummonCount += n;
-    // Day side has no summon mechanic today — counter is not tracked.
+    // Day-side summons (captain CALL REINFORCEMENTS) route through here as a
+    // deliberate no-op — only night-side summons feed witchSummonCount.
   }
 
   /** Cumulative node-scoring points held by the given side. */

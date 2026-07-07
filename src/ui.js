@@ -5,7 +5,7 @@ import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, 
 import { ITEMS, lootDisplayLabel } from './items.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf, rangeOf, getEquippedWeaponIdOf, getItemCountOf, totalItemCount, applyProjectedEquip } from './entities.js';
 import { DAMAGE_SCALE } from './balance.js';
-import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
+import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes, budgetFactionFor } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
 import { makeOverlay } from './overlays.js';
 import {
@@ -3978,17 +3978,20 @@ export class UIController {
   /**
    * Itemised action budget for the current planning faction: the source `parts`
    * (for the colour-coded pips), human-readable `rows` (for the tooltip), the
-   * capped `total`, and the spare-`food` count. Uses the SAME faction math the
-   * game uses for the budget (Faction.computeBudgetBreakdown), so the pips/total
-   * always match `_planBudget`.
+   * capped `total`, and the spare-`food` count. Resolves the faction through the
+   * live leader (budgetFactionFor) and uses the SAME faction math the game uses
+   * for the budget (Faction.computeBudgetBreakdown), so stub-faction overrides
+   * (captain: base 4 / cap 9) apply and the pips/total always match `_planBudget`.
    */
   _computeActionBudget() {
     const faction    = this._planFaction;
-    const factionObj = getFaction(faction);
+    const entities   = this.state.entities;
+    // Concrete faction via the live leader — a captain game must show base 4 /
+    // cap 9 and count extras against CAPTAIN, exactly like computeActions().
+    const factionObj = budgetFactionFor(entities, faction);
     const phase      = this.state.phase;
     const phaseIcon  = PHASE_ICON[phase] ?? '';
     const phaseLabel = phase ? phase.charAt(0).toUpperCase() + phase.slice(1) : '';
-    const entities   = this.state.entities;
     const stash      = faction === 'hero' ? this.state.inventory?.hero : this.state.inventory?.witch;
     const food       = getItemCountOf(stash, 'food');
 

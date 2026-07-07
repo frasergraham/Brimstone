@@ -139,6 +139,10 @@ export function assessHeroBoard(sim) {
   // opportunistic fights) give them orders. survivorCount stays SURVIVOR-only
   // — it feeds the Sound Horn ceiling and recruit-goal scoring, which are
   // about civilians, not mustered troops.
+  // TODO: AI-controlled catapults never fire — CATAPULT is excluded from this
+  // list (and every other unit loop), so an AI captain's siege engines sit
+  // idle after being built. Add a fire-at-target goal for immobile ranged
+  // units before letting the AI build them.
   const survivors = sim.entities.filter(e =>
     e.alive && e.owner === 'hero' &&
     (e.type === EntityType.SURVIVOR || e.type === EntityType.SOLDIER)

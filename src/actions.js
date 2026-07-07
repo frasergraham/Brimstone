@@ -460,7 +460,9 @@ export function getValidActions(state, actor) {
   // Explore — available on any unexplored tile; faction determines eligibility.
   // Building-footprint hexes are impassable (no entity can stand on one) and
   // hold no building of their own — exploration belongs to the entrance.
-  if (t && !t.explored && !isBuildingFootprint(t) && faction.canExplore(actor)) {
+  // Immobile units (catapults) never explore — a stationary siege engine
+  // doesn't scout the ground it's bolted to.
+  if (t && !t.explored && !isBuildingFootprint(t) && !immobile && faction.canExplore(actor)) {
     actions.push({ type: ActionType.EXPLORE, targets: [{ col: actor.col, row: actor.row }] });
   }
 
@@ -1079,9 +1081,12 @@ function _applySplashDamage(state, col, row, excludeIds, log, opts = {}) {
 
 // Compute the hex one step outward from `centerCol/centerRow` in the
 // direction of `entity`, in axial space (handles odd-r stagger). Returns
-// null if the destination is off-map, a river, a fortified wall the
-// entity can't enter, or already occupied by another live unit.
+// null if the entity is immobile (immobile means immobile — a catapult
+// cannot be shoved by a blast), or if the destination is off-map, a river,
+// a fortified wall the entity can't enter, or already occupied by another
+// live unit.
 function _knockbackDestination(state, entity, centerCol, centerRow) {
+  if (isImmobileType(entity.type)) return null;
   const center = offsetToAxial(centerCol, centerRow);
   const here   = offsetToAxial(entity.col, entity.row);
   const dq = here.q - center.q;

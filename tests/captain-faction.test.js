@@ -466,6 +466,25 @@ describe('Immobile units (catapult)', () => {
     assert.equal(r.ranged, true, 'catapult attack resolves as ranged');
   });
 
+  test('a catapult is never offered EXPLORE, even on an unexplored tile', () => {
+    const state = captainState();
+    const cat = createCatapult(state.hero.col, state.hero.row, null, state);
+    state.entities.push(cat);
+    const t = clearFootprint(state.tiles.get(hexKey(cat.col, cat.row)));
+    t.explored = false;
+
+    const catActions = getValidActions(state, cat);
+    assert.equal(catActions.find(a => a.type === ActionType.EXPLORE), undefined,
+      'a stationary siege engine does not scout the ground it is bolted to');
+
+    // Control: a mobile soldier on the SAME unexplored tile is offered
+    // EXPLORE — the gate is the immobile tag, not the tile or the faction.
+    const s = createSoldier(cat.col, cat.row, null, state);
+    state.entities.push(s);
+    assert.ok(getValidActions(state, s).find(a => a.type === ActionType.EXPLORE),
+      'mobile units on the same tile still explore');
+  });
+
   test('an immobile soldier-type could never be marched (passenger gate)', () => {
     // The passenger filter excludes immobile types even if a future immobile
     // unit carried the soldier type tag — executeMarch only carries mobile
