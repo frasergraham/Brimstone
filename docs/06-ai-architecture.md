@@ -150,7 +150,15 @@ CONTROL_NODES score:
 **Trigger:** Few survivors, unexplored buildings, daylight
 **Actions:** Explore current hex, sound horn (recruit), move to buildings, fortify
 
-Captain leaders additionally run `_tryReinforcements` at the top of `genExplore` — the day-side mirror of the witch's `_trySummons`: when the leader's concrete faction `canSummon()` and the ledger holds ≥3 food (keeps 1 in horn reserve), queue `SUMMON summonType: SOLDIER` actions (2 food → 2 soldiers each) up to a 6-soldier standing cap. Soldiers join the hero board's commandable-unit list (`board.survivors`, SURVIVOR + SOLDIER types) so the generic node-duty/escort generators give them orders; `survivorCount` stays SURVIVOR-only for horn/recruit scoring. The AI does not use MARCH or BUILD_SIEGE (graceful no-op — human-only tools for now).
+Captain leaders additionally run `_tryReinforcements` at the top of `genExplore` — the day-side mirror of the witch's `_trySummons`: when the leader's concrete faction `canSummon()` and the ledger holds ≥3 food (keeps 1 in horn reserve), queue `SUMMON summonType: SOLDIER` actions (2 food → 2 soldiers each) up to a 6-soldier standing cap. Soldiers join the hero board's commandable-unit list (`board.survivors`, SURVIVOR + SOLDIER types) so the generic node-duty/escort generators give them orders; `survivorCount` stays SURVIVOR-only for horn/recruit scoring.
+
+The rest of the captain kit (all in `src/hero-ai-engine.js`, every entry keyed off faction predicates / unit-type presence so paladin & rogue plans are byte-identical):
+
+- **MARCH** — every leader move site routes through `queueLeaderStep()`: when the leader's faction `canMarch()` and ≥2 co-located soldiers would actually be carried (destination capacity is checked up front — `executeMarch` leaves overflow behind, so a nearly-full hex falls back to a plain MOVE), it emits ONE `MARCH` that moves the whole stack (node push, retreat, shelter, explore escort, hunt). `HeroEnginePlanSimState.applyMarch()` projects the passengers so later-generated actions see correct positions, and carried soldiers are committed for the round. `_promoteToMarchLeader()` upgrades a node-duty pick that landed on a stack soldier to the captain himself. `assemblePlan` treats `MARCH` like `MOVE` for anti-oscillation and dedups it by destination (a chained march is two distinct steps).
+- **Catapult fire** — `assessHeroBoard` enumerates friendly immobile units (`isImmobileType`) into `board.catapults`, *separate from* `board.survivors`, so no generator ever queues a MOVE/EXPLORE/node-duty order for them. `_tryCatapultFire` (top of `genControlNodes`, with a gap-fill fallback) queues one `BATTLE_UNIT` per catapult per round at the best visible enemy inside weapon range (leader first, then lowest HP); ranged shots carry no gang-up/counter risk so there is no engage-floor gate. With nothing in range the engine idles — zero plan slots burned.
+- **BUILD_SIEGE** — `_tryBuildSiege` (top of `genControlNodes`) queues at most one build per round when: ledger affords 4 wood + 1 metal, fewer than 2 live catapults (`AI_CATAPULT_CAP` — siege never strips the fortify wood), an open adjacent spawn hex exists, and the captain is near a node (≤2) or visibly threatened (enemy ≤3 — defensive battery). The queued engine is pushed into the sim as an occupancy ghost so same-plan capacity checks see it.
+
+Balance: teaching the AI the kit pushed captain-vs-witch from ~60% to ~63-69% hero (300-game runs, 2026-07-06), re-centered to **57.6% (500 games)** with two captain-only nerfs — captain action cap 9 → 8 (`CaptainFaction.actionCap`; March moves the stack on one action, so the raised cap over-fed his strongest rounds) and soldier DEF 1 → 0 (now an exact minion mirror — the tankier-than-minion grunt was the asymmetry funding the over-performance). Default paladin-vs-witch measured 50.0% (200 games) on the same build — untouched.
 
 ### CONTROL_NODES
 **Trigger:** Always active (0.5 base score), scoring proximity, contested nodes
@@ -424,7 +432,9 @@ When scoring is ≤2 rounds away and a node has feasibility ≥0.6, the hero AI 
 > action budget now resolves the **concrete** faction through the live leader
 > (`budgetFactionFor` in `game.js` / `budgetFaction` in `server/resolver.js`).
 > Two deliberate consequences, kept as-is: (1) faction budget overrides now
-> actually apply — the captain's base 4 / cap 9 relies on this; (2) a concrete
+> actually apply — the captain's base 4 / cap 8 relies on this (cap re-tuned
+> 9 → 8 on 2026-07-06 when the hero AI learned MARCH + catapult fire — see
+> the captain kit note in "Hero AI Goals"); (2) a concrete
 > leader whose type differs from the side default (rogue, brute, and the
 > in-flight necromancer) **no longer counts itself toward the unit bonus** —
 > it is excluded via the concrete `leaderType`, so those factions effectively

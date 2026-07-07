@@ -958,11 +958,15 @@ export class CaptainFaction extends HeroFaction {
   // getValidActions, exactly like the night-side leaders.
   get innateLeaderAbilities() { return [...super.innateLeaderAbilities, 'summon']; }
 
-  // Action economy: an officer directs more hands. +1 base action over the
-  // paladin (4 vs 3) and a higher hard cap (9 vs 8) so soldier unit
-  // bonuses aren't immediately clipped. Validated via headless runs.
+  // Action economy: an officer directs more hands — +1 base action over the
+  // paladin (4 vs 3). The hard cap sits at the day-side default 8: it was 9
+  // while soldiers had to be walked one at a time, but once the AI learned
+  // MARCH (whole stack moves on ONE action) and catapult fire, the raised cap
+  // over-fed the exact rounds the captain is strongest (2026-07-06 headless,
+  // 300 std games: 62.7% hero at cap 9 → re-centered inside the 38–62% band
+  // at cap 8). Validated via headless runs.
   get baseBudget() { return 4; }
-  get actionCap()  { return 9; }
+  get actionCap()  { return 8; }
 
   canSummon()     { return true; }
   canMarch()      { return true; }

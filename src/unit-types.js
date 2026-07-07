@@ -66,12 +66,15 @@ export const UNIT_TYPES = Object.freeze({
     color: '#4caf7d',
     tags: ['living'],
   },
-  // Soldier — day-side grunt, mirror of the witch's minion. Summoned by
-  // the Captain faction (bespoke ability lands in a follow-up PR); the
-  // unit type itself is registered here so combat, rendering, pathfinding
-  // and serialization work generically the moment a summoner exists.
+  // Soldier — day-side grunt, EXACT mirror of the witch's minion (14 HP /
+  // 1 ATK / 0 DEF / agility 5). Summoned by the Captain faction (CALL
+  // REINFORCEMENTS). Defense was 1 at introduction — a strict upgrade over
+  // the minion it mirrors — and was dropped to 0 when the hero AI learned
+  // MARCH + catapult fire: the efficiency gain pushed the captain past the
+  // 62% balance ceiling (2026-07-06 headless, 300 std games at 62-69%), and
+  // the tankier-than-minion grunt was the asymmetry funding it.
   soldier: {
-    baseStats: { maxHp: 14, attack: 1, defense: 1 },
+    baseStats: { maxHp: 14, attack: 1, defense: 0 },
     agility: 5,
     color: '#3f78c4',
     tags: ['living', 'soldier', 'summoned'],
