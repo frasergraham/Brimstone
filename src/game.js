@@ -112,7 +112,7 @@ export function computeActions(player, phase, entities, nodeBonus = 0) {
 
 /**
  * Budget-relevant faction: stub-faction leaders carry their own budget
- * overrides (captain: base 4 / cap 9) on the CONCRETE faction class, so
+ * overrides (captain: base 4 / cap 8) on the CONCRETE faction class, so
  * budgets must resolve through the live leader's factionId rather than the
  * side owner string. Falls back to the side faction when no live leader
  * matches (e.g. leader just died — game is ending anyway).

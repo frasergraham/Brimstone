@@ -40,7 +40,7 @@ The Captain is also no longer a stub — `CaptainFaction` overrides:
 - `canSummon` / `getSummonOptions` — **CALL REINFORCEMENTS**: one action + 2 food spawns **2 Soldiers** on/next to the captain (shares the SUMMON plumbing; `executeSummon` has a soldier branch)
 - `canMarch` — **MARCH** (`PlanActionType.MARCH`): the captain moves and every friendly soldier on his starting hex moves with him for one action; overflow passengers (destination at capacity) stay behind
 - `canBuildSiege` — **BUILD_SIEGE** (`PlanActionType.BUILD_SIEGE`): 4 wood + 1 metal places an immobile **Catapult** (innate `catapult_stone` weapon, range 4) on an adjacent hex
-- `baseBudget` 4 / `actionCap` 9 — bigger action economy (budgets resolve through the live leader's concrete faction, see `budgetFactionFor` in game.js)
+- `baseBudget` 4 / `actionCap` 8 — bigger action economy (budgets resolve through the live leader's concrete faction, see `budgetFactionFor` in game.js)
 - `survivorFindMultiplier` — 0.4; hidden survivors are much harder for the captain to stumble on (move/explore discovery only — Sound Horn remains a deliberate, full-strength recruit tool)
 - Personally weaker than the paladin (70 HP / base ATK 1 + sword) — he wins through troops.
 

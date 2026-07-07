@@ -205,13 +205,19 @@ export function assessBoard(sim) {
   const woodCount = getItemCountOf(inv, ResourceType.WOOD);
   const totalResources = totalItemCount(inv);
   // Faction-aware summon economics: the concrete night faction sets the
-  // chaff price (witch 2, necromancer/brute 1) and the roster (golems are
-  // witch-only). Leaderless boards keep the witch-side defaults.
+  // chaff price (witch 2, necromancer/brute 1) and what SUMMON can actually
+  // produce. Key golem access off getSummonOptions() — what executeSummon's
+  // auto-pick can really deliver — NOT getUnitTypes(): the brute inherits the
+  // witch's golem-bearing roster while its summon options are minion-only, so
+  // the roster would book a phantom 2-metal golem the real action never
+  // summons. Leaderless boards keep the witch-side defaults.
   const concreteLeaderFaction = witch ? concreteFactionOf(witch) : null;
   const minionCost = concreteLeaderFaction ? concreteLeaderFaction.getMinionCost() : 2;
-  const leaderRoster = concreteLeaderFaction ? concreteLeaderFaction.getUnitTypes() : null;
-  const summonsGolems = !leaderRoster ||
-    leaderRoster.includes(EntityType.IRON_GOLEM) || leaderRoster.includes(EntityType.WOOD_GOLEM);
+  const summonOptionTypes = concreteLeaderFaction
+    ? concreteLeaderFaction.getSummonOptions(inv).map(o => o.summonType)
+    : null;
+  const summonsGolems = !summonOptionTypes ||
+    summonOptionTypes.includes(EntityType.IRON_GOLEM) || summonOptionTypes.includes(EntityType.WOOD_GOLEM);
   const canAffordSummon = totalResources >= minionCost;
   let bestSummonType = null;
   if (canAffordSummon) {
@@ -993,12 +999,18 @@ function _trySummons(actions, sim, board, remaining) {
 
   // Faction-aware economics: the chaff price and golem access come from the
   // concrete night faction (witch: 2 + golems; necromancer/brute: 1, chaff
-  // only). The plain witch's numbers are unchanged by construction.
+  // only). Golem access keys off getSummonOptions() — what executeSummon's
+  // auto-pick can actually deliver — not the getUnitTypes() roster: the brute
+  // inherits the witch's golem-bearing roster but summons minions only, so
+  // the roster ledger would book 2 resources per summon against a real cost
+  // of 1. The plain witch's numbers are unchanged by construction (her
+  // options always include both golems whenever she can afford to summon).
   const summonerFaction = concreteFactionOf(board.witch);
   const minionCost = summonerFaction.getMinionCost();
-  const summonerRoster = summonerFaction.getUnitTypes();
-  const summonsGolems = summonerRoster.includes(EntityType.IRON_GOLEM) ||
-    summonerRoster.includes(EntityType.WOOD_GOLEM);
+  const summonOptionTypes = summonerFaction.getSummonOptions(sim.resourceLedger)
+    .map(o => o.summonType);
+  const summonsGolems = summonOptionTypes.includes(EntityType.IRON_GOLEM) ||
+    summonOptionTypes.includes(EntityType.WOOD_GOLEM);
 
   // Minion cap scales with witch team size so NvN witches aren't rationed to
   // a solo-witch ceiling. 1v1 baseline unchanged; each extra witch adds +4
@@ -1091,6 +1103,15 @@ export function genPossess(sim, board) {
     _priority: 1, _goal: Goal.HUNT_HEROES,
   });
   sim.applyPossess();
+
+  // The target is spoken for: remove it from the shared (plan-local) board so
+  // the later generators (genDefendWitch/genHuntHeroes) and gap-fill don't
+  // queue a BATTLE on the very unit being possessed — killing the fresh
+  // thrall in the same round it is seized. genPossess runs FIRST in the
+  // generator list, so every visibleHeroes consumer sees the pruned list.
+  const idx = board.visibleHeroes.indexOf(best);
+  if (idx !== -1) board.visibleHeroes.splice(idx, 1);
+
   return actions;
 }
 
