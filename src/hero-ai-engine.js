@@ -14,10 +14,11 @@ import { EnginePlanSimState, BaseAIEngine, allocateBudget, assemblePlan, clamp01
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
 import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf, rangeOf, getEquippedWeaponIdOf, SurvivorAbility, getItemCountOf, removeItemInItems } from './entities.js';
-import { ResourceType, hasBuilding, isRiver, isBuildingFootprint } from './tiles.js';
+import { ResourceType, hasBuilding, isRiver, isBuildingFootprint, tileCapacityRemaining } from './tiles.js';
 import { ITEMS } from './items.js';
-import { concreteFactionOf } from './factions.js';
-import { computeLineOfSight } from './actions.js';
+import { concreteFactionOf, SIEGE_WOOD_COST, SIEGE_METAL_COST } from './factions.js';
+import { isImmobileType, UNIT_TYPES } from './unit-types.js';
+import { computeLineOfSight, findSiegeSpawnHex } from './actions.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
 import { DAMAGE_SCALE } from './balance.js';
 
@@ -118,6 +119,24 @@ export class HeroEnginePlanSimState extends EnginePlanSimState {
     super(realState, 'hero', playerId);
     this.resourceLedger = JSON.parse(JSON.stringify(this.inventory.hero || {}));
   }
+
+  // MARCH projection: the leader steps to (toCol,toRow) and up to `maxCarried`
+  // co-located soldiers ride along — ONE budget slot moves the whole stack.
+  // Mirrors executeMarch's passenger rule (soldiers standing on the leader's
+  // STARTING hex; overflow stays behind) so actions generated later in the
+  // same plan see the correct projected positions. Returns the carried ids.
+  applyMarch(leaderId, toCol, toRow, maxCarried = Infinity) {
+    const leader = this.entities.find(e => e.id === leaderId);
+    if (!leader) { this.actionsLeft--; return []; }
+    const passengers = this.entities.filter(e =>
+      e.alive && e.id !== leader.id && e.owner === leader.owner &&
+      e.type === EntityType.SOLDIER &&
+      e.col === leader.col && e.row === leader.row
+    ).slice(0, maxCarried);
+    this.applyMove(leaderId, toCol, toRow);  // leader move + departedHexes + 1 budget slot
+    for (const p of passengers) { p.col = toCol; p.row = toRow; }
+    return passengers.map(p => p.id);
+  }
 }
 
 // ── Stage 1: Board Evaluation ────────────────────────────────────────────────
@@ -139,14 +158,17 @@ export function assessHeroBoard(sim) {
   // opportunistic fights) give them orders. survivorCount stays SURVIVOR-only
   // — it feeds the Sound Horn ceiling and recruit-goal scoring, which are
   // about civilians, not mustered troops.
-  // TODO: AI-controlled catapults never fire — CATAPULT is excluded from this
-  // list (and every other unit loop), so an AI captain's siege engines sit
-  // idle after being built. Add a fire-at-target goal for immobile ranged
-  // units before letting the AI build them.
-  const survivors = sim.entities.filter(e =>
-    e.alive && e.owner === 'hero' &&
-    (e.type === EntityType.SURVIVOR || e.type === EntityType.SOLDIER)
-  );
+  // Immobile siege engines (catapults) are enumerated SEPARATELY: they get
+  // fire orders (_tryCatapultFire) but must never receive MOVE / EXPLORE /
+  // node-duty orders, so they stay out of `survivors` and out of every
+  // mobile-unit loop.
+  const survivors = [];
+  const catapults = [];
+  for (const e of sim.entities) {
+    if (!e.alive || e.owner !== 'hero') continue;
+    if (e.type === EntityType.SURVIVOR || e.type === EntityType.SOLDIER) survivors.push(e);
+    else if (isImmobileType(e.type)) catapults.push(e);
+  }
   const survivorCount = survivors.filter(e => e.type === EntityType.SURVIVOR).length;
 
   // Fog-of-war awareness — line-of-sight aware (forests/buildings block
@@ -270,7 +292,7 @@ export function assessHeroBoard(sim) {
     round, roundsToScoring,
     hero,
     heroHp, heroMaxHp, heroHpRatio,
-    survivors, survivorCount,
+    survivors, survivorCount, catapults,
     witch, witchVisible, witchDistance, witchHpRatio,
     witchMinions, witchMinionCount,
     heroArmyStrength, witchArmyStrength,
@@ -459,6 +481,156 @@ function _nearestUnexploredBuilding(sim, actor) {
   return best;
 }
 
+// ── Captain kit: MARCH ──────────────────────────────────────────────────────
+
+// A march only beats individual moves from 2 carried soldiers up (1 MARCH
+// replaces the captain's move + ≥2 soldier moves).
+export const MARCH_MIN_CARRIED = 2;
+
+// Soldiers standing on the leader's CURRENT (projected) hex — the stack a
+// MARCH would carry. Matches executeMarch's passenger enumeration.
+function _marchStack(sim, leader) {
+  return sim.entities.filter(e =>
+    e.alive && e.id !== leader.id && e.owner === leader.owner &&
+    e.type === EntityType.SOLDIER &&
+    e.col === leader.col && e.row === leader.row
+  );
+}
+
+/**
+ * Queue one step of leader movement, March-aware. For a faction whose leader
+ * can MARCH (captain), when ≥ MARCH_MIN_CARRIED co-located soldiers would
+ * actually be carried, emit ONE MARCH that moves the whole stack instead of
+ * N individual moves. Destination hex capacity is respected up front
+ * (executeMarch leaves overflow behind, so a nearly-full hex makes the march
+ * not worth the special action — fall back to a plain MOVE). Carried
+ * passengers are committed so later generators don't re-order units the
+ * march already repositioned. For every other leader (paladin/rogue) this
+ * emits exactly the MOVE it replaces — byte-identical plans.
+ */
+export function queueLeaderStep(actions, sim, leader, toCol, toRow, priority = undefined, goal = undefined) {
+  if (concreteFactionOf(leader).canMarch()) {
+    const stack = _marchStack(sim, leader);
+    if (stack.length >= MARCH_MIN_CARRIED) {
+      // Slots left on the destination once the leader has stepped in.
+      const t = sim.tiles.get(hexKey(toCol, toRow));
+      const occupants = sim.entities.filter(e =>
+        e.alive && e.id !== leader.id && e.col === toCol && e.row === toRow
+      ).length;
+      const carriable = t ? Math.max(0, tileCapacityRemaining(t, occupants) - 1) : 0;
+      if (Math.min(stack.length, carriable) >= MARCH_MIN_CARRIED) {
+        const action = { type: PlanActionType.MARCH, entityId: leader.id, toCol, toRow };
+        if (priority !== undefined) action._priority = priority;
+        if (goal !== undefined) action._goal = goal;
+        actions.push(action);
+        const carried = sim.applyMarch(leader.id, toCol, toRow, carriable);
+        for (const id of carried) sim.unitCommitments.set(id, goal ?? 'march');
+        return action;
+      }
+    }
+  }
+  const action = { type: PlanActionType.MOVE, entityId: leader.id, toCol, toRow };
+  if (priority !== undefined) action._priority = priority;
+  if (goal !== undefined) action._goal = goal;
+  actions.push(action);
+  sim.applyMove(leader.id, toCol, toRow);
+  return action;
+}
+
+// Node duty picks the closest uncommitted unit — which, when the captain has
+// a marching stack, is often one of the soldiers STANDING ON the captain's
+// own hex. Walking that soldier off alone wastes the stack: promote the
+// order to the captain himself (same distance — same hex), so the move loop
+// below emits ONE MARCH that carries the soldier and its mates together.
+function _promoteToMarchLeader(sim, board, unit) {
+  if (unit.type !== EntityType.SOLDIER || !board.hero) return unit;
+  const leader = sim.entities.find(e => e.id === board.hero.id);
+  if (!leader || sim.unitCommitments.has(leader.id)) return unit;
+  if (!concreteFactionOf(leader).canMarch()) return unit;
+  if (leader.col !== unit.col || leader.row !== unit.row) return unit;
+  return _marchStack(sim, leader).length >= MARCH_MIN_CARRIED ? leader : unit;
+}
+
+// ── Captain kit: catapult fire ──────────────────────────────────────────────
+// Friendly catapults are commandable but IMMOBILE: they get exactly one kind
+// of order — BATTLE_UNIT at a visible enemy inside their weapon range
+// (catapult_stone, range 4). Ranged shots take no gang-up/counter risk, so
+// there is no engage-floor gate: always fire. Target pick: enemy leader
+// first (chip the kill win), else lowest HP (finish kills). One shot per
+// catapult per round; with no target in range the engine simply idles — a
+// doomed order would burn a plan slot for nothing.
+function _tryCatapultFire(actions, sim, board, remaining, priority = 2, goal = HeroGoal.CONTROL_NODES) {
+  let queued = 0;
+  for (const cat of board.catapults ?? []) {
+    if (remaining - queued <= 0) break;
+    if (sim.unitCommitments.has(cat.id)) continue;
+    const range = rangeOf(cat);
+    const inRange = [board.witch, ...board.witchMinions].filter(e =>
+      e && hexDistance(cat.col, cat.row, e.col, e.row) <= range
+    );
+    if (inRange.length === 0) continue;
+    inRange.sort((a, b) =>
+      ((isLeaderType(a.type) ? 0 : 1) - (isLeaderType(b.type) ? 0 : 1)) || (a.hp - b.hp));
+    const target = inRange[0];
+    actions.push({
+      type: PlanActionType.BATTLE_UNIT, entityId: cat.id,
+      targetId: target.id, targetCol: target.col, targetRow: target.row,
+      _priority: priority, _goal: goal,
+    });
+    sim.applyBattle();
+    sim.unitCommitments.set(cat.id, goal);
+    queued++;
+  }
+  return queued;
+}
+
+// ── Captain kit: BUILD_SIEGE ────────────────────────────────────────────────
+const AI_CATAPULT_CAP       = 2;  // live engines — siege never strips the fortify wood
+const AI_SIEGE_NODE_RADIUS  = 2;  // "ground worth holding": captain within 2 of a node
+const AI_SIEGE_DEFEND_RADIUS = 3; // "defending": visible enemy within 3 of the captain
+
+// Queue at most ONE catapult build per round, and only when it is tactically
+// sensible: affordable in the projected ledger (SIEGE_WOOD_COST wood +
+// SIEGE_METAL_COST metal), below the AI_CATAPULT_CAP standing cap, an open
+// adjacent spawn hex exists, and the captain is either parked near a power
+// node he wants to hold or visibly under threat (a defensive battery).
+// Deterministic no-op for factions without canBuildSiege().
+function _tryBuildSiege(actions, sim, board, remaining) {
+  if (remaining <= 0 || !board.hero) return 0;
+  const leader = sim.entities.find(e => e.id === board.hero.id);
+  if (!leader || !concreteFactionOf(leader).canBuildSiege()) return 0;
+  if ((board.catapults?.length ?? 0) >= AI_CATAPULT_CAP) return 0;
+  const ledger = sim.resourceLedger;
+  if (getItemCountOf(ledger, ResourceType.WOOD)  < SIEGE_WOOD_COST ||
+      getItemCountOf(ledger, ResourceType.METAL) < SIEGE_METAL_COST) return 0;
+  const nearNode = board.nodes.some(n =>
+    (n.obj.hexes ?? [{ col: n.obj.col, row: n.obj.row }]).some(h =>
+      hexDistance(leader.col, leader.row, h.col, h.row) <= AI_SIEGE_NODE_RADIUS));
+  const defending = [board.witch, ...board.witchMinions].some(e =>
+    e && hexDistance(leader.col, leader.row, e.col, e.row) <= AI_SIEGE_DEFEND_RADIUS);
+  if (!nearNode && !defending) return 0;
+  const spawn = findSiegeSpawnHex(sim, leader);
+  if (!spawn) return 0;
+  removeItemInItems(ledger, ResourceType.WOOD,  SIEGE_WOOD_COST);
+  removeItemInItems(ledger, ResourceType.METAL, SIEGE_METAL_COST);
+  actions.push({
+    type: PlanActionType.BUILD_SIEGE, entityId: leader.id,
+    _priority: 3, _goal: HeroGoal.CONTROL_NODES,
+  });
+  // Occupancy projection: the fresh engine takes a slot on the spawn hex so
+  // march-capacity / placement checks later in the same plan see it. It is
+  // NOT added to board.catapults — it can't fire before it exists.
+  sim.entities.push({
+    id: `sim-catapult-${sim.entities.length}`, type: EntityType.CATAPULT,
+    owner: leader.owner, ownerId: leader.ownerId ?? null,
+    col: spawn.col, row: spawn.row, alive: true,
+    hp: UNIT_TYPES.catapult.baseStats.maxHp, maxHp: UNIT_TYPES.catapult.baseStats.maxHp,
+    items: {},
+  });
+  sim.actionsLeft--;
+  return 1;
+}
+
 // ── Generator: PROTECT_HERO ─────────────────────────────────────────────────
 // Flee when health low, use herbs, equip weapons.
 
@@ -528,12 +700,9 @@ export function genProtectHero(sim, board, budget, config = null) {
         ? roadStepToward(sim, heroEntity, shelter)
         : stepAwayFrom(sim, heroEntity, nearbyEnemy);
       if (fleeStep) {
-        actions.push({
-          type: PlanActionType.MOVE, entityId: board.hero.id,
-          toCol: fleeStep.col, toRow: fleeStep.row,
-          _priority: 1, _goal: HeroGoal.PROTECT_HERO,
-        });
-        sim.applyMove(board.hero.id, fleeStep.col, fleeStep.row);
+        // March-aware: a retreating captain pulls his co-located guard back
+        // with him in the same action (plain MOVE for every other leader).
+        queueLeaderStep(actions, sim, heroEntity, fleeStep.col, fleeStep.row, 1, HeroGoal.PROTECT_HERO);
         sim.unitCommitments.set(board.hero.id, HeroGoal.PROTECT_HERO);
         remaining--;
       }
@@ -547,12 +716,7 @@ export function genProtectHero(sim, board, budget, config = null) {
       if (shelter) {
         const step = roadStepToward(sim, heroEntity, shelter);
         if (step) {
-          actions.push({
-            type: PlanActionType.MOVE, entityId: board.hero.id,
-            toCol: step.col, toRow: step.row,
-            _priority: 2, _goal: HeroGoal.PROTECT_HERO,
-          });
-          sim.applyMove(board.hero.id, step.col, step.row);
+          queueLeaderStep(actions, sim, heroEntity, step.col, step.row, 2, HeroGoal.PROTECT_HERO);
           remaining--;
           sim.unitCommitments.set(board.hero.id, HeroGoal.PROTECT_HERO);
         }
@@ -721,12 +885,8 @@ export function genExplore(sim, board, budget, config = null) {
         const step = roadStepToward(sim, heroEntity, building);
         if (!step) break;
 
-        actions.push({
-          type: PlanActionType.MOVE, entityId: board.hero.id,
-          toCol: step.col, toRow: step.row,
-          _priority: 4, _goal: HeroGoal.EXPLORE,
-        });
-        sim.applyMove(board.hero.id, step.col, step.row);
+        // March-aware: an exploring captain keeps his escort with him.
+        queueLeaderStep(actions, sim, heroEntity, step.col, step.row, 4, HeroGoal.EXPLORE);
         remaining--;
         stepsLeft--;
       }
@@ -776,6 +936,14 @@ export function genControlNodes(sim, board, budget, config = null) {
   if (budget <= 0 || !board.hero) return actions;
   let remaining = budget;
 
+  // Captain kit first — catapult shots are the cheapest damage on the board
+  // (immobile, ranged, no counter risk), then consider laying a new engine
+  // down before the fortify loops drain the wood ledger. Both helpers are
+  // deterministic no-ops for factions without catapults / canBuildSiege().
+  remaining -= _tryCatapultFire(actions, sim, board, remaining);
+  remaining -= _tryBuildSiege(actions, sim, board, remaining);
+  if (remaining <= 0) return actions;
+
   const allyClaimed = board.allyContext?.claimedNodes;
   const configFloor = config?.engageFloor ?? 'unfavorable';
   // During daytime, hero is stronger — attack aggressively at nodes even at bad odds
@@ -816,9 +984,12 @@ export function genControlNodes(sim, board, budget, config = null) {
     for (let u = 0; u < unitsForNode; u++) {
       if (remaining <= 0) break;
 
-      // Prefer survivors for node duty
-      const unit = _closestUncommittedHero(sim, board, node.obj, true);
-      if (!unit) break;
+      // Prefer survivors for node duty. A picked soldier standing in the
+      // captain's marching stack is promoted to the captain himself — the
+      // move loop below then emits ONE MARCH for the whole stack.
+      const picked = _closestUncommittedHero(sim, board, node.obj, true);
+      if (!picked) break;
+      const unit = _promoteToMarchLeader(sim, board, picked);
 
       const simUnit = sim.entities.find(e => e.id === unit.id);
       if (!simUnit) break;
@@ -935,12 +1106,17 @@ export function genControlNodes(sim, board, budget, config = null) {
         const step = roadStepToward(sim, simUnit, targetHex);
         if (!step) break;
 
-        actions.push({
-          type: PlanActionType.MOVE, entityId: simUnit.id,
-          toCol: step.col, toRow: step.row,
-          _priority: 5, _goal: HeroGoal.CONTROL_NODES,
-        });
-        sim.applyMove(simUnit.id, step.col, step.row);
+        if (simUnit.id === board.hero.id) {
+          // March-aware: the captain pushes the node with his stack in tow.
+          queueLeaderStep(actions, sim, simUnit, step.col, step.row, 5, HeroGoal.CONTROL_NODES);
+        } else {
+          actions.push({
+            type: PlanActionType.MOVE, entityId: simUnit.id,
+            toCol: step.col, toRow: step.row,
+            _priority: 5, _goal: HeroGoal.CONTROL_NODES,
+          });
+          sim.applyMove(simUnit.id, step.col, step.row);
+        }
         remaining--;
         stepsForUnit--;
       }
@@ -1054,12 +1230,17 @@ export function genHuntWitch(sim, board, budget) {
         const step = roadStepToward(sim, simUnit, target.entity);
         if (!step) break;
 
-        actions.push({
-          type: PlanActionType.MOVE, entityId: simUnit.id,
-          toCol: step.col, toRow: step.row,
-          _priority: target.priority + 1, _goal: HeroGoal.HUNT_WITCH,
-        });
-        sim.applyMove(simUnit.id, step.col, step.row);
+        if (simUnit.id === board.hero?.id) {
+          // March-aware: the captain hunts with his soldiers alongside.
+          queueLeaderStep(actions, sim, simUnit, step.col, step.row, target.priority + 1, HeroGoal.HUNT_WITCH);
+        } else {
+          actions.push({
+            type: PlanActionType.MOVE, entityId: simUnit.id,
+            toCol: step.col, toRow: step.row,
+            _priority: target.priority + 1, _goal: HeroGoal.HUNT_WITCH,
+          });
+          sim.applyMove(simUnit.id, step.col, step.row);
+        }
         remaining--;
         stepsLeft--;
       }
@@ -1130,6 +1311,12 @@ export function fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositi
   const nodeCount = board.nodes.length || 3;
   const needsSurvivors = board.survivorCount < nodeCount;
 
+  // 0. Fire any catapult the goal budgets starved — immobile units never
+  //    receive moves here either (they're not in board.survivors).
+  if (left > 0 && (board.catapults?.length ?? 0) > 0) {
+    left -= _tryCatapultFire(plan, sim, board, left);
+  }
+
   // 1. Attack adjacent enemies (opportunistic combat in gap fill)
   if (left > 0 && heroEntity) {
     const visibleEnemies = [board.witch, ...board.witchMinions].filter(Boolean);
@@ -1187,11 +1374,7 @@ export function fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositi
         if (!step) break;
         const prev = prevPositions.get(heroEntity.id);
         if (prev && prev.col === step.col && prev.row === step.row) break;
-        plan.push({
-          type: PlanActionType.MOVE, entityId: heroEntity.id,
-          toCol: step.col, toRow: step.row,
-        });
-        sim.applyMove(heroEntity.id, step.col, step.row);
+        queueLeaderStep(plan, sim, heroEntity, step.col, step.row);
         left--;
       }
       sim.unitCommitments.set(heroEntity.id, 'gap-fill');
@@ -1244,11 +1427,7 @@ export function fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositi
         if (!step) break;
         const prev = prevPositions.get(heroEntity.id);
         if (prev && prev.col === step.col && prev.row === step.row) break;
-        plan.push({
-          type: PlanActionType.MOVE, entityId: heroEntity.id,
-          toCol: step.col, toRow: step.row,
-        });
-        sim.applyMove(heroEntity.id, step.col, step.row);
+        queueLeaderStep(plan, sim, heroEntity, step.col, step.row);
         left--;
       }
     }
@@ -1277,11 +1456,7 @@ export function fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositi
     if (!step) break;
     const prev = prevPositions.get(heroEntity.id);
     if (prev && prev.col === step.col && prev.row === step.row) break;
-    plan.push({
-      type: PlanActionType.MOVE, entityId: heroEntity.id,
-      toCol: step.col, toRow: step.row,
-    });
-    sim.applyMove(heroEntity.id, step.col, step.row);
+    queueLeaderStep(plan, sim, heroEntity, step.col, step.row);
     left--;
   }
 }

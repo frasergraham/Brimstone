@@ -1124,10 +1124,11 @@ export function assemblePlan(allActions, sim, board, prevPositions, gapFillFn = 
 
   // 2. Anti-oscillation filter — remove from the END of each entity's chain
   //    first, so earlier (higher-priority) moves in a sequence are preserved.
+  //    MARCH is a leader move with passengers, so it oscillates like a MOVE.
   const removeSet = new Set();
   for (let i = sorted.length - 1; i >= 0; i--) {
     const action = sorted[i];
-    if (action.type !== PlanActionType.MOVE) continue;
+    if (action.type !== PlanActionType.MOVE && action.type !== PlanActionType.MARCH) continue;
     const departed = sim.departedHexes.get(action.entityId);
     if (departed && departed.has(hexKey(action.toCol, action.toRow))) {
       removeSet.add(i);
@@ -1144,8 +1145,10 @@ export function assemblePlan(allActions, sim, board, prevPositions, gapFillFn = 
   const seen = new Set();
   const deduped = filtered.filter(action => {
     let key;
-    if (action.type === PlanActionType.MOVE) {
-      key = `${action.entityId}:move:${action.toCol},${action.toRow}`;
+    if (action.type === PlanActionType.MOVE || action.type === PlanActionType.MARCH) {
+      // Destination-keyed so a chained march (two MARCHes to different
+      // hexes) is two distinct steps, not a duplicate.
+      key = `${action.entityId}:${action.type}:${action.toCol},${action.toRow}`;
     } else if (action.type === PlanActionType.BATTLE_UNIT) {
       key = `${action.entityId}:battle:${action.targetId}`;
     } else {
@@ -1339,7 +1342,7 @@ function _fillGaps(plan, sim, board, witchEntity, remaining, prevPositions) {
 
 export function updateAllyClaimedNodes(plan, board, allyContext) {
   for (const action of plan) {
-    if (action.type !== PlanActionType.MOVE) continue;
+    if (action.type !== PlanActionType.MOVE && action.type !== PlanActionType.MARCH) continue;
     for (const node of board.nodes) {
       if (node.obj.hexes?.some(h => h.col === action.toCol && h.row === action.toRow)) {
         node.obj.hexes.forEach(h => allyContext.claimedNodes.add(hexKey(h.col, h.row)));

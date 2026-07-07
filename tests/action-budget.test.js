@@ -71,14 +71,19 @@ describe('UIController._computeActionBudget — Budget Badge matches the real bu
       'badge total equals the budget the game actually grants');
   });
 
-  test('captain: action cap 9 applies (the side-faction badge used to clip at 8)', () => {
+  test('captain: action cap applies via the concrete faction (badge matches computeActions)', () => {
+    // The captain's cap was re-tuned 9 → 8 when the AI learned MARCH +
+    // catapult fire (see CaptainFaction.actionCap). It now equals the
+    // side-faction default, so cap clipping can no longer discriminate
+    // concrete-vs-side resolution — the base-4 test above carries that
+    // regression coverage. This test locks the clip value itself.
     const entities = [
       { alive: true, owner: 'hero', type: EntityType.CAPTAIN, factionId: 'captain' },
       ...Array.from({ length: 6 }, () => ({ alive: true, owner: 'hero', type: EntityType.SOLDIER })),
     ];
-    // base 4 + day 1 + unit 5 (cap) = 10 → clipped to the captain's cap of 9.
+    // base 4 + day 1 + unit 5 (cap) = 10 → clipped to the captain's cap of 8.
     const { total } = badge('hero', entities, 'day');
-    assert.equal(total, 9);
+    assert.equal(total, 8);
     assert.equal(total, computeActions('hero', 'day', entities, 0));
   });
 

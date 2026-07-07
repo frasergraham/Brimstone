@@ -444,13 +444,16 @@ describe('Captain action budget', () => {
     assert.equal(capBudget, 5);   // 4 base + 1 phase
   });
 
-  test('action cap raised to 9 (paladin caps at 8)', () => {
+  test('action cap 8 (re-tuned from 9 when the AI learned MARCH + catapults)', () => {
     const capState = captainState();
     for (let i = 0; i < 6; i++) {
       capState.entities.push(createSoldier(capState.hero.col, capState.hero.row, null, capState));
     }
-    // 4 base + 1 phase + 5 units (bonus cap) + 3 nodes = 13 → capped at 9.
-    assert.equal(computeActions('hero', Phase.DAWN, capState.entities, 3), 9);
+    // 4 base + 1 phase + 5 units (bonus cap) + 3 nodes = 13 → capped at 8.
+    // (Cap was 9 while soldiers walked one at a time; MARCH moves the stack
+    // on one action, so the raised cap over-fed the captain's strong rounds —
+    // see CaptainFaction.actionCap.)
+    assert.equal(computeActions('hero', Phase.DAWN, capState.entities, 3), 8);
 
     const palState = new GameState(true, true);
     for (let i = 0; i < 6; i++) {
