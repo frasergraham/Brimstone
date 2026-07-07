@@ -92,7 +92,7 @@ describe('CaptainFaction — shape', () => {
     assert.ok(c.getAttack() < p.getAttack(), 'captain effective ATK below paladin');
     assert.equal(c.getEquippedWeaponId(), 'sword');
     assert.ok(c.hasAbility('summon'), 'captain carries the summon ability');
-    assert.ok(c.hasAbility('sound_horn'), 'captain keeps the day-side horn training');
+    assert.ok(!c.hasAbility('sound_horn'), 'captain has no horn training at all (UI cards and the horn-item grant both key off the ability)');
     assert.equal(c.factionId, 'captain');
   });
 
@@ -118,16 +118,18 @@ describe('CaptainFaction — shape', () => {
 });
 
 // ── Sound Horn veto ──────────────────────────────────────────────────────────
-// The captain stays horn-TRAINED (keeps the day-side `sound_horn` ability and
-// the issued Horn item, so leader creation and campaign loadouts are stable)
-// but the ACTION is faction-vetoed via `canSoundHorn()`: his food funds
-// troops, not horn calls.
+// The captain has NO horn: he drops the day-side `sound_horn` ability (so the
+// champion card shows no horn chip and game.js never issues him the Horn item)
+// AND the action is faction-vetoed via `canSoundHorn()` as defense-in-depth —
+// even a looted horn stays silent. His food funds troops, not horn calls.
 
 describe('Sound Horn — captain veto (canSoundHorn predicate)', () => {
   test('getValidActions never offers SOUND_HORN to the captain, even with horn + food', () => {
     const state = captainState();
     giveFood(state, 5);
-    assert.ok(state.hero.hasItem('horn'), 'fixture: the captain still carries the Horn item');
+    // The captain is never ISSUED a horn (no sound_horn ability), but one can
+    // be looted from a building — simulate that and prove it stays unusable.
+    if (!state.hero.hasItem('horn')) state.hero.addItem('horn');
     const acts = getValidActions(state, state.hero);
     assert.equal(acts.find(a => a.type === ActionType.SOUND_HORN), undefined,
       'no Sound Horn on the captain\'s action arc');

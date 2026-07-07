@@ -955,8 +955,12 @@ export class CaptainFaction extends HeroFaction {
   // The Captain carries the day-side sword (inherited innateLeaderWeapon)
   // but his base stats sit well below the paladin's — he fights through
   // troops. 'summon' gates the CALL REINFORCEMENTS action in
-  // getValidActions, exactly like the night-side leaders.
-  get innateLeaderAbilities() { return [...super.innateLeaderAbilities, 'summon']; }
+  // getValidActions, exactly like the night-side leaders. Deliberately does
+  // NOT inherit the paladin's 'sound_horn': the captain has no horn at all
+  // (canSoundHorn() vetoes the action as defense-in-depth, and game.js's
+  // ability-driven horn grant never gives him the item), so survivors only
+  // reach him through his 0.4× discovery rate.
+  get innateLeaderAbilities() { return ['summon']; }
 
   // Action economy: an officer directs more hands — +1 base action over the
   // paladin (4 vs 3). The hard cap sits at the day-side default 8: it was 9

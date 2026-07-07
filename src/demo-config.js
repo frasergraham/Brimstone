@@ -12,9 +12,8 @@
 //   factions.* — a champion id (matches src/factions.js ids). `false` ⇒ the
 //                Skirmish + Online pickers show it disabled with "Coming Soon".
 //
-// Default ships everything ON except the two unimplemented champions
-// (Captain, Necromancer) — the mechanism is wired so flipping a mode is a
-// one-line change.
+// Default ships everything ON — the mechanism stays wired so gating a mode
+// or champion for a demo build is a one-line change.
 // ============================================================================
 
 export const COMING_SOON_LABEL = 'Coming Soon';
@@ -31,11 +30,11 @@ export const DEMO_CONFIG = Object.freeze({
     campaign:  true,
   }),
   // Champions/factions (true = available, false = coming soon). Ids match the
-  // faction registry in src/factions.js. Captain & Necromancer aren't
-  // implemented yet, so they ship disabled.
+  // faction registry in src/factions.js. All six champions are implemented
+  // and ship enabled; flip one to `false` to gate it for a demo build.
   factions: Object.freeze({
-    captain:     false,
-    necromancer: false,
+    captain:     true,
+    necromancer: true,
   }),
 });
 
