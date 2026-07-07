@@ -708,6 +708,20 @@
       ]
     },
     {
+      "id": "soldier",
+      "category": "unit",
+      "name": "The Soldier",
+      "parameters": {
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. A sturdy young colonial soldier of the line in his early twenties, fair sun-browned skin, short sandy-brown hair, clean-shaven with a square jaw, alert hazel eyes, disciplined stoic expression. Plain drab brown wool coat with pewter buttons over a rough linen shirt, a wide leather bandolier of wooden powder charges across the chest, a simple round-brimmed black felt hat, a musket with fixed bayonet shouldered against one arm, rank-and-file bearing — clearly a common soldier, not an officer. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+      },
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
+    },
+    {
       "id": "cycle_dawn",
       "name": "Dawn",
       "category": "icon"

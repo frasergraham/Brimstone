@@ -331,7 +331,7 @@ export class Renderer {
        'survivor_gravedigger','survivor_midwife','survivor_farmhand',
        'survivor_tanner','survivor_chandler','survivor_goodwife',
        'survivor_constable','survivor_weaver','survivor_carpenter',
-       'survivor_apothecary','survivor_fisherman','catapult'],
+       'survivor_apothecary','survivor_fisherman','catapult','soldier'],
       ['cycle_dawn','cycle_day','cycle_dusk','cycle_night'],
     ];
 
