@@ -192,6 +192,26 @@ export const ITEMS = Object.freeze({
     label: '\uE062 Magic Bolt (+1 ATK, range 2)',
   },
 
+  // Catapult innate armament — the siege engine's flung stone. Issued by
+  // createCatapult (the non-leader analog of Faction.innateLeaderWeapon);
+  // never looted (noLoot) and locked to a non-existent wielder-faction id so
+  // no leader can ever equip one out of a backpack. The catapult itself
+  // can't unequip it: it has no other weapon and the equip menu only offers
+  // alternatives.
+  catapult_stone: {
+    id: 'catapult_stone',
+    kind: 'weapon',
+    slot: 'weapon',
+    category: 'ranged',
+    statMods: { attack: 2, defense: 0 },
+    damage: { count: 2, sides: 8 },          // 2D8 (avg 9) — heavy stone, no crush (ranged)
+    range: 4,
+    projectileType: 'bolt',
+    wielderFactions: ['catapult'],           // matches no faction id — innate-only
+    noLoot: true,
+    label: '\uE0B9 Catapult Stone (+2 ATK, range 4)',
+  },
+
   // ── Key items ────────────────────────────────────────────────────────────
   // `kind: 'key'` items are persistent enablers, not weapons or consumables:
   // holding one unlocks an action and using it never decrements the count.

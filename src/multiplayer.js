@@ -66,6 +66,11 @@ export class MirrorState {
     s.inventory            = snap.inventory;
     s.postRoundEvents      = snap.postRoundEvents || [];
     s.nodeSpawnedSurvivors = snap.nodeSpawnedSurvivors || [];
+    // RAISE DEAD corpse ledger — hasRaisableCorpse() reads state.deathLocations
+    // on the client to grey/ungrey the necromancer's Raise Dead arc button.
+    // serializeState sends it; dropping it here left the button permanently
+    // disabled in online necromancer games.
+    s.deathLocations       = (snap.deathLocations ?? []).map(d => ({ ...d }));
     s.planningPhase        = snap.planningPhase   ?? false;
     s.resolving            = snap.resolving       ?? false;
     s.heroReady            = snap.heroReady       ?? false;

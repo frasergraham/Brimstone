@@ -42,6 +42,7 @@ export const ICONS = [
   { name: 'rogue',       code: 0xE00A, gi: 'lorc/hood',                glyphs: [], note: 'entity stub; "🗡" placeholder hand-mapped here, NOT to ICON.dagger.' },
   { name: 'ogre',        code: 0xE00B, gi: 'lorc/ogre',                glyphs: ['👹'] },
   { name: 'person',      code: 0xE00C, gi: 'delapouite/person',        glyphs: ['🧑'] },
+  { name: 'skeleton',    code: 0xE00D, gi: 'delapouite/skeleton',      glyphs: [], note: 'entity-map only (necromancer skeleton summon).' },
 
   // ── Resources (actions.js RES_ICON, ui-render.js, campaign rewards) ─────────
   { name: 'wood',      code: 0xE010, gi: 'delapouite/wood-pile',       glyphs: ['🪵'], shared: true, note: 'resource. 🪵 also = wood golem entity (→ ICON.woodGolem) and log marker.' },
@@ -173,6 +174,7 @@ export const ICONS = [
   { name: 'pentacle',   code: 0xE0B0, gi: 'lorc/pentacle',          glyphs: ['⛧'] },
   { name: 'flag',       code: 0xE0B1, gi: 'delapouite/flying-flag',        glyphs: ['⚑'] },
   { name: 'wardShield',  code: 0xE0B2, gi: 'lorc/shield-impact',     glyphs: ['⛨'], note: 'renderer.js captain/ward placeholder (distinct from ICON.captain if needed).' },
+  { name: 'catapult',   code: 0xE0B9, gi: 'lorc/catapult',          glyphs: [], note: 'Catapult siege unit (Captain faction) — entity glyph + Build Siege action + Catapult Stone weapon label.' },
 ];
 
 // Sanity: no duplicate names or codes.

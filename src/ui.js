@@ -5,20 +5,26 @@ import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, 
 import { ITEMS, lootDisplayLabel } from './items.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf, rangeOf, getEquippedWeaponIdOf, getItemCountOf, totalItemCount, applyProjectedEquip } from './entities.js';
 import { DAMAGE_SCALE } from './balance.js';
-import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
+import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes, budgetFactionFor } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
 import { makeOverlay } from './overlays.js';
-import { concreteFactionOf, getFaction } from './factions.js';
+import {
+  concreteFactionOf, getFaction,
+  CAPTAIN_REINFORCEMENT_COST, CAPTAIN_REINFORCEMENT_COUNT,
+  SIEGE_WOOD_COST, SIEGE_METAL_COST,
+} from './factions.js';
 import {
   ActionType, getValidActions, getVisiblePositions, computeCombatOdds,
+  getTeleportClump, POSSESS_RANGE, TELEPORT_RANGE,
 } from './actions.js';
+import { possessorOf } from './effects.js';
 import * as audio from './audio.js';
 
 import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan, groupPlanByEntity, validatePlanAction, buildAutoGuardQueue } from './planner.js';
 import { ABILITIES } from './abilities.js';
 import { buildRollRows, buildOutcomeSummary, buildTurnCardHoverOverlays, battleOutcomeWord, compactUneventfulTurns } from './replay-timeline.js';
 import { compileTurnBattleSummary, compileTurnXpSummary } from './battle-utils.js';
-import { buildWrapupCombatsHtml, wrapupIconHtml } from './wrapup-summary.js';
+import { buildWrapupCombatsHtml, wrapupIconHtml, buildWrapupReckoningHtml, reckoningText } from './wrapup-summary.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
 import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml, buildMissionLogHtml, buildMissionLogDescriptionHtml, buildNodeBadgeHtml, buildEffectsHtml, buildCycleInfoHtml, buildCycleDeadlineHtml, PHASE_META, buildRollRowsTipHtml, computeGameTooltipPos, TurnCardAutoScroll, shouldAutoScrollToActive, computeFadeFlags, buildActionPipsHtml, buildActionBudgetTooltipHtml, levelPillHtml } from './ui-render.js';
@@ -151,6 +157,10 @@ export class UIController {
     this.tutorialAllowedActions = null;
     // Restrict which units may be picked from a multi-unit hex (by entity type).
     this.tutorialAllowedUnits   = null;
+    // When true (scripted tutorial), hide/disable every plan-editing affordance
+    // — floating UNDO buttons, plan-panel ✕ removes, the X clear-unit key — so
+    // the player can't dismantle a scripted action after its step advanced.
+    this.tutorialPlanLocked     = false;
     // One-shot: set by the conductor when a MOVE completes a gated step, so the
     // post-move re-select deselects instead of chaining (keeps unit-switching clean).
     this._tutorialSuppressReselect = false;
@@ -1345,7 +1355,10 @@ export class UIController {
     if (!layer) return;
     this._initUndoLayerEvents();
 
-    if (!this._planMode || this._planSubmitted || !this.renderer || !this.canvas) {
+    // tutorialPlanLocked: the scripted tutorial owns the plan — no UNDO buttons,
+    // or a player could remove an action whose step has already advanced.
+    if (!this._planMode || this._planSubmitted || this.tutorialPlanLocked ||
+        !this.renderer || !this.canvas) {
       if ((layer.childNodes?.length ?? 0)) layer.innerHTML = '';
       return;
     }
@@ -1542,7 +1555,9 @@ export class UIController {
 
     stepsEl.innerHTML = buildUnitPlanBlocksHtml(
       this._unitPlans, this._planBudget, foodAvailable,
-      this._planSubmitted, this.state.entities ?? [], initialInv,
+      // tutorialPlanLocked renders as submitted: no per-step ✕ remove buttons —
+      // the scripted tutorial owns the plan (see MissionConductor).
+      this._planSubmitted || this.tutorialPlanLocked, this.state.entities ?? [], initialInv,
       controllable, this._selectedEntity?.id ?? null, portraitMap,
       this._planStatsExpanded,
     );
@@ -1587,6 +1602,9 @@ export class UIController {
         const id = block.dataset.entityId;
         const entity = this.state.entities.find(x => x.id === id && x.alive);
         if (!entity) return;
+        // Strict tutorial gating — the plan panel must not sidestep the step's
+        // click/unit allowlists (same rule as map clicks and Tab-cycling).
+        if (!this._tutorialCanSelect(entity)) return;
         this._selectEntity(entity);
         this._updateSidebar();
         this.onRedraw();
@@ -1791,11 +1809,9 @@ export class UIController {
       ? this.renderer?.planGhostSteps?.at(-1)?.positions
       : null;
     const clickedEntities = state.entities.filter(e => {
-      if (!e.alive || e.owner !== ownerFilter) return false;
-      // Scripted campaign NPCs are never controllable (view-only below).
-      if (e.isNpc) return false;
-      // In online MP, only allow selecting entities owned by the local player.
-      if (this.myPlayerId && e.ownerId && e.ownerId !== this.myPlayerId) return false;
+      // Command gate: owner (and MP seat) checks + possession handoff — a
+      // possessed enemy unit is OURS to select; our own possessed unit is not.
+      if (!this._canCommand(e)) return false;
       const ghostPos = lastGhostPos?.get(e.id);
       // In planning mode, if the entity has been moved in the plan, use ONLY the
       // ghost position — it should no longer appear on its real tile.
@@ -1807,15 +1823,7 @@ export class UIController {
       // No controllable units — check for any visible non-controllable units
       // (enemies OR allied teammates' units in N-player MP) for view-only selection.
       const viewOnlyEntities = _visibleUnitsAt(state, hex.col, hex.row)
-        .filter(e => {
-          // Enemy faction → always view-only
-          if (e.owner !== ownerFilter) return true;
-          // Scripted campaign NPC → view-only
-          if (e.isNpc) return true;
-          // Same faction but a different player → ally, view-only
-          if (this.myPlayerId && e.ownerId && e.ownerId !== this.myPlayerId) return true;
-          return false;
-        });
+        .filter(e => !this._canCommand(e));
       if (viewOnlyEntities.length > 1) {
         this._hideTileDetail();
         this._selectedEntity       = null;
@@ -1836,6 +1844,10 @@ export class UIController {
       }
     } else if (clickedEntities.length === 1) {
       const entity = clickedEntities[0];
+      // Strict tutorial gating: a lone unit outside the step's allowlists can't
+      // be selected — swallow the click instead of silently switching selection
+      // (a multi-unit hex still shows the picker; the pick itself is gated).
+      if (!this._tutorialCanSelect(entity)) return;
       if (entity === this._selectedEntity) {
         // Second tap → show popup; third tap → dismiss popup
         if (this._popupVisible) {
@@ -1923,6 +1935,16 @@ export class UIController {
         if (posChanged) { effectiveEntity.col = proj.col; effectiveEntity.row = proj.row; }
       }
     }
+    // A possessed ENEMY unit is ours to command this round — flip the proxy's
+    // owner to the commanding faction so target enumeration (battle/battle-hex,
+    // move blocking) points at ITS former allies, not ours. Prototype-preserving
+    // clone; the live entity (and resolution-time rules) keep the true owner.
+    if (this._planMode && entity.owner !== this._planFaction && this._canCommand(entity)) {
+      effectiveEntity = Object.setPrototypeOf(
+        { ...effectiveEntity, owner: this._planFaction },
+        Object.getPrototypeOf(entity)
+      );
+    }
 
     this.renderer.setSelection({
       entityId: entity.id,
@@ -1985,6 +2007,28 @@ export class UIController {
   }
 
   /**
+   * May the local commander (plan faction offline, myPlayerId online) issue
+   * orders to `entity` right now? The UI mirror of canCommandEntity()
+   * (src/effects.js): a POSSESSED unit obeys only its possessor — a possessed
+   * ENEMY unit becomes selectable/commandable here, while one of our own units
+   * possessed by the enemy drops to view-only until the effect expires.
+   */
+  _canCommand(entity) {
+    const state = this.state;
+    if (!state || !entity || !entity.alive || entity.isNpc) return false;
+    const ownerFilter = this._planMode ? this._planFaction : state.activePlayer;
+    const possessor = possessorOf(entity);
+    if (possessor != null) {
+      if (this.myPlayerId) return possessor === this.myPlayerId;
+      const p = (state.players ?? []).find(pl => pl.id === possessor);
+      return (p?.faction ?? possessor) === ownerFilter;
+    }
+    if (entity.owner !== ownerFilter) return false;
+    if (this.myPlayerId && entity.ownerId && entity.ownerId !== this.myPlayerId) return false;
+    return true;
+  }
+
+  /**
    * Return the list of alive entities the local player can control in the
    * current context, in a stable order (by id). Mirrors the owner filter used
    * by _handleSelection so the cycle/plan-panel lists match what tapping the
@@ -1993,19 +2037,31 @@ export class UIController {
   _getControllableUnits() {
     const state = this.state;
     if (!state) return [];
-    const ownerFilter = this._planMode ? this._planFaction : state.activePlayer;
-    const list = state.entities.filter(e => {
-      if (!e.alive || e.owner !== ownerFilter || e.isNpc) return false;
-      if (this.myPlayerId && e.ownerId && e.ownerId !== this.myPlayerId) return false;
-      return true;
-    });
+    const list = state.entities.filter(e => this._canCommand(e));
     list.sort((a, b) => String(a.id).localeCompare(String(b.id)));
     return list;
   }
 
+  /**
+   * Strict tutorial gating: may this unit be selected right now? Checks the
+   * conductor-published allowUnits type filter and — using ghost positions
+   * during planning — the allowHexes click allowlist, so Tab-cycling, plan-panel
+   * clicks, and lone-unit map clicks can't sidestep the scripted path (e.g.
+   * silently selecting the hero's ghost projected onto an allowed hex). Null
+   * allowlists (free play / dialog steps) gate nothing.
+   */
+  _tutorialCanSelect(entity) {
+    if (this.tutorialAllowedUnits && !this.tutorialAllowedUnits.has(entity.type)) return false;
+    if (this.tutorialAllowedHexes) {
+      const pos = (this._planMode && this._getProjectedPos(entity.id)) || entity;
+      if (!this.tutorialAllowedHexes.has(`${pos.col},${pos.row}`)) return false;
+    }
+    return true;
+  }
+
   /** Cycle the selected unit forward (+1) or backward (-1) through controllable units. */
   _cycleSelection(dir) {
-    const list = this._getControllableUnits();
+    const list = this._getControllableUnits().filter(e => this._tutorialCanSelect(e));
     if (list.length === 0) return;
     const currentId = this._selectedEntity?.id;
     let idx = list.findIndex(e => e.id === currentId);
@@ -2189,6 +2245,12 @@ export class UIController {
       // Highlight all adjacent non-river hexes as potential targets
       this._setTargetOverlay('battle-hex-targets', 'rgba(220,120,40,0.50)',
         this._awaitingTarget.hexTargets ?? []);
+    } else if (actionType === ActionType.POSSESS) {
+      this._setTargetOverlay('possess-targets', 'rgba(176,110,224,0.55)',
+        (this._awaitingTarget.possessTargets ?? []).map(t => ({ col: t.col, row: t.row })));
+    } else if (actionType === ActionType.TELEPORT) {
+      this._setTargetOverlay('teleport-targets', 'rgba(150,90,220,0.40)',
+        this._awaitingTarget.hexTargets ?? []);
     }
   }
 
@@ -2276,6 +2338,55 @@ export class UIController {
       else this._clearSelection();
       this._updateSidebar();
       this.onRedraw();
+
+    } else if (actionType === ActionType.POSSESS) {
+      const possessTargets = this._awaitingTarget.possessTargets ?? [];
+      const targetsAtHex = possessTargets.filter(t => t.col === hex.col && t.row === hex.row);
+      if (!targetsAtHex.length) return;
+
+      this._awaitingTarget = null;
+      this.renderer.clearOverlaysByLayer('highlight-disc');
+      this._addToPlan({ type: PlanActionType.POSSESS, entityId: actor.id, targetId: targetsAtHex[0].id });
+      if (actor.alive) this._selectEntity(actor);
+      else this._clearSelection();
+      this._updateSidebar();
+      this.onRedraw();
+
+    } else if (actionType === ActionType.MARCH) {
+      // Captain March destination pick — validate against the MARCH targets
+      // (same reachable set as MOVE), then queue a MARCH plan action. The
+      // ghost projection advances the co-located soldiers too.
+      const marchAction = this._validActions.find(a => a.type === ActionType.MARCH);
+      const isValidMarch = marchAction && marchAction.targets.some(t => t.col === hex.col && t.row === hex.row);
+      this._awaitingTarget = null;
+      this._clearTargetOverlays();
+      this.renderer.clearOverlaysByLayer('highlight-disc');
+      if (!isValidMarch) {
+        this._handleSelection(hex);
+        return;
+      }
+      this._addToPlan({ type: PlanActionType.MARCH, entityId: actor.id, toCol: hex.col, toRow: hex.row });
+      if (actor.alive) this._selectEntity(actor);
+      else this._clearSelection();
+      this._updateSidebar();
+      this.onRedraw();
+
+    } else if (actionType === ActionType.TELEPORT) {
+      const hexTargets = this._awaitingTarget.hexTargets ?? [];
+      if (!hexTargets.some(t => t.col === hex.col && t.row === hex.row)) return;
+
+      this._awaitingTarget = null;
+      this.renderer.clearOverlaysByLayer('highlight-disc');
+      this._addToPlan({ type: PlanActionType.TELEPORT, entityId: actor.id, targetCol: hex.col, targetRow: hex.row });
+      if (actor.alive) this._selectEntity(actor);
+      else this._clearSelection();
+      // Flash the landing clump AFTER reselection so the player sees exactly
+      // which hexes the seeded arrival can land on (cleared by the next
+      // selection/highlight refresh).
+      const clump = getTeleportClump(this.state, actor, hex.col, hex.row);
+      this._setTargetOverlay('teleport-clump', 'rgba(190,140,255,0.55)', clump);
+      this._updateSidebar();
+      this.onRedraw();
     }
   }
 
@@ -2316,8 +2427,7 @@ export class UIController {
       return;
     }
 
-    const ownerCheck = this._planMode ? this._planFaction : state.activePlayer;
-    if (!entity || entity.owner !== ownerCheck || entity.isNpc || state.gameOver) {
+    if (!entity || !this._canCommand(entity) || state.gameOver) {
       hideActionPopup(this);
       return;
     }
@@ -2337,6 +2447,14 @@ export class UIController {
         effectiveEntity = applyProjectedEquip(entity, weaponChanged ? projWeapon : null);
         if (posChanged) { effectiveEntity.col = proj.col; effectiveEntity.row = proj.row; }
       }
+    }
+    // Possessed enemy unit — command it from OUR side's perspective (see the
+    // matching flip in _selectEntity).
+    if (this._planMode && entity.owner !== this._planFaction && this._canCommand(entity)) {
+      effectiveEntity = Object.setPrototypeOf(
+        { ...effectiveEntity, owner: this._planFaction },
+        Object.getPrototypeOf(entity)
+      );
     }
     const actions = getValidActions(state, effectiveEntity);
 
@@ -2359,15 +2477,40 @@ export class UIController {
     // Groups: scout, defense, summon, combat, items
     const arcItems = [];
 
+    // Strict tutorial gating: non-whitelisted commands stay VISIBLE but
+    // disabled — the menu keeps its shape so the player learns where every
+    // command lives, without a stray command derailing the scripted plan.
+    // (Move/attack stay available as hex clicks. Null = no restriction.)
+    const _tutLocked = (type) =>
+      !!(this.tutorialAllowedActions && !this.tutorialAllowedActions.has(type));
+
     for (const action of actions) {
-      // Strict tutorial gating: only whitelisted actions appear in the arc menu
-      // (move/attack stay available as hex clicks). Null = no restriction.
-      if (this.tutorialAllowedActions && !this.tutorialAllowedActions.has(action.type)) continue;
-      const dis = !hasAct;
+      const tutorialLocked = _tutLocked(action.type);
+      const dis = !hasAct || tutorialLocked;
       switch (action.type) {
         case ActionType.MOVE:
         case ActionType.BATTLE:
           break; // handled via hex clicks
+        case ActionType.MARCH: {
+          const n = action.passengers ?? 0;
+          arcItems.push({ group: 'scout', label: 'March',
+            fullLabel: `March — move and bring ${n} soldier${n === 1 ? '' : 's'} on this hex along (1 action)`,
+            desc: 'Move; every soldier on this hex marches to the destination with the captain. Overflow soldiers hold position.',
+            color: '#7eccd6', dis, cost: 1, attrs: 'data-action="march"' });
+          break;
+        }
+        case ActionType.BUILD_SIEGE: {
+          const siegeInv  = projInv ? projInv.hero : state.inventory.hero;
+          const canAfford = getItemCountOf(siegeInv, ResourceType.WOOD)  >= SIEGE_WOOD_COST &&
+                            getItemCountOf(siegeInv, ResourceType.METAL) >= SIEGE_METAL_COST;
+          arcItems.push({ group: 'defense', label: 'Build Catapult',
+            fullLabel: `Build Catapult — assemble an immobile siege engine (range 4) on an adjacent hex (1 action, ${SIEGE_WOOD_COST} wood + ${SIEGE_METAL_COST} metal)`,
+            desc: 'Assemble an immobile catapult beside the captain. It hurls stones up to 4 hexes but can never move.',
+            color: '#e0a832', dis: !canAfford || dis, cost: 1,
+            resCost: `${SIEGE_WOOD_COST} ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.WOOD])} ${SIEGE_METAL_COST} ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.METAL])}`,
+            attrs: 'data-action="build_siege"' });
+          break;
+        }
         case ActionType.EXPLORE:
           arcItems.push({ group: 'scout', label: 'Explore', fullLabel: 'Explore tile — search for resources, loot, or hidden survivors (1 action)',
             desc: 'Search this tile for resources, loot, or hidden survivors.',
@@ -2468,10 +2611,23 @@ export class UIController {
             label: abilityLabels[action.ability] || 'Ability',
             fullLabel: fullLabels[action.ability] || 'Use Ability',
             desc: ABILITIES[action.ability]?.description ?? '',
-            color: '#88eeff', dis: !isFree && dis, free: isFree, cost: isFree ? 0 : 1,
+            // Free abilities skip the budget gate but never the tutorial gate.
+            color: '#88eeff', dis: (!isFree && dis) || tutorialLocked, free: isFree, cost: isFree ? 0 : 1,
             attrs: `data-action="use_ability" data-ability="${action.ability}"` });
           break;
         }
+        case ActionType.POSSESS:
+          arcItems.push({ group: 'combat', label: 'Possess',
+            fullLabel: `Possess (enemy unit within ${POSSESS_RANGE})`,
+            desc: 'Seize an enemy unit\'s will — next round you command it and its master cannot. Leaders are immune. Fades after one round.',
+            color: '#b06ee0', dis, cost: 1, attrs: 'data-action="possess"' });
+          break;
+        case ActionType.TELEPORT:
+          arcItems.push({ group: 'combat', label: 'Teleport',
+            fullLabel: `Teleport (up to ${TELEPORT_RANGE} hexes, inexact)`,
+            desc: 'Fold through shadow toward a chosen hex — you arrive somewhere in that area, not exactly where you aimed.',
+            color: '#b06ee0', dis, cost: 1, attrs: 'data-action="teleport"' });
+          break;
         case ActionType.SENT_TO:
           // Multiplayer free action on the SURVIVOR — getValidActions only
           // surfaces this when the survivor has a live owning leader AND
@@ -2480,7 +2636,7 @@ export class UIController {
           // leader). Free, mirrors USE_ITEM / EQUIP_WEAPON styling.
           arcItems.push({ group: 'items', label: 'Send To…', fullLabel: 'Send To… — hand off to another leader on your faction',
             desc: 'Hand this survivor over to another leader on your faction. Free.',
-            color: '#b0b0b0', dis: false, free: true, cost: 0,
+            color: '#b0b0b0', dis: tutorialLocked, free: true, cost: 0,
             attrs: 'data-action="sent_to"' });
           break;
       }
@@ -2504,17 +2660,42 @@ export class UIController {
           .getSummonOptions({ [ResourceType.METAL]: { count: 99 }, [ResourceType.WOOD]: { count: 99 } })
           .map(o => o.summonType)
       );
+      // Any-resource summon cost comes from the concrete faction (witch 2,
+      // brute/necromancer 1) so labels + grey-outs track the real economics.
+      // Raise Dead greys ONLY on affordability: a corpse in reach is a
+      // positioning perk (the zombie rises at its death hex), never a
+      // prerequisite — with no grave nearby a fresh zombie claws up beside
+      // the caster, so the option always stays live.
+      const anyCost = concreteFactionOf(entity).getMinionCost();
+      const anyRes  = `${anyCost} res`;
       const ALL_SUMMONS = [
         { st: EntityType.IRON_GOLEM, label: 'Summon Iron Golem',  full: 'Summon Iron Golem (2 metal)',  afford: projMetal >= 2, res: `2 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.METAL])}` },
         { st: EntityType.WOOD_GOLEM, label: 'Summon Wood Golem', full: 'Summon Wood Golem (2 wood)',   afford: projWood >= 2, res: `2 ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.WOOD])}` },
-        { st: EntityType.MINION,     label: 'Summon Minion',      full: 'Summon Minion (2 any resource)', afford: projTotal >= 2, res: '2 res' },
+        { st: EntityType.ZOMBIE,     label: 'Raise Dead',         full: `Raise Dead — Zombie at a corpse within 3, or fresh nearby (${anyCost} any resource)`, afford: projTotal >= anyCost, res: anyRes },
+        { st: EntityType.SKELETON,   label: 'Summon Skeleton',    full: `Summon Skeleton — appears nearby (${anyCost} any resource)`, afford: projTotal >= anyCost, res: anyRes },
+        { st: EntityType.MINION,     label: 'Summon Minion',      full: `Summon Minion (${anyCost} any resource)`, afford: projTotal >= anyCost, res: anyRes },
       ];
       for (const s of ALL_SUMMONS) {
         if (!allowedSummons.has(s.st)) continue;
         arcItems.push({ group: 'summon', label: s.label, fullLabel: s.full,
-          color: '#9b59b6', dis: !s.afford || !hasAct, cost: 1, resCost: s.res,
+          color: '#9b59b6', dis: !s.afford || !hasAct || _tutLocked(ActionType.SUMMON), cost: 1, resCost: s.res,
           attrs: `data-action="summon" data-summon-type="${s.st}"` });
       }
+    }
+
+    // Day-side summoner (Captain): CALL REINFORCEMENTS — one action,
+    // 2 food, 2 soldiers muster on/beside the captain. Gated on the SUMMON
+    // valid action (only leaders with the innate 'summon' ability get one),
+    // so paladin/rogue leaders never see it.
+    if (isLeaderType(entity.type) && entity.owner === 'hero' && actions.some(a => a.type === ActionType.SUMMON)) {
+      const projHero = projInv ? projInv.hero : state.inventory.hero;
+      const projFood = getItemCountOf(projHero, ResourceType.FOOD);
+      arcItems.push({ group: 'summon', label: 'Call Reinforcements',
+        fullLabel: `Call Reinforcements — ${CAPTAIN_REINFORCEMENT_COUNT} soldiers muster beside the captain (1 action, ${CAPTAIN_REINFORCEMENT_COST} food)`,
+        desc: `${CAPTAIN_REINFORCEMENT_COUNT} soldiers muster on or beside the captain.`,
+        color: '#3f78c4', dis: projFood < CAPTAIN_REINFORCEMENT_COST || !hasAct || _tutLocked(ActionType.SUMMON), cost: 1,
+        resCost: `${CAPTAIN_REINFORCEMENT_COST} ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.FOOD])}`,
+        attrs: `data-action="summon" data-summon-type="${EntityType.SOLDIER}"` });
     }
 
     if (arcItems.length === 0) {
@@ -2905,11 +3086,13 @@ export class UIController {
 
     const GLYPHS = {
       hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003',
-      zombie: '\uE005', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007',
+      zombie: '\uE005', skeleton: '\uE00D', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007',
+      catapult: '\uE0B9',
     };
     const COLORS = {
       hero: '#d4a72c', witch: '#9b59b6', survivor: '#4caf7d', soldier: '#3f78c4',
-      zombie: '#7c9a57', minion: '#c0392b', wood_golem: '#8B5E3C', iron_golem: '#607D8B',
+      zombie: '#7c9a57', skeleton: '#c9c4ae', minion: '#c0392b', wood_golem: '#8B5E3C', iron_golem: '#607D8B',
+      catapult: '#8a7a5c',
     };
 
     const glyph = GLYPHS[entity.type] ?? '?';
@@ -2954,9 +3137,7 @@ export class UIController {
 
     // Cycle arrows — only when viewing a controllable friendly unit and there
     // are multiple controllable units to cycle between.
-    const ownerFilter = this._planMode ? this._planFaction : this.state.activePlayer;
-    const isMine = entity.owner === ownerFilter &&
-      (!this.myPlayerId || !entity.ownerId || entity.ownerId === this.myPlayerId);
+    const isMine = this._canCommand(entity);
     const showCycle = isMine && !this._isEnemySelection
       && this._getControllableUnits().length > 1;
     const cyclePrevHtml = showCycle
@@ -3283,6 +3464,7 @@ export class UIController {
       const labels = {
         [ActionType.BATTLE]:     'Tap an enemy to attack',
         [ActionType.BATTLE_HEX]: 'Tap a hex to attack (skips if empty)',
+        [ActionType.MARCH]:      'Tap a destination — soldiers here march along',
       };
       hint.textContent = labels[this._awaitingTarget.actionType] ?? '';
     }
@@ -3427,7 +3609,7 @@ export class UIController {
     }
 
     if (!entity || !this._planMode) return;
-    if (entity.owner !== this._planFaction) return;
+    if (!this._canCommand(entity)) return;
 
     // Stackable actions: keep the arc menu open, just pulse the button
     const STACKABLE = new Set(['guard', 'summon', 'fortify']);
@@ -3498,6 +3680,29 @@ export class UIController {
         break;
       }
 
+      case 'march': {
+        // Destination picker — mirrors attack_hex: highlight the march
+        // targets and wait for a hex click (_handleTargetClick MARCH branch).
+        delayedHide();
+        const marchAction = this._validActions.find(a => a.type === ActionType.MARCH);
+        const marchTargets = marchAction?.targets ?? [];
+        this._awaitingTarget = { actionType: ActionType.MARCH, actor: entity };
+        this._clearTargetOverlays();
+        this._setTargetOverlay('march-targets', 'rgba(126,204,214,0.50)', marchTargets);
+        state.addLog('Click a destination — soldiers on this hex march along.');
+        this._updateSidebar();
+        this.onRedraw();
+        break;
+      }
+
+      case 'build_siege': {
+        this._addToPlan({ type: PlanActionType.BUILD_SIEGE, entityId: entity.id });
+        delayedHide();
+        if (entity.alive) this._selectEntity(entity);
+        else this._clearSelection();
+        this._updateSidebar(); this.onRedraw(); break;
+      }
+
       case 'attack_hex': {
         delayedHide();
         const bhAction = this._validActions.find(a => a.type === ActionType.BATTLE_HEX);
@@ -3506,6 +3711,33 @@ export class UIController {
         this._clearTargetOverlays();
         this._setTargetOverlay('battle-hex-targets', 'rgba(220,120,40,0.50)', hexTargets);
         state.addLog('Click a hex to attack it (skips if empty).');
+        this._updateSidebar();
+        this.onRedraw();
+        break;
+      }
+
+      case 'possess': {
+        delayedHide();
+        const pAction = this._validActions.find(a => a.type === ActionType.POSSESS);
+        const possessTargets = pAction?.targets ?? [];
+        this._awaitingTarget = { actionType: ActionType.POSSESS, actor: entity, possessTargets };
+        this._clearTargetOverlays();
+        this._setTargetOverlay('possess-targets', 'rgba(176,110,224,0.55)',
+          possessTargets.map(t => ({ col: t.col, row: t.row })));
+        state.addLog('Click an enemy unit to possess it (leaders are immune).');
+        this._updateSidebar();
+        this.onRedraw();
+        break;
+      }
+
+      case 'teleport': {
+        delayedHide();
+        const tAction = this._validActions.find(a => a.type === ActionType.TELEPORT);
+        const hexTargets = tAction?.targets ?? [];
+        this._awaitingTarget = { actionType: ActionType.TELEPORT, actor: entity, hexTargets };
+        this._clearTargetOverlays();
+        this._setTargetOverlay('teleport-targets', 'rgba(150,90,220,0.40)', hexTargets);
+        state.addLog('Click a hex to warp toward — the arrival inside that area is inexact.');
         this._updateSidebar();
         this.onRedraw();
         break;
@@ -3895,17 +4127,20 @@ export class UIController {
   /**
    * Itemised action budget for the current planning faction: the source `parts`
    * (for the colour-coded pips), human-readable `rows` (for the tooltip), the
-   * capped `total`, and the spare-`food` count. Uses the SAME faction math the
-   * game uses for the budget (Faction.computeBudgetBreakdown), so the pips/total
-   * always match `_planBudget`.
+   * capped `total`, and the spare-`food` count. Resolves the faction through the
+   * live leader (budgetFactionFor) and uses the SAME faction math the game uses
+   * for the budget (Faction.computeBudgetBreakdown), so stub-faction overrides
+   * (captain: base 4 / cap 8) apply and the pips/total always match `_planBudget`.
    */
   _computeActionBudget() {
     const faction    = this._planFaction;
-    const factionObj = getFaction(faction);
+    const entities   = this.state.entities;
+    // Concrete faction via the live leader — a captain game must show base 4 /
+    // cap 8 and count extras against CAPTAIN, exactly like computeActions().
+    const factionObj = budgetFactionFor(entities, faction);
     const phase      = this.state.phase;
     const phaseIcon  = PHASE_ICON[phase] ?? '';
     const phaseLabel = phase ? phase.charAt(0).toUpperCase() + phase.slice(1) : '';
-    const entities   = this.state.entities;
     const stash      = faction === 'hero' ? this.state.inventory?.hero : this.state.inventory?.witch;
     const food       = getItemCountOf(stash, 'food');
 
@@ -4081,7 +4316,7 @@ export class UIController {
     const dialog = this._el('encounter-dialog');
     const card   = this._el('encounter-card');
 
-    const GLYPHS = { hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003', zombie: '\uE005', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007' };
+    const GLYPHS = { hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003', zombie: '\uE005', skeleton: '\uE00D', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007', catapult: '\uE0B9' };
     const glyph  = GLYPHS[encounterUnit.type] ?? '?';
     const color  = encounterUnit.color || '#d4c9b0';
 
@@ -5289,26 +5524,26 @@ export class UIController {
           }
         }
 
-        // Reckoning section at dawn/dusk (skip when scoring is disabled, e.g. campaign missions)
+        // Reckoning section for the round just fought, when it was a dawn/dusk
+        // scoring checkpoint (skip when scoring is disabled, e.g. campaign
+        // missions). Scoring now happens at the END of the dawn/dusk round, so
+        // state.phase has already advanced — key on the FOUGHT round's phase,
+        // derived from its round number, not the live phase.
         const state = this.state;
-        if (!state.disableScoring && prevScore && (state.phase === 'dawn' || state.phase === 'dusk')) {
-          const heroDelta  = state.nodeScore.hero  - prevScore.hero;
-          const witchDelta = state.nodeScore.witch - prevScore.witch;
+        const foughtPhase = phaseForRound(roundNum, state.cycleConfig);
+        if (!state.disableScoring && prevScore && (foughtPhase === 'dawn' || foughtPhase === 'dusk')) {
           const witchCount = state.witchObjectives.filter(obj =>
             nodeController(obj, state.entities) === 'witch').length;
           const heroCount = state.witchObjectives.filter(obj =>
             nodeController(obj, state.entities) === 'hero').length;
 
-          const phaseLabel = state.phase === 'dawn' ? '\uE020 Dawn Reckoning' : '\uE022 Dusk Reckoning';
+          const phaseLabel = foughtPhase === 'dawn' ? '\uE020 Dawn Reckoning' : '\uE022 Dusk Reckoning';
 
-          let reckoningLine;
-          if (witchDelta > 0) {
-            reckoningLine = `Witch holds ${witchCount} Power Node${witchCount !== 1 ? 's' : ''} to Hero's ${heroCount}. Witch scores 1 victory point.`;
-          } else if (heroDelta > 0) {
-            reckoningLine = `Hero holds ${heroCount} Power Node${heroCount !== 1 ? 's' : ''} to Witch's ${witchCount}. Hero scores 1 victory point.`;
-          } else {
-            reckoningLine = `Nodes tied ${heroCount}–${witchCount}. No points scored.`;
-          }
+          const reckoningLine = reckoningText({
+            heroDelta:  state.nodeScore.hero  - prevScore.hero,
+            witchDelta: state.nodeScore.witch - prevScore.witch,
+            heroCount, witchCount,
+          });
 
           const pip = (filled, cls) =>
             `<span class="score-pip ${cls}${filled ? ' filled' : ''}"></span>`;
@@ -6340,7 +6575,7 @@ export class UIController {
    * @param {object} opts { titleHtml, bodyHtml, canReplay }
    * @returns {Promise<'next'|'replay'>}
    */
-  showReplayWrapUp({ titleHtml = 'Turn Complete', combats = [], discoveries = [], loot = [], attrition = [], attritionLevel = 0, canReplay = true, humanFaction = null } = {}) {
+  showReplayWrapUp({ titleHtml = 'Turn Complete', combats = [], discoveries = [], loot = [], attrition = [], attritionLevel = 0, reckoning = null, canReplay = true, humanFaction = null } = {}) {
     // Remember whose units the local player controls so a board click on one of
     // them can dismiss this wrap-up as Continue. Falls back to state.myFaction
     // (set for online/async) when not passed explicitly.
@@ -6357,7 +6592,7 @@ export class UIController {
     card.setAttribute('data-step', 'wrapup');
     card.innerHTML =
       `<div class="replay-step-label">${titleHtml}</div>`
-      + `<div class="replay-wrapup-body">${this._buildWrapUpBody(combats, attritionLevel, discoveries, loot, attrition)}</div>`
+      + `<div class="replay-wrapup-body">${this._buildWrapUpBody(combats, attritionLevel, discoveries, loot, attrition, reckoning)}</div>`
       + `<div class="replay-wrapup-actions">${replayBtn}`
       + `<button class="replay-wrapup-btn primary" data-act="next">Continue ▸</button></div>`;
     track.appendChild(card);
@@ -6395,7 +6630,7 @@ export class UIController {
    * skull) beneath each unit, plus the node-score dots reused from the bottom
    * score bar.
    */
-  _buildWrapUpBody(combats, attritionLevel = 0, discoveries = [], loot = [], attrition = []) {
+  _buildWrapUpBody(combats, attritionLevel = 0, discoveries = [], loot = [], attrition = [], reckoning = null) {
     const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const iconFor = (u, size, cls) => {
       const assetId = _entityPortraitId({ type: u.type, title: u.title });
@@ -6462,6 +6697,11 @@ export class UIController {
         + `<div class="wrapup-attr-rows">${rows}</div></div>`;
     }
 
+    // Power Node reckoning callout — names the victory point scored this round
+    // (or the tie). Sits just above the score dots so the "why" reads into the
+    // updated track. Empty string on non-scoring rounds.
+    const reckoningHtml = buildWrapupReckoningHtml(reckoning);
+
     let scoreHtml = '';
     if (this.state?.witchObjectives) {
       const { html } = buildObjectivesHtml(
@@ -6475,7 +6715,7 @@ export class UIController {
       attritionHtml = `<div class="wrapup-attrition">${ICON.night} The curse deepens — exposed survivors `
         + `now take <b>${attritionLevel}</b> damage each night.</div>`;
     }
-    return attritionHtml + combatHtml + foundHtml + lootHtml + attritionListHtml + scoreHtml;
+    return attritionHtml + combatHtml + foundHtml + lootHtml + attritionListHtml + reckoningHtml + scoreHtml;
   }
 
   /** Show the prev/next scrub arrows above the active card. */
@@ -6657,7 +6897,7 @@ function _entityPortraitId(snap) {
  * @param {number}  [opts.portraitSize] Portrait diameter in px (default 36).
  */
 function _unitCardHTML(entity, { renderer = null, selectable = false, showStats = true, portraitSize = 36 } = {}) {
-  const GLYPHS = { hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003', zombie: '\uE005', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007' };
+  const GLYPHS = { hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003', zombie: '\uE005', skeleton: '\uE00D', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007', catapult: '\uE0B9' };
   const color  = ENTITY_COLOR[entity.type] || '#888';
   const glyph  = GLYPHS[entity.type] ?? '?';
   const label  = (entity.type === 'survivor' && entity.name) ? entity.name

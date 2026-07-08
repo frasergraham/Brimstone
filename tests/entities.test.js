@@ -99,11 +99,13 @@ describe('Base stats — Iron Golem', () => {
 });
 
 describe('Base stats — Soldier (day-side grunt)', () => {
-  test('HP=14, ATK=1, DEF=1, owner=hero, tagged living/soldier/summoned', () => {
+  test('HP=14, ATK=1, DEF=0 (exact minion mirror), owner=hero, tagged living/soldier/summoned', () => {
     const s = createSoldier(0, 0);
     assert.equal(s.maxHp, 14);
     assert.equal(s.attack, 1);
-    assert.equal(s.defense, 1);
+    // DEF 1 → 0 with the captain-AI March/catapult work: the soldier now
+    // matches the minion it mirrors (see unit-types.js).
+    assert.equal(s.defense, 0);
     assert.equal(s.owner, 'hero');
     assert.equal(s.type, EntityType.SOLDIER);
     assert.equal(s.hasTag('living'),    true);

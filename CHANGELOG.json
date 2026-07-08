@@ -1,5 +1,34 @@
 [
   {
+    "version": "1.11.0",
+    "date": "2026-07-08",
+    "summary": "New features, and bug fixes",
+    "notes": [
+      "Unlock Captain and Necromancer in the skirmish/online pickers",
+      "Teach the hero AI to play the Captain — MARCH, catapult fire, BUILD_SIEGE",
+      "Teach the witch AI to play the necromancer — cost-aware summons, POSSESS, TELEPORT",
+      "Per-seat faction lists for --day/--night + leader-fate tally",
+      "Complete the Captain faction — reinforcements, March, siege catapult",
+      "Complete the Necromancer — RAISE DEAD, POSSESS, TELEPORT, skeleton unit",
+      "Unstick the Learn to Play tutorial and align its guidance with what the player must click",
+      "Five follow-ups from the necromancer/captain AI reviews",
+      "Operator feedback — captain horn veto, march passenger arrows, corpse-less raise dead",
+      "Soldier unit art — tilemap sprite via the Scenario pipeline",
+      "Review fixes — budget badge, immobile contracts, balance disclosure",
+      "Address review — online RAISE DEAD parity + faction-aware summon projection",
+      "Honor the clamped node count on cramped maps via spacing relaxation",
+      "Track survivor deaths between missions (permadeath was silently no-opping)",
+      "The dev-workflow skills in CLAUDE.md",
+      "Dev-workflow skills; remove unused supervise command",
+      "Power nodes at the END of dawn/dusk rounds + reckoning callout (#432)",
+      "Sync package-lock version to 1.10.0",
+      "Faction-matrix — mixed-comp NvN balance experiment methodology",
+      "Godot engine migration plan — embedded JS runtime architecture (#433)",
+      "Add implementation-grade game/AI/client specifications",
+      "Catch the UI suite up to the icon font + party-slot redesign"
+    ]
+  },
+  {
     "version": "1.10.0",
     "date": "2026-06-24",
     "summary": "New features, and bug fixes",

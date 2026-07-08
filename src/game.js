@@ -6,7 +6,7 @@ import { BuildingType, ResourceType, hasBuilding, isRiver } from './tiles.js';
 import { hexKey, hexDistance, getNeighbors, setMapDimensions, MAP_COLS, MAP_ROWS } from './hex.js';
 import { applyPostRoundEffects, attritionForCycle } from './post-round-effects.js';
 import { sightRange, computeLineOfSight, hasLineOfSight } from './actions.js';
-import { getFaction, allFactions, getFactionsForSide, sightRangeForEntity, isPlaceableTile } from './factions.js';
+import { getFaction, allFactions, getFactionsForSide, sightRangeForEntity, isPlaceableTile, concreteFactionOf } from './factions.js';
 import { allSides } from './sides.js';
 
 /**
@@ -105,9 +105,24 @@ export const Player = Object.freeze({ HERO: 'hero', WITCH: 'witch' });
 // Hero  — base 3 + 1 in DAWN/DAY + 1 per survivor (cap +5) + 1 per held power node; hard cap 8
 // Witch — base 3 + 1 in NIGHT + 1 per unit (cap +3) + 1 per held power node; hard cap 10
 export function computeActions(player, phase, entities, nodeBonus = 0) {
-  const faction    = getFaction(player);
-  const extras     = entities.filter(e => e.alive && e.owner === faction.id && e.type !== faction.leaderType).length;
+  const faction    = budgetFactionFor(entities, player);
+  const extras     = entities.filter(e => e.alive && e.owner === player && e.type !== faction.leaderType).length;
   return faction.computeBudget(phase, extras, nodeBonus);
+}
+
+/**
+ * Budget-relevant faction: stub-faction leaders carry their own budget
+ * overrides (captain: base 4 / cap 8) on the CONCRETE faction class, so
+ * budgets must resolve through the live leader's factionId rather than the
+ * side owner string. Falls back to the side faction when no live leader
+ * matches (e.g. leader just died — game is ending anyway).
+ */
+export function budgetFactionFor(entities, faction, playerId = null) {
+  const leader = entities.find(e =>
+    e.alive && e.owner === faction && isLeaderType(e.type) &&
+    (playerId === null || e.ownerId === playerId)
+  );
+  return leader ? concreteFactionOf(leader) : getFaction(faction);
 }
 
 /**
@@ -115,7 +130,7 @@ export function computeActions(player, phase, entities, nodeBonus = 0) {
  * Counts only entities owned by that player (ownerId match), not the whole faction.
  */
 export function computeActionsForPlayer(playerId, faction, phase, entities, nodeBonus = 0) {
-  const factionObj = getFaction(faction);
+  const factionObj = budgetFactionFor(entities, faction, playerId);
   const extras = entities.filter(
     e => e.alive && e.ownerId === playerId && e.type !== factionObj.leaderType
   ).length;
@@ -292,6 +307,26 @@ export class GameState {
     this.witchKills       = 0; // entities killed by witch side (combat + hazards)
     this.witchSummonCount = 0; // total summons performed by witch side
     this.heroRevealedByHorn = false; // true when hero sounded horn this round
+
+    // ── Casualty ledger ──────────────────────────────────────────────────────
+    // Combat/effects splice a dead entity out of `this.entities` the instant it
+    // dies, so a post-mission scan of the board can't find a corpse. The campaign
+    // permadeath reconcile (drop the dead survivor + their gear from the roster)
+    // and the Fallen memorial both need to KNOW who died — this ledger records a
+    // lightweight snapshot of each fallen survivor at the moment of death (see
+    // recordCasualty). Plain JSON so it round-trips through state-sync for a
+    // mid-mission resume. Survivor-only; empty for skirmish/online (never read).
+    this.casualties = [];
+
+    // ── Death-location ledger (Necromancer RAISE DEAD) ───────────────────────
+    // Every entity death records where the body fell — combat kills, counter
+    // kills, splash, DOT ticks, and night attrition all call
+    // recordDeathLocation() the moment the entity is spliced out of `entities`.
+    // The necromancer's RAISE DEAD reads this to find raisable corpses (leaders
+    // are recorded but can never be raised); a raised corpse is flagged
+    // `consumed` in place so it can't rise twice. Plain JSON; serialized via
+    // state-sync so online play and mid-game resume keep the graves.
+    this.deathLocations = [];
 
     // Cumulative node scoring: each dawn/dusk majority scores 1 point; first to 4 wins.
     this.nodeScore = { hero: 0, witch: 0 };
@@ -610,13 +645,61 @@ export class GameState {
     if (sideId === 'night') this.witchKills += n;
   }
 
+  /**
+   * Record a survivor's death into the casualty ledger before it is spliced out
+   * of `entities`. Safe to call at every death site — non-survivors are ignored
+   * and an already-recorded id is deduped, so a single blow that both removes and
+   * (e.g.) splashes the same unit can't double-count. The snapshot carries every
+   * field reconcileRosterAfterMission / collectFallenAfterMission read off a live
+   * entity (type/isNpc/owner gate the faction filter; name/title/level surface in
+   * the memorial), with `alive:false` so a union with the live board treats it
+   * exactly as if the corpse were still present.
+   */
+  recordCasualty(entity) {
+    if (!entity || entity.type !== EntityType.SURVIVOR) return;
+    if (this.casualties.some(c => c.id === entity.id)) return;
+    this.casualties.push({
+      id:    entity.id,
+      name:  entity.name,
+      title: entity.title ?? null,
+      level: entity.level || 1,
+      type:  entity.type,
+      isNpc: !!entity.isNpc,
+      owner: entity.owner,
+      alive: false,
+    });
+  }
+
+  /**
+   * Record where an entity died — the Necromancer's RAISE DEAD corpse pool.
+   * Called at every death site alongside recordCasualty() (which is the
+   * campaign-permadeath, survivor-only ledger; this one records EVERY death).
+   * Deduped by entity id so a blow that both removes and splashes the same
+   * unit can't leave two graves. `consumed` is stamped by executeSummon when
+   * a corpse is raised.
+   */
+  recordDeathLocation(entity) {
+    if (!entity || !entity.id) return;
+    if (this.deathLocations.some(d => d.id === entity.id)) return;
+    this.deathLocations.push({
+      id:      entity.id,
+      type:    entity.type,
+      owner:   entity.owner,
+      ownerId: entity.ownerId ?? null,
+      col:     entity.col,
+      row:     entity.row,
+      round:   this.round,
+    });
+  }
+
   /** Cumulative summons performed by the given side. (Day side: 0 today.) */
   summonsForSide(sideId)     { return sideId === 'night' ? this.witchSummonCount : 0; }
 
   /** Increment the summon counter for the given side by `n` (default 1). */
   recordSummonForSide(sideId, n = 1) {
     if (sideId === 'night') this.witchSummonCount += n;
-    // Day side has no summon mechanic today — counter is not tracked.
+    // Day-side summons (captain CALL REINFORCEMENTS) route through here as a
+    // deliberate no-op — only night-side summons feed witchSummonCount.
   }
 
   /** Cumulative node-scoring points held by the given side. */
@@ -907,25 +990,25 @@ export class GameState {
         this.addLog(`${ICON.dawn} A new dawn — cycle ${cycle}.`);
       }
       for (const [, t] of this.tiles) t.explored = false;
-      if (!this.disableScoring) this._checkNodeObjectives(Phase.DAWN);
-    }
-    if (this.phase === Phase.DUSK) {
-      if (!this.disableScoring) this._checkNodeObjectives(Phase.DUSK);
     }
 
-    // Mission opt-in: score on additional phases (e.g. NIGHT for "prolonged
-    // night" missions). Inert when cycleConfig is absent or doesn't list extras.
-    const extraScoring = this.cycleConfig?.extraScoringPhases;
-    if (extraScoring && !this.disableScoring
-        && this.phase !== Phase.DAWN && this.phase !== Phase.DUSK
-        && extraScoring.includes(this.phase)) {
-      this._checkNodeObjectives(this.phase);
-    }
-
-    // Battle mode: score every round (not just dawn/dusk)
-    if (this.gameMode === GameMode.BATTLE && !this.disableScoring
-        && this.phase !== Phase.DAWN && this.phase !== Phase.DUSK) {
-      this._checkBattleNodeScoring();
+    // Node scoring is evaluated at the END of a scoring round, reading the final
+    // unit positions for the round that just resolved (`prevPhase`). `this.phase`
+    // has already advanced to the upcoming round above, so we key the checkpoint
+    // on `prevPhase` — holding the nodes when a dawn/dusk round ends is what
+    // scores, not merely standing on them as that round begins.
+    if (!this.disableScoring) {
+      const extraScoring = this.cycleConfig?.extraScoringPhases;
+      if (prevPhase === Phase.DAWN || prevPhase === Phase.DUSK) {
+        this._checkNodeObjectives(prevPhase);
+      } else if (extraScoring?.includes(prevPhase)) {
+        // Mission opt-in: score on additional phases (e.g. NIGHT for "prolonged
+        // night" missions). Inert when cycleConfig is absent or lists no extras.
+        this._checkNodeObjectives(prevPhase);
+      } else if (this.gameMode === GameMode.BATTLE) {
+        // Battle mode scores every round (not just dawn/dusk).
+        this._checkBattleNodeScoring();
+      }
     }
 
     // Campaign wave processor — runs BEFORE checkVictory so triggered spawns

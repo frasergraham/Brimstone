@@ -97,10 +97,11 @@ describe('full round — plan → resolve → finalizeRound', () => {
 
   test('dusk checkpoint scores a point for the side holding more nodes', () => {
     const state = freshState();
-    // Round 4 is the last DAY round; endRound advances to round 5 = DUSK,
-    // which triggers node scoring.
-    state.round = 4;
-    state.phase = Phase.DAY;
+    // Scoring is evaluated at the END of the DUSK round: round 5 is DUSK, and
+    // endRound advances to round 6 = NIGHT, scoring against the dusk round's
+    // final positions (prevPhase = DUSK).
+    state.round = 5;
+    state.phase = Phase.DUSK;
 
     const node = state.witchObjectives[0];
     state.hero.col = node.hexes[0].col;
@@ -108,16 +109,17 @@ describe('full round — plan → resolve → finalizeRound', () => {
     moveOffNodes(state, state.witch);
 
     state.finalizeRound();
-    assert.equal(state.phase, Phase.DUSK);
-    assert.equal(state.nodeScore.hero, 1, 'hero holding the only node scores at dusk');
+    assert.equal(state.phase, Phase.NIGHT);
+    assert.equal(state.nodeScore.hero, 1, 'hero holding the only node scores at end of dusk');
     assert.equal(state.nodeScore.witch, 0);
     assert.ok(!state.gameOver, 'one point should not end the game');
   });
 
   test('reaching the node-score threshold wins the game', () => {
     const state = freshState();
-    state.round = 4;
-    state.phase = Phase.DAY;
+    // End of the DUSK round (round 5) is the scoring checkpoint.
+    state.round = 5;
+    state.phase = Phase.DUSK;
     state.nodeScore.hero = state.nodeScoreThreshold - 1;
 
     const node = state.witchObjectives[0];
@@ -129,6 +131,42 @@ describe('full round — plan → resolve → finalizeRound', () => {
     assert.equal(state.nodeScore.hero, state.nodeScoreThreshold);
     assert.ok(state.gameOver, 'hitting the threshold should end the game');
     assert.equal(state.winner, 'hero');
+  });
+
+  test('scoring fires at the END of the dawn/dusk round, not on entry', () => {
+    // Holding the only node as the DAY→DUSK boundary is crossed (entering the
+    // dusk round) must NOT score — scoring is evaluated at the end of the dusk
+    // round itself. This is the regression guard for the timing change.
+    const state = freshState();
+    state.round = 4;            // last DAY round
+    state.phase = Phase.DAY;
+    const node = state.witchObjectives[0];
+    state.hero.col = node.hexes[0].col;
+    state.hero.row = node.hexes[0].row;
+    moveOffNodes(state, state.witch);
+
+    state.finalizeRound();      // advances to round 5 = DUSK
+    assert.equal(state.phase, Phase.DUSK);
+    assert.equal(state.nodeScore.hero, 0, 'entering dusk must not score');
+
+    // Now play through the DUSK round still holding the node — end-of-dusk scores.
+    state.finalizeRound();      // advances to round 6 = NIGHT, prevPhase = DUSK
+    assert.equal(state.phase, Phase.NIGHT);
+    assert.equal(state.nodeScore.hero, 1, 'end of dusk scores the held node');
+  });
+
+  test('the opening dawn round scores at its end (round 1 → 2)', () => {
+    const state = freshState();
+    assert.equal(state.round, 1);
+    assert.equal(state.phase, Phase.DAWN);
+    const node = state.witchObjectives[0];
+    state.hero.col = node.hexes[0].col;
+    state.hero.row = node.hexes[0].row;
+    moveOffNodes(state, state.witch);
+
+    state.finalizeRound();      // end of the opening dawn round
+    assert.equal(state.phase, Phase.DAY);
+    assert.equal(state.nodeScore.hero, 1, 'the dawn round scores against its end positions');
   });
 
   test('post-round state survives a serialize/deserialize round-trip', () => {

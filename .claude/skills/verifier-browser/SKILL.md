@@ -67,8 +67,20 @@ and optionally animating a **scripted** turn. Definition shape:
   pov: 'hero',                                  // hero side human-controlled — gives fog
                                                 // ('partial') a real observer; required to
                                                 // reproduce fog gating / card visibility
+  heroFaction: 'captain',                       // swap a side's leader to a concrete faction
+  witchFaction: 'brute',                        //   (rogue/captain/necromancer/brute)
+  inventory: { hero: { food: 4, wood: 4 } },    // seed the shared faction pools
+  planning: true,                               // enter a REAL hero planning phase after the
+                                                // reveal (arc popup / March targeting drivers);
+                                                // without it (and without resolve) the board
+                                                // is view-only
 }
 ```
+
+Hero-side `units` accept `type:'soldier'` / `type:'catapult'` (captain troops,
+placed as their real types); any other hero-side type spawns a recruited
+survivor. Plan steps additionally support `{ ref, march:[c,r] }`,
+`{ ref, summon:true|'<type>' }`, and `{ ref, buildSiege:true }`.
 
 `ref` labels a placed unit so a plan can target it; the leaders are pre-bound as
 `'hero'` / `'witch'`. Hero-side `units` spawn as recruited survivors (they can

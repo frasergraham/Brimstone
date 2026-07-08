@@ -6,6 +6,7 @@ import { hasBuilding, isRiver, tileCapacityRemaining } from './tiles.js';
 import { Entity, EntityType, isLeaderType, getItemCountOf, removeItemInItems } from './entities.js';
 import { Phase, computeActions, computeActionsForPlayer, nodeController, countHeldNodes } from './game.js';
 import { getReachableHexes, isFortBlocking } from './actions.js';
+import { concreteFactionOf } from './factions.js';
 
 // Hex-capacity check for AI pathfinders. Same gate as actions.isTileFullForMove
 // but inlined here so ai.js doesn't pull in the rest of actions.js machinery
@@ -256,6 +257,9 @@ export class PlanSimState {
       );
     }
     this._faction = faction;
+    // Kept for possession-command checks (canCommandEntity): multiplayer
+    // paths identify the commander by playerId, offline paths by faction.
+    this._playerId = playerId ?? null;
     this.campaignAIBudgetBonus = realState.campaignAIBudgetBonus ?? 0;
     this.aiDifficultyDelta = AI_DIFFICULTY_BUDGET_DELTA[realState.aiDifficulty] ?? 0;
     this.noWitchMission = !!realState.noWitchMission;
@@ -314,11 +318,14 @@ export class PlanSimState {
       type: EntityType.MINION, owner: this._faction,
       col, row, alive: true, hp: 2,
     });
-    // Spend 2 resources from faction inventory (drain largest stacks first)
+    // Spend the summoner's minion cost from faction inventory (drain largest
+    // stacks first). The price is faction-aware: witch 2, necromancer/brute 1
+    // (concreteFactionOf reads the leader's factionId, falling back to the
+    // side default when no leader is supplied).
     const inv = this.inventory[this._faction];
     const keys = Object.keys(inv).filter(k => getItemCountOf(inv, k) > 0)
       .sort((a, b) => getItemCountOf(inv, b) - getItemCountOf(inv, a));
-    let remaining = 2;
+    let remaining = leader ? concreteFactionOf(leader).getMinionCost() : 2;
     for (const k of keys) {
       const spend = Math.min(getItemCountOf(inv, k), remaining);
       removeItemInItems(inv, k, spend);
@@ -331,6 +338,27 @@ export class PlanSimState {
   applyGuard(entityId) {
     const e = this.entities.find(en => en.id === entityId);
     if (e) e.guarding = (e.guarding || 0) + 1;
+    this.actionsLeft--;
+  }
+
+  // Project a TELEPORT (necromancer): optimistic landing on the chosen center
+  // hex — real resolution scatters to a seeded-random clump member, but the
+  // center is the expected landing zone for planning purposes. Mirrors
+  // applyMove's node-departure tracking so anti-oscillation keeps working.
+  applyTeleport(entityId, toCol, toRow) {
+    const e = this.entities.find(en => en.id === entityId);
+    if (e) {
+      const wasOnNode = this.witchObjectives.some(obj => obj.col === e.col && obj.row === e.row);
+      if (wasOnNode) this._justLeft[entityId] = { col: e.col, row: e.row };
+      e.col = toCol; e.row = toRow;
+    }
+    this.actionsLeft--;
+  }
+
+  // Book a POSSESS (necromancer) — one action, no sim-visible state change:
+  // the payoff (a commandable thrall) only materialises NEXT round, when
+  // assessBoard reads the live `possessed` effect off the real entity.
+  applyPossess() {
     this.actionsLeft--;
   }
 

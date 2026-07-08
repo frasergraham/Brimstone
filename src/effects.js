@@ -97,6 +97,20 @@ export const EFFECTS = Object.freeze({
     blocksHeal: true,
     defaultDuration: 'mission',
   },
+  possessed: {
+    id: 'possessed',
+    label: 'Possessed',
+    icon: ICON.eye,
+    badge: 'O',
+    description: 'Controlled by the enemy this round — its true owner cannot command it',
+    // Who commands the unit is read off the record's `source` (the possessing
+    // player's ownerId) by canCommandEntity() below — the ownership gates in
+    // planner.validatePlan / resolver.runAction / the offline UI all consult it.
+    // Applied at RESOLUTION of round N with duration 2: the end-of-round-N tick
+    // decrements it to 1, so control covers round N+1's planning AND resolution
+    // and expires at N+1's end — exactly one full round in the possessor's hands.
+    defaultDuration: 2,
+  },
 
   // ── Positive ─────────────────────────────────────────────────────────────
   frenzied: {
@@ -261,6 +275,46 @@ export function effectsBlockHeal(entity) {
   return entity.effects.some(rec => EFFECTS[rec.id]?.blocksHeal);
 }
 
+/** The ownerId of the player currently possessing `entity`, or null. */
+export function possessorOf(entity) {
+  if (!entity || !Array.isArray(entity.effects)) return null;
+  const rec = entity.effects.find(r => r.id === 'possessed');
+  return rec?.source ?? null;
+}
+
+/**
+ * May the given commander issue orders to `entity` this round?
+ * The single control gate shared by planner.validatePlan (online plan
+ * submission), resolver.runAction (execution), and the offline UI's
+ * unit-selection path — so possession hands control to the possessor and
+ * strips it from the true owner in every mode identically.
+ *
+ * Pass exactly one of:
+ *   playerId — multiplayer path: the submitting player's UUID.
+ *   faction  — offline/legacy path: the commanding faction id.
+ *
+ * Rules: an unpossessed unit obeys its owner (ownerId / owner faction). A
+ * possessed unit obeys ONLY the possessor — identified by the effect record's
+ * `source` (the possessor's ownerId; offline synthetic ownerIds equal the
+ * faction id, and the players registry maps id → faction for the rest).
+ */
+export function canCommandEntity(state, entity, { playerId = null, faction = null } = {}) {
+  if (!entity) return false;
+  const possessorId = possessorOf(entity);
+  if (playerId != null) {
+    if (possessorId != null) return possessorId === playerId;
+    return entity.ownerId === playerId;
+  }
+  if (faction != null) {
+    if (possessorId != null) {
+      const p = (state?.players ?? []).find(pl => pl.id === possessorId);
+      return (p?.faction ?? possessorId) === faction;
+    }
+    return entity.owner === faction;
+  }
+  return false;
+}
+
 // ── Round lifecycle ────────────────────────────────────────────────────────
 //
 // Called from src/post-round-effects.js. Returns events for each DOT tick
@@ -322,6 +376,8 @@ export function tickEffects(state) {
             : `${def.icon} ${e.displayName} suffers from ${def.label.toLowerCase()}. (-${incoming} HP, ${e.hp}/${e.maxHp})`,
         });
         if (killed) {
+          state.recordCasualty?.(e);  // campaign permadeath: remember the dead before they vanish
+          state.recordDeathLocation?.(e);  // necromancer RAISE DEAD: mark where the body fell
           dead.push(e.id);
           break; // entity is gone — no further effects apply this tick
         }

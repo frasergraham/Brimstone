@@ -12,6 +12,7 @@
   "rogue": 57354,
   "ogre": 57355,
   "person": 57356,
+  "skeleton": 57357,
   "wood": 57360,
   "metal": 57361,
   "food": 57362,
@@ -124,5 +125,6 @@
   "gear": 57505,
   "pentacle": 57520,
   "flag": 57521,
-  "wardShield": 57522
+  "wardShield": 57522,
+  "catapult": 57529
 }

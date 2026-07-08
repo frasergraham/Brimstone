@@ -67,7 +67,8 @@ Both `WitchAIEngine` and `HeroAIEngine` follow the same pipeline:
 │  Produce PlanAction[] for each goal within its budget.           │
 │  Uses PlanSimState to project moves without mutating real state. │
 │                                                                  │
-│  Witch: genBuildArmy(), genControlNodes(), genDefendWitch()      │
+│  Witch: genPossess() [ability-gated], genDefendWitch(),          │
+│         genBuildArmy(), genControlNodes(), genHuntHeroes()       │
 │  Hero:  genExplore(), genControlNodes(), genProtectHero()        │
 │                                                                  │
 │  Output: PlanAction[] per goal (with priority tags)              │
@@ -104,9 +105,19 @@ Both `WitchAIEngine` and `HeroAIEngine` follow the same pipeline:
 **Trigger:** Few minions, high resources, unexplored buildings
 **Actions:** Summon units (prioritize iron golem > wood golem > minion by affordability), explore buildings, move toward unexplored areas
 
+The summon ledger (`_trySummons`, `assessBoard.canAffordSummon`, `PlanSimState.applySummon`) is **faction-aware**: the affordability threshold and per-summon spend come from the concrete leader faction's `getMinionCost()` (witch 2, necromancer/brute 1), and golem preference only applies to rosters that contain golems (`getUnitTypes()`). The plain witch's numbers are unchanged by construction.
+
 ### CONTROL_NODES
 **Trigger:** Uncontrolled nodes, approaching scoring checkpoint, hero holding nodes
 **Actions:** Move minions to nodes, fight adjacent enemies at nodes, guard when threatened
+
+### Necromancer leader spells (ability-gated, witch-neutral)
+
+Leaders that carry the `possess`/`teleport` abilities (the necromancer) get three extra behaviours, each keyed on **ability presence** — never on a faction string — so the plain witch pipeline is a guaranteed no-op:
+
+- **`genPossess`** (runs first in `getGenerators`, ≤1 plan slot, priority 1): seizes the most valuable enemy non-leader within `POSSESS_RANGE` — armed units (equipped weapon) outrank chaff; unarmed weak targets are skipped as not worth the action.
+- **Thrall command:** `assessBoard` surfaces enemy units possessed by this commander (via `canCommandEntity`, the same gate the planner/resolver use) as `board.possessedUnits`, excludes them from `visibleHeroes` (never attack your own thrall), and `genHuntHeroes`/`_closestUncommitted` command them like minions for the one round the possession lasts.
+- **TELEPORT:** two triggers — *escape* in `genDefendWitch` (fleeing with an enemy adjacent → warp to the safest in-range clump away from all visible enemies) and *node-grab* in `genControlNodes` (uncontested node 3–4 hexes away → one warp instead of a multi-round walk). Both project position via `PlanSimState.applyTeleport` (optimistic center landing; real resolution scatters to the clump).
 
 ### Goal Scoring Factors
 
@@ -138,6 +149,16 @@ CONTROL_NODES score:
 ### EXPLORE
 **Trigger:** Few survivors, unexplored buildings, daylight
 **Actions:** Explore current hex, sound horn (recruit), move to buildings, fortify
+
+Captain leaders additionally run `_tryReinforcements` at the top of `genExplore` — the day-side mirror of the witch's `_trySummons`: when the leader's concrete faction `canSummon()` and the ledger holds ≥3 food (keeps 1 in horn reserve), queue `SUMMON summonType: SOLDIER` actions (2 food → 2 soldiers each) up to a 6-soldier standing cap. Soldiers join the hero board's commandable-unit list (`board.survivors`, SURVIVOR + SOLDIER types) so the generic node-duty/escort generators give them orders; `survivorCount` stays SURVIVOR-only for horn/recruit scoring.
+
+The rest of the captain kit (all in `src/hero-ai-engine.js`, every entry keyed off faction predicates / unit-type presence so paladin & rogue plans are byte-identical):
+
+- **MARCH** — every leader move site routes through `queueLeaderStep()`: when the leader's faction `canMarch()` and ≥2 co-located soldiers would actually be carried (destination capacity is checked up front — `executeMarch` leaves overflow behind, so a nearly-full hex falls back to a plain MOVE), it emits ONE `MARCH` that moves the whole stack (node push, retreat, shelter, explore escort, hunt). `HeroEnginePlanSimState.applyMarch()` projects the passengers so later-generated actions see correct positions, and carried soldiers are committed for the round. `_promoteToMarchLeader()` upgrades a node-duty pick that landed on a stack soldier to the captain himself. `assemblePlan` treats `MARCH` like `MOVE` for anti-oscillation and dedups it by destination (a chained march is two distinct steps).
+- **Catapult fire** — `assessHeroBoard` enumerates friendly immobile units (`isImmobileType`) into `board.catapults`, *separate from* `board.survivors`, so no generator ever queues a MOVE/EXPLORE/node-duty order for them. `_tryCatapultFire` (top of `genControlNodes`, with a gap-fill fallback) queues one `BATTLE_UNIT` per catapult per round at the best visible enemy inside weapon range (leader first, then lowest HP); ranged shots carry no gang-up/counter risk so there is no engage-floor gate. With nothing in range the engine idles — zero plan slots burned.
+- **BUILD_SIEGE** — `_tryBuildSiege` (top of `genControlNodes`) queues at most one build per round when: ledger affords 4 wood + 1 metal, fewer than 2 live catapults (`AI_CATAPULT_CAP` — siege never strips the fortify wood), an open adjacent spawn hex exists, and the captain is near a node (≤2) or visibly threatened (enemy ≤3 — defensive battery). The queued engine is pushed into the sim as an occupancy ghost so same-plan capacity checks see it.
+
+Balance: teaching the AI the kit pushed captain-vs-witch from ~60% to ~63-69% hero (300-game runs, 2026-07-06), re-centered to **58.8% (1000 games, post-merge re-baseline 2026-07-06)** with two captain-only nerfs — captain action cap 9 → 8 (`CaptainFaction.actionCap`; March moves the stack on one action, so the raised cap over-fed his strongest rounds) and soldier DEF 1 → 0 (now an exact minion mirror — the tankier-than-minion grunt was the asymmetry funding the over-performance). Default paladin-vs-witch measured 50.0% (200 games) on the same build — untouched.
 
 ### CONTROL_NODES
 **Trigger:** Always active (0.5 base score), scoring proximity, contested nodes
@@ -406,6 +427,23 @@ When scoring is ≤2 rounds away and a node has feasibility ≥0.6, the hero AI 
 > (toward 13×13). Tuning combat constants won't move the win-rate split.
 
 > Weapons-overhaul note: ranged weapons only benefit the hero's roster (summons/zombies/golems can't equip), which skewed NvN toward the hero. The witch's `unitBonusCap` was raised 3→4 so its swarm converts to actions and keeps contesting nodes; Magic Bolt carries +1 ATK so the witch leader keeps the same ~1-ATK duel gap vs the now-sword-armed Paladin.
+
+> Stub-faction budget-semantics note (2026-07-06, captain-faction branch): the
+> action budget now resolves the **concrete** faction through the live leader
+> (`budgetFactionFor` in `game.js` / `budgetFaction` in `server/resolver.js`).
+> Two deliberate consequences, kept as-is: (1) faction budget overrides now
+> actually apply — the captain's base 4 / cap 8 relies on this (cap re-tuned
+> 9 → 8 on 2026-07-06 when the hero AI learned MARCH + catapult fire — see
+> the captain kit note in "Hero AI Goals"); (2) a concrete
+> leader whose type differs from the side default (rogue, brute, and the
+> in-flight necromancer) **no longer counts itself toward the unit bonus** —
+> it is excluded via the concrete `leaderType`, so those factions effectively
+> lose one action vs the old math. Default paladin/witch budgets are verified
+> byte-identical. Measured impact (150 games each, Standard, this branch vs
+> dev): rogue-vs-witch 26.0% rogue (dev 27.3%, −1.3pp — noise); hero-vs-brute
+> 58.0% brute (dev 64.7%, −6.7pp — direction consistent with the lost action,
+> still inside the 38–62% band). No retuning performed or planned with this
+> change; treat these as the stub factions' current baselines.
 
 ### Combat & Economy Baseline
 

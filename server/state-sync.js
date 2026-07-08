@@ -146,6 +146,14 @@ export function serializeState(state) {
     witchKills:           state.witchKills       ?? 0,
     witchSummonCount:     state.witchSummonCount ?? 0,
     heroRevealedByHorn:   state.heroRevealedByHorn ?? false,
+    // Casualty ledger — survivors who died this mission (campaign permadeath).
+    // Plain JSON snapshots; preserved so a mid-mission resume still drops the
+    // dead from the roster + mourns them at mission end.
+    casualties:           Array.isArray(state.casualties) ? state.casualties.map(c => ({ ...c })) : [],
+    // Death-location ledger — the necromancer's RAISE DEAD corpse pool. Must
+    // survive the wire / mid-game resume or raisable corpses (and consumed
+    // flags) would silently vanish online (Guideline 5).
+    deathLocations:       Array.isArray(state.deathLocations) ? state.deathLocations.map(d => ({ ...d })) : [],
     nodeScore:            { ...state.nodeScore },
     disableScoring:       !!state.disableScoring,
     disableCycleBar:      !!state.disableCycleBar,
@@ -487,6 +495,8 @@ export function deserializeState(snap) {
   state.witchKills           = snap.witchKills       ?? 0;
   state.witchSummonCount     = snap.witchSummonCount ?? 0;
   state.heroRevealedByHorn   = snap.heroRevealedByHorn ?? false;
+  state.casualties           = Array.isArray(snap.casualties) ? snap.casualties.map(c => ({ ...c })) : [];
+  state.deathLocations       = Array.isArray(snap.deathLocations) ? snap.deathLocations.map(d => ({ ...d })) : [];
   state.campaignAIBudgetBonus = snap.campaignAIBudgetBonus ?? 0;
   state.aiDifficulty          = snap.aiDifficulty ?? 'normal';
   state.gameMode             = snap.gameMode ?? 'standard';

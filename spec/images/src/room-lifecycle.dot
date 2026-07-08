@@ -1,0 +1,19 @@
+// Online room lifecycle — RoomPhase ∈ {LOBBY, PLANNING, RESOLVING}
+digraph room_lifecycle {
+  rankdir=LR; bgcolor="white";
+  graph [fontname="Helvetica", fontsize=12, label=<<b>Online Room Lifecycle</b>  <font point-size="10">(server-authoritative; RoomPhase enum)</font>>, labelloc="t"];
+  node [fontname="Helvetica", shape=box, style="rounded,filled", fontsize=12, penwidth=1.6, margin="0.25,0.16"];
+  edge [fontname="Helvetica", color="#555", penwidth=1.4, fontsize=9, arrowsize=0.85];
+
+  start [shape=circle, label="", width=0.22, style=filled, fillcolor="#333", fixedsize=true];
+  LOBBY     [fillcolor="#dbe7f3", color="#3f6f9f", label="LOBBY\nseats, faction picks,\nAI fill, host startGame"];
+  PLANNING  [fillcolor="#e3efe1", color="#4a8b53", label="PLANNING\nper-player planningPhase,\nturn timer, submitPlan"];
+  RESOLVING [fillcolor="#f3ecda", color="#b07d2a", label="RESOLVING\nresolvePlansMP → finalizeRound\n→ serialize steps + state"];
+  OVER      [shape=doublecircle, fillcolor="#f0d8d8", color="#9a4a4a", label="GAME\nOVER"];
+
+  start -> LOBBY;
+  LOBBY -> PLANNING [label="startGame\n(state.startPlanning)"];
+  PLANNING -> RESOLVING [label="all seats ready\n(_executeResolution)"];
+  RESOLVING -> PLANNING [label="not gameOver →\n_startPlanningPhase\n(emit roundResolved)"];
+  RESOLVING -> OVER [label="winner set"];
+}

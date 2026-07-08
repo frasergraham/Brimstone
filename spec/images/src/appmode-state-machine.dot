@@ -1,0 +1,30 @@
+// Client AppMode state machine (src/app-mode.js + main.js setMode call sites)
+digraph appmode {
+  rankdir=LR; bgcolor="white"; nodesep=0.55; ranksep=0.8;
+  graph [fontname="Helvetica", fontsize=12, label=<<b>Client AppMode State Machine</b>  <font point-size="10">(solid = normal play · dashed = reconnect/separate flow)</font>>, labelloc="t"];
+  node [fontname="Helvetica", shape=box, style="rounded,filled", fontsize=12, penwidth=1.6, margin="0.22,0.13"];
+  edge [fontname="Helvetica", color="#555", penwidth=1.4, fontsize=9, arrowsize=0.8];
+
+  MENU      [fillcolor="#e9edf2", color="#5b6b7d"];
+  PLANNING  [fillcolor="#e3efe1", color="#4a8b53"];
+  RESOLVING [fillcolor="#f3ecda", color="#b07d2a"];
+  SUMMARY   [fillcolor="#dbe7f3", color="#3f6f9f"];
+  PLAYBACK  [fillcolor="#efe6f2", color="#7a4f95"];
+  SUBMITTED [fillcolor="#f7f7f7", color="#aaa", fontcolor="#777", label="SUBMITTED\n(reconnect only)"];
+  SPECTATING[fillcolor="#f7f7f7", color="#aaa", fontcolor="#777", label="SPECTATING\n(separate page flow,\nnot via setMode)"];
+
+  MENU -> PLANNING        [label="start game / join\n(skirmish, campaign, online, async)"];
+  PLANNING -> RESOLVING   [label="submit → animate steps\n(or pre-planning conversation)"];
+  RESOLVING -> SUMMARY    [label="animation done,\nnot game-over"];
+  SUMMARY -> PLANNING     [label="Next / Continue\n→ next round"];
+  SUMMARY -> RESOLVING    [label="Replay (re-watch round)", style=dashed];
+  SUMMARY -> PLAYBACK     [label="game over →\nReplay Full Game"];
+  PLAYBACK -> MENU        [label="replay ends / Stop / abort"];
+  RESOLVING -> MENU       [label="mission complete /\nreturn to menu", style=dashed, constraint=false];
+  SUMMARY -> MENU         [label="return to menu", style=dashed, constraint=false];
+
+  PLANNING -> SUBMITTED   [label="reconnect with\nsubmitted plan", style=dashed];
+  SUBMITTED -> RESOLVING  [label="server resolution", style=dashed];
+
+  MENU -> SPECTATING [style=dotted, color="#aaa", label="?spectate="];
+}

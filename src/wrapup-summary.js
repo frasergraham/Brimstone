@@ -13,7 +13,7 @@ import { ICON } from './icons.js';
 
 export const WRAPUP_GLYPHS = Object.freeze({
   hero: '\uE000', witch: '\uE001', survivor: '\uE002', soldier: '\uE003',
-  zombie: '\uE005', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007',
+  zombie: '\uE005', skeleton: '\uE00D', minion: '\uE004', wood_golem: '\uE006', iron_golem: '\uE007',
 });
 
 /**
@@ -42,6 +42,44 @@ export function wrapupUnitCellHtml(u, iconHtml) {
     ? `<div class="wrapup-dmg kill">\uE097 DIED</div>`
     : (u.hpLost > 0 ? `<div class="wrapup-dmg">−${u.hpLost}</div>` : `<div class="wrapup-dmg none">—</div>`);
   return `<div class="wrapup-unit">${iconHtml}${effect}</div>`;
+}
+
+/**
+ * The Power Node reckoning sentence: who scored a victory point this round and
+ * why, or the tied "no points" line. Pure — drives both the wrap-up card and
+ * the resolution-summary modal so they word scoring identically.
+ *
+ * @param {object} reck — { heroDelta, witchDelta, heroCount, witchCount }
+ *   deltas are this round's nodeScore change; counts are the live holdings.
+ * @returns {string}
+ */
+export function reckoningText({ heroDelta, witchDelta, heroCount, witchCount }) {
+  const nodes = (n) => `${n} Power Node${n !== 1 ? 's' : ''}`;
+  if (witchDelta > 0) return `Witch holds ${nodes(witchCount)} to Hero's ${heroCount}. Witch scores 1 victory point.`;
+  if (heroDelta > 0)  return `Hero holds ${nodes(heroCount)} to Witch's ${witchCount}. Hero scores 1 victory point.`;
+  return `Nodes tied ${heroCount}–${witchCount}. No points scored.`;
+}
+
+/**
+ * The reckoning block for the wrap-up card: a phase-titled callout that names
+ * the point scored (or the tie). Pure HTML; '' when `reck` is null (a
+ * non-scoring round). Phase drives the dawn/dusk label + icon.
+ *
+ * @param {object|null} reck — reckoningText() shape plus `phase` ('dawn'|'dusk'|…).
+ * @returns {string}
+ */
+export function buildWrapupReckoningHtml(reck) {
+  if (!reck) return '';
+  const title = reck.phase === 'dawn'
+    ? `${ICON.dawn} Dawn Reckoning`
+    : reck.phase === 'dusk'
+      ? `${ICON.dusk} Dusk Reckoning`
+      : `${ICON.balance} Power Node Reckoning`;
+  const scored = reck.heroDelta > 0 || reck.witchDelta > 0;
+  const who = reck.witchDelta > 0 ? ' witch' : reck.heroDelta > 0 ? ' hero' : '';
+  return `<div class="wrapup-reckoning${scored ? ' scored' : ''}${who}">`
+    + `<div class="wrapup-reckoning-title">${title}</div>`
+    + `<div class="wrapup-reckoning-result">${reckoningText(reck)}</div></div>`;
 }
 
 /**

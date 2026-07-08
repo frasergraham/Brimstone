@@ -100,23 +100,28 @@ if (!MAP_SIZES[MAP_SIZE]) {
 }
 
 // Validate --day / --night picks against the registered factions for each side.
+// Each flag accepts a comma-separated list assigned per SEAT in order — seat i
+// gets list[i % list.length] — so `--players 3 --day=hero,rogue,captain
+// --night=witch,necromancer,brute` fields one of each faction per side.
+const DAY_FACTIONS   = DAY_FACTION.split(',').map(s => s.trim()).filter(Boolean);
+const NIGHT_FACTIONS = NIGHT_FACTION.split(',').map(s => s.trim()).filter(Boolean);
 const _dayIds   = getFactionsForSide('day').map(f => f.id);
 const _nightIds = getFactionsForSide('night').map(f => f.id);
-if (!_dayIds.includes(DAY_FACTION)) {
-  console.error(`Unknown --day faction "${DAY_FACTION}". Valid: ${_dayIds.join(', ')}`);
+for (const id of DAY_FACTIONS) if (!_dayIds.includes(id)) {
+  console.error(`Unknown --day faction "${id}". Valid: ${_dayIds.join(', ')}`);
   process.exit(1);
 }
-if (!_nightIds.includes(NIGHT_FACTION)) {
-  console.error(`Unknown --night faction "${NIGHT_FACTION}". Valid: ${_nightIds.join(', ')}`);
+for (const id of NIGHT_FACTIONS) if (!_nightIds.includes(id)) {
+  console.error(`Unknown --night faction "${id}". Valid: ${_nightIds.join(', ')}`);
   process.exit(1);
 }
-// Apply the swap whenever the picked faction differs from the side's
+// Apply the swap whenever any picked faction differs from the side's
 // primary. (Used to gate on isStub(), but factions like rogue can have
 // real distinct behaviour while still needing the leader-stat swap.)
 const _SIDE_DAY_PRIMARY   = getFactionsForSide('day')[0].id;
 const _SIDE_NIGHT_PRIMARY = getFactionsForSide('night')[0].id;
-const _SWAP_DAY   = DAY_FACTION   !== _SIDE_DAY_PRIMARY;
-const _SWAP_NIGHT = NIGHT_FACTION !== _SIDE_NIGHT_PRIMARY;
+const _SWAP_DAY   = DAY_FACTIONS.some(id => id !== _SIDE_DAY_PRIMARY);
+const _SWAP_NIGHT = NIGHT_FACTIONS.some(id => id !== _SIDE_NIGHT_PRIMARY);
 
 const IS_BATTLE = MAP_SIZE === 'battle';
 
@@ -205,28 +210,31 @@ function buildGameState() {
   // swapLeaderToFaction handles state.hero / state.witch (the side
   // singletons); for extra players we apply the same in-place mutation
   // pattern manually so all leaders on a side share the picked stats.
-  if (_SWAP_DAY)   _applyFactionSwapToSide(state, 'day',   DAY_FACTION);
-  if (_SWAP_NIGHT) _applyFactionSwapToSide(state, 'night', NIGHT_FACTION);
+  state._seatFactions = new Map(); // playerId -> factionId (script-local, for reporting)
+  if (_SWAP_DAY)   _applyFactionListToSide(state, 'day',   DAY_FACTIONS);
+  if (_SWAP_NIGHT) _applyFactionListToSide(state, 'night', NIGHT_FACTIONS);
+  for (const p of state.players) {
+    if (!state._seatFactions.has(p.id)) {
+      state._seatFactions.set(p.id, p.faction === 'hero' ? _SIDE_DAY_PRIMARY : _SIDE_NIGHT_PRIMARY);
+    }
+  }
 
   return state;
 }
 
-/** Apply a non-default faction's stats to every leader on a side. */
-function _applyFactionSwapToSide(state, sideId, factionId) {
-  // Side singleton hero/witch first (targetEntity omitted ⇒ defaults to it).
-  state.swapLeaderToFaction(sideId, factionId);
-
-  // Then every extra-seat leader on the same side. swapLeaderToFaction
-  // no-ops when the target's faction already matches, so we can pass
-  // every same-side leader without per-entity gating.
+/** Apply per-seat faction picks to every leader on a side: seat i (in
+ *  state.players order for that side) gets list[i % list.length].
+ *  swapLeaderToFaction no-ops when the target already matches, and accepts
+ *  the side singleton as an explicit target, so no per-entity gating. */
+function _applyFactionListToSide(state, sideId, list) {
   const sideOwner = sideId === 'day' ? 'hero' : 'witch';
-  const sidePrimaryType = getFactionsForSide(sideId)[0].leaderType;
-  for (const e of state.entities) {
-    if (!e.alive || e.owner !== sideOwner) continue;
-    if (e.type !== sidePrimaryType) continue; // already swapped / not a default leader
-    if (e === state.hero || e === state.witch) continue; // singleton already handled
-    state.swapLeaderToFaction(sideId, factionId, e);
-  }
+  const seats = state.players.filter(p => p.faction === sideOwner);
+  seats.forEach((p, i) => {
+    const factionId = list[i % list.length];
+    const leader = state.entities.find(e => e.id === p.leaderId);
+    if (leader) state.swapLeaderToFaction(sideId, factionId, leader);
+    state._seatFactions.set(p.id, factionId);
+  });
 }
 
 // ── Ally context helpers (MP planning) ────────────────────────────────────────
@@ -427,8 +435,14 @@ function runGame() {
 
   // Count leader deaths (MP)
   if (IS_MP) {
+    metrics.leaderFates = {}; // factionId -> { survived, died }
     for (const p of state.players) {
       const leaderAlive = state.entities.some(e => e.id === p.leaderId && e.alive);
+      const fid = state._seatFactions?.get(p.id);
+      if (fid) {
+        const fate = (metrics.leaderFates[fid] ??= { survived: 0, died: 0 });
+        if (leaderAlive) fate.survived++; else fate.died++;
+      }
       if (!leaderAlive) {
         if (p.faction === 'hero') metrics.leaderDeaths.hero++;
         else                      metrics.leaderDeaths.witch++;
@@ -574,10 +588,8 @@ const results = [];
 const errors  = [];
 const startMs = Date.now();
 
-if (DAY_FACTION !== 'hero' || NIGHT_FACTION !== 'witch') {
-  const dayBadge   = getFaction(DAY_FACTION).isStub()   ? ' (stub)' : '';
-  const nightBadge = getFaction(NIGHT_FACTION).isStub() ? ' (stub)' : '';
-  console.log(`  Factions: day=${DAY_FACTION}${dayBadge}  night=${NIGHT_FACTION}${nightBadge}`);
+if (_SWAP_DAY || _SWAP_NIGHT) {
+  console.log(`  Factions: day=${DAY_FACTIONS.join('+')}  night=${NIGHT_FACTIONS.join('+')}`);
 }
 process.stdout.write('  Running ');
 for (let i = 0; i < N; i++) {
@@ -918,3 +930,24 @@ if (issues.length === 0) {
 
 console.log(`╚${line}╝`);
 console.log();
+
+// ── Per-faction leader fates (mixed-faction NvN runs) ─────────────────────────
+{
+  const fates = {};
+  for (const r of valid) {
+    for (const [fid, f] of Object.entries(r.metrics?.leaderFates ?? {})) {
+      const t = (fates[fid] ??= { survived: 0, died: 0 });
+      t.survived += f.survived; t.died += f.died;
+    }
+  }
+  const ids = Object.keys(fates);
+  if (ids.length > 2) {
+    console.log('\nLeader fates by faction (share of games that leader survived):');
+    for (const fid of ids) {
+      const { survived, died } = fates[fid];
+      const total = survived + died;
+      const pct = total ? ((100 * survived) / total).toFixed(1) : '—';
+      console.log(`  ${fid.padEnd(12)} ${String(survived).padStart(4)}/${total}  (${pct}%)`);
+    }
+  }
+}

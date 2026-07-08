@@ -1,0 +1,27 @@
+// AI 5-stage goal pipeline — shared by both factions (BaseAIEngine.generatePlan)
+digraph ai_pipeline {
+  rankdir=TB; bgcolor="white"; nodesep=0.5; ranksep=0.45;
+  graph [fontname="Helvetica", fontsize=12, label=<<b>AI Pipeline — 5 stages, one PlanAction[] per round</b>>, labelloc="t"];
+  node [fontname="Helvetica", shape=box, style="rounded,filled", fontsize=11, penwidth=1.5, margin="0.22,0.12"];
+  edge [fontname="Helvetica", color="#555", penwidth=1.5, arrowsize=0.85];
+
+  sim [label="createSim()  —  EnginePlanSimState\nDOM-free projection of GameState (no combat sim)", fillcolor="#f7f7f7", color="#999"];
+
+  e [label="1 · EVALUATE\nassessBoard(sim) → flat board facts\n(fog-filtered visibility, nodes, resources, distances)", fillcolor="#dbe7f3", color="#3f6f9f"];
+  s [label="2 · SCORE\nscoreGoals(board, goalWeights) → {goal: 0..1}\n× personality weights, clamp01", fillcolor="#e3efe1", color="#4a8b53"];
+  a [label="3 · ALLOCATE\nallocateBudget(scores, totalBudget) → {goal: int AP}\nproportional, ≤ B/2 active goals, MIN_CHUNK=2", fillcolor="#f3ecda", color="#b07d2a"];
+  g [label="4 · GENERATE\ngenerators run in FIXED order, share one mutating sim\neach emits PlanActions tagged _priority / _goal", fillcolor="#efe6f2", color="#7a4f95"];
+  p [label="5 · ASSEMBLE\nassemblePlan(): priority-sort → anti-oscillation →\ndedup → budget cap → gap-fill → truncate to 12", fillcolor="#f5e8e8", color="#9a4a4a"];
+  out [label="PlanAction[]  →  same resolver humans use", fillcolor="#222", fontcolor="white", color="#000"];
+
+  sim -> e -> s -> a -> g -> p -> out;
+
+  // Goal sets per faction (annotations)
+  witch [shape=note, fillcolor="#efe6f2", color="#7a4f95", fontsize=10,
+    label="WITCH goals (gen order):\nDEFEND_WITCH · BUILD_ARMY ·\nCONTROL_NODES · HUNT_HEROES"];
+  hero  [shape=note, fillcolor="#e3efe1", color="#4a8b53", fontsize=10,
+    label="HERO goals (gen order):\nPROTECT_HERO · CONTROL_NODES ·\nEXPLORE · HUNT_WITCH"];
+  { rank=same; g; witch; hero; }
+  g -> witch [style=dashed, color="#7a4f95", arrowhead=none];
+  g -> hero  [style=dashed, color="#4a8b53", arrowhead=none];
+}

@@ -21,6 +21,7 @@ export const ICON = Object.freeze({
   rogue: '\uE00A',
   ogre: '\uE00B',
   person: '\uE00C',
+  skeleton: '\uE00D',
   wood: '\uE010',
   metal: '\uE011',
   food: '\uE012',
@@ -134,6 +135,7 @@ export const ICON = Object.freeze({
   pentacle: '\uE0B0',
   flag: '\uE0B1',
   wardShield: '\uE0B2',
+  catapult: '\uE0B9',
 });
 
 // Glyphs that map to exactly ONE icon and are safe to replace mechanically.

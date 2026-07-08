@@ -5,6 +5,9 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { getFaction } from '../src/factions.js';
 import { buildActionPipsHtml, buildActionBudgetTooltipHtml } from '../src/ui-render.js';
+import { computeActions } from '../src/game.js';
+import { EntityType } from '../src/entities.js';
+import { UIController } from '../src/ui.js';
 
 describe('Faction.computeBudgetBreakdown', () => {
   const hero  = getFaction('hero');
@@ -43,6 +46,59 @@ describe('Faction.computeBudgetBreakdown', () => {
     const { parts } = witch.computeBudgetBreakdown('day', 4, 0);
     assert.equal(parts.find(p => p.key === 'unit').value, Math.min(4, witch.unitBonusCap));
     assert.ok(witch.unitBonusCap >= 4, 'witch cap is at least 4');
+  });
+});
+
+describe('UIController._computeActionBudget — Budget Badge matches the real budget', () => {
+  // The method touches no DOM: call it headlessly on a minimal `this`.
+  const badge = (faction, entities, phase = 'day') =>
+    UIController.prototype._computeActionBudget.call({
+      _planFaction: faction,
+      state: { phase, entities, inventory: { hero: {}, witch: {} }, witchObjectives: [] },
+    });
+
+  test('captain: badge resolves the CONCRETE faction — base 4, soldiers counted against CAPTAIN', () => {
+    const entities = [
+      { alive: true, owner: 'hero', type: EntityType.CAPTAIN, factionId: 'captain' },
+      { alive: true, owner: 'hero', type: EntityType.SOLDIER },
+      { alive: true, owner: 'hero', type: EntityType.SOLDIER },
+    ];
+    const { parts, total } = badge('hero', entities);
+    assert.equal(parts.find(p => p.key === 'base').value, 4, 'captain base is 4, not the paladin 3');
+    assert.equal(parts.find(p => p.key === 'unit').value, 2,
+      'soldiers count as unit extras (leader excluded via the concrete leaderType)');
+    assert.equal(total, computeActions('hero', 'day', entities, 0),
+      'badge total equals the budget the game actually grants');
+  });
+
+  test('captain: action cap applies via the concrete faction (badge matches computeActions)', () => {
+    // The captain's cap was re-tuned 9 → 8 when the AI learned MARCH +
+    // catapult fire (see CaptainFaction.actionCap). It now equals the
+    // side-faction default, so cap clipping can no longer discriminate
+    // concrete-vs-side resolution — the base-4 test above carries that
+    // regression coverage. This test locks the clip value itself.
+    const entities = [
+      { alive: true, owner: 'hero', type: EntityType.CAPTAIN, factionId: 'captain' },
+      ...Array.from({ length: 6 }, () => ({ alive: true, owner: 'hero', type: EntityType.SOLDIER })),
+    ];
+    // base 4 + day 1 + unit 5 (cap) = 10 → clipped to the captain's cap of 8.
+    const { total } = badge('hero', entities, 'day');
+    assert.equal(total, 8);
+    assert.equal(total, computeActions('hero', 'day', entities, 0));
+  });
+
+  test('default factions unchanged: paladin and witch badges match computeActions', () => {
+    for (const [faction, leaderType, unitType] of [
+      ['hero', EntityType.HERO, EntityType.SURVIVOR],
+      ['witch', EntityType.WITCH, EntityType.MINION],
+    ]) {
+      const entities = [
+        { alive: true, owner: faction, type: leaderType },
+        { alive: true, owner: faction, type: unitType },
+      ];
+      const { total } = badge(faction, entities, 'day');
+      assert.equal(total, computeActions(faction, 'day', entities, 0), faction);
+    }
   });
 });
 

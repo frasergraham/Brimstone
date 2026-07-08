@@ -1446,6 +1446,14 @@ export function _serializeEvents(events) {
         lootItems:         ev.result.lootItems        ?? [],
         lootItemIds:       ev.result.lootItemIds      ?? [],
       };
+      // Captain faction extras (strictly additive):
+      //  - MARCH carries the relocated-soldier list + who stayed behind,
+      //  - BUILD_SIEGE carries the built catapult's placement,
+      //  - CALL REINFORCEMENTS (SUMMON of soldiers) carries the spawned ids.
+      if (ev.result.marchPassengers) out.result.marchPassengers = ev.result.marchPassengers;
+      if (ev.result.marchLeftBehind) out.result.marchLeftBehind = ev.result.marchLeftBehind;
+      if (ev.result.built)           out.result.built           = ev.result.built;
+      if (ev.result.summonedIds)     out.result.summonedIds     = ev.result.summonedIds;
       // SENT_TO surfaces extra fields on its result so BOTH cards
       // (sender + recipient) can render with proper names. Keep purely
       // additive — the SENT_TO ACTION_OK base shape above stays unchanged.
@@ -1456,6 +1464,33 @@ export function _serializeEvents(events) {
         out.result.fromOwnerName = ev.result.fromOwnerName ?? null;
         out.result.destOwnerId   = ev.result.destOwnerId   ?? null;
         out.result.destOwnerName = ev.result.destOwnerName ?? null;
+      }
+      // Necromancer SUMMON results carry the spawn hex — a skeleton lands on a
+      // seeded-random hex near the caster and RAISE DEAD rises at the corpse
+      // hex, so the replay can't infer the position from the caster's tile.
+      if (ev.action?.type === 'summon') {
+        out.result.summonedType     = ev.result.summonedType     ?? null;
+        out.result.spawnCol         = ev.result.spawnCol         ?? null;
+        out.result.spawnRow         = ev.result.spawnRow         ?? null;
+        out.result.raisedFromCorpse = ev.result.raisedFromCorpse ?? false;
+      }
+      // POSSESS — target identity for the replay card + who now commands it.
+      if (ev.action?.type === 'possess') {
+        out.result.targetId         = ev.result.targetId         ?? null;
+        out.result.targetName       = ev.result.targetName       ?? null;
+        out.result.targetOwner      = ev.result.targetOwner      ?? null;
+        out.result.possessorOwnerId = ev.result.possessorOwnerId ?? null;
+      }
+      // TELEPORT — chosen center vs actual arrival, for the warp animation.
+      if (ev.action?.type === 'teleport') {
+        out.result.teleport  = ev.result.teleport  ?? true;
+        out.result.fromCol   = ev.result.fromCol   ?? null;
+        out.result.fromRow   = ev.result.fromRow   ?? null;
+        out.result.toCol     = ev.result.toCol     ?? null;
+        out.result.toRow     = ev.result.toRow     ?? null;
+        out.result.centerCol = ev.result.centerCol ?? null;
+        out.result.centerRow = ev.result.centerRow ?? null;
+        out.result.slot      = ev.result.slot      ?? 0;
       }
     }
     if (ev.battleSnaps) {

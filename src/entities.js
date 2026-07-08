@@ -86,7 +86,9 @@ export const EntityType = Object.freeze({
   BRUTE:       'brute',
   SURVIVOR:    'survivor',
   SOLDIER:     'soldier',
+  CATAPULT:    'catapult',
   ZOMBIE:      'zombie',
+  SKELETON:    'skeleton',
   MINION:      'minion',
   WOOD_GOLEM:  'wood_golem',
   IRON_GOLEM:  'iron_golem',
@@ -140,6 +142,9 @@ export const WITCH_PLAYER_COLORS = FACTION_THEME.witch.playerColors;
 const WITCH_UNIT_COLORS = {
   [EntityType.ZOMBIE]: [
     '#3a6b2a', '#2e5520', '#4a7a35', '#1f4418', '#527a3d', '#264d1a',
+  ],
+  [EntityType.SKELETON]: [
+    '#c9c4ae', '#b5ae92', '#ded9c6', '#a29a7e', '#ece8d9', '#8f876c',
   ],
   [EntityType.MINION]: [
     '#c0392b', '#e74c3c', '#962419', '#ff6b5b', '#a93226', '#d45040',
@@ -991,7 +996,10 @@ const _DEFAULT_DISPLAY_NAMES = {
   [EntityType.NECROMANCER]: 'The Necromancer',
   [EntityType.BRUTE]:       'The Brute',
   [EntityType.SURVIVOR]:    'Survivor',
+  [EntityType.SOLDIER]:     'Soldier',
+  [EntityType.CATAPULT]:    'Catapult',
   [EntityType.ZOMBIE]:      'Zombie',
+  [EntityType.SKELETON]:    'Skeleton',
   [EntityType.MINION]:      'Minion',
   [EntityType.WOOD_GOLEM]:  'Wood Golem',
   [EntityType.IRON_GOLEM]:  'Iron Golem',
@@ -1133,6 +1141,13 @@ export function createMinion(col, row, ownerId = null, state = null) {
   return e;
 }
 
+// Skeleton — the Necromancer's conjured summon (RAISE DEAD, fresh-summon path).
+export function createSkeleton(col, row, ownerId = null, state = null) {
+  const e = new Entity(EntityType.SKELETON, 'witch', col, row, ownerId, state);
+  e.color = _witchColor(EntityType.SKELETON, e);
+  return e;
+}
+
 export function createWoodGolem(col, row, ownerId = null, state = null) {
   const e = new Entity(EntityType.WOOD_GOLEM, 'witch', col, row, ownerId, state);
   e.color = _witchColor(EntityType.WOOD_GOLEM, e);
@@ -1151,6 +1166,17 @@ export function createIronGolem(col, row, ownerId = null, state = null) {
 // off the same construction path as other non-leader units.
 export function createSoldier(col, row, ownerId = null, state = null) {
   return new Entity(EntityType.SOLDIER, 'hero', col, row, ownerId, state);
+}
+
+// Catapult — the Captain's built siege engine (executeBuildSiege). Immobile
+// (see the 'immobile' tag in UNIT_TYPES); its range-4 attack comes entirely
+// from the innate catapult_stone weapon equipped here — the non-leader
+// analog of Faction.innateLeaderWeapon wiring in createLeader. Deserialize
+// bypasses this factory and restores the saved items/weapon instead.
+export function createCatapult(col, row, ownerId = null, state = null) {
+  const e = new Entity(EntityType.CATAPULT, 'hero', col, row, ownerId, state);
+  e.equipWeapon('catapult_stone');
+  return e;
 }
 
 /**

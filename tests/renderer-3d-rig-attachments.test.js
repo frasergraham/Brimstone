@@ -155,7 +155,10 @@ describe('weaponModelForId (weapon → GLB mapping)', () => {
   });
   test('every ITEMS weapon is either mapped or an intentional cylinder fallback', () => {
     // Guards against a new weapon silently dropping to the cylinder unnoticed.
-    const FALLBACK_OK = new Set(['shield', 'staff', 'magic_bolt']);
+    // catapult_stone is the catapult's innate armament — the siege engine
+    // renders as a whole-unit model (mannequin fallback for now), so its
+    // 'weapon' intentionally has no hand-held GLB.
+    const FALLBACK_OK = new Set(['shield', 'staff', 'magic_bolt', 'catapult_stone']);
     for (const [id, item] of Object.entries(ITEMS)) {
       if (item?.kind !== 'weapon') continue;
       const model = weaponModelForId(id);

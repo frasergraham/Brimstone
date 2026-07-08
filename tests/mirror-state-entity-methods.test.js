@@ -93,3 +93,70 @@ test('MirrorState entities are Entity-prototyped (matches playback patchAlive)',
     );
   }
 });
+
+// ── deathLocations parity (necromancer RAISE DEAD, online) ──────────────────
+//
+// Regression test: MirrorState.fromSnapshot never copied snap.deathLocations
+// even though serializeState sends it. Online, hasRaisableCorpse() reads
+// state.deathLocations on the client to grey/ungrey the necromancer's
+// "Raise Dead" arc button — with the field dropped, the ledger was always
+// empty and the button was permanently disabled in online necromancer games.
+
+const { EntityType, isLeaderType } = await import('../src/entities.js');
+const { hasRaisableCorpse }        = await import('../src/actions.js');
+const { TileType, decomposeTileType } = await import('../src/tiles.js');
+const { getNeighbors, hexKey }     = await import('../src/hex.js');
+
+test('MirrorState.fromSnapshot copies deathLocations from the snapshot', () => {
+  const gs = new GameState(true, true, 'standard', 3);
+  // Record a grave the way every death site does (recordDeathLocation shape).
+  gs.recordDeathLocation({
+    id: 'corpse-1', type: EntityType.MINION, owner: 'witch', ownerId: null,
+    col: gs.witch.col, row: gs.witch.row,
+  });
+  assert.equal(gs.deathLocations.length, 1, 'sanity: grave recorded');
+
+  const snap   = serializeState(gs);
+  const mirror = MirrorState.fromSnapshot(snap);
+
+  assert.deepEqual(mirror.deathLocations, gs.deathLocations,
+    'mirror must expose the same corpse ledger the server serialized');
+});
+
+test('deathLocations defaults to [] when absent from an (older) snapshot', () => {
+  const gs   = new GameState(true, true, 'standard', 3);
+  const snap = serializeState(gs);
+  delete snap.deathLocations;
+  const mirror = MirrorState.fromSnapshot(snap);
+  assert.deepEqual(mirror.deathLocations, []);
+});
+
+test('online necromancer sees a raisable corpse through the MirrorState', () => {
+  const gs = new GameState(true, true, 'standard', 3);
+  gs.swapLeaderToFaction('night', 'necromancer');
+  const necro = gs.witch;
+
+  // Put the grave one hex away on a scrubbed, open grass tile so
+  // isPlaceableTile() can't be tripped by procedural-map noise.
+  const n = getNeighbors(necro.col, necro.row)
+    .find(h => gs.tiles.has(hexKey(h.col, h.row)));
+  assert.ok(n, 'necromancer has an on-map neighbor hex');
+  const t = gs.tiles.get(hexKey(n.col, n.row));
+  decomposeTileType(t, TileType.GRASS);
+  t.building = null; t.structure = null; t.fortifyLevel = 0;
+  t.hiddenSurvivor = false; t.buildingFootprintOf = null; t.footprintHexes = [];
+  gs.entities = gs.entities.filter(e => !(e.col === n.col && e.row === n.row));
+
+  gs.recordDeathLocation({
+    id: 'corpse-2', type: EntityType.ZOMBIE, owner: 'witch', ownerId: null,
+    col: n.col, row: n.row,
+  });
+  assert.ok(!isLeaderType(EntityType.ZOMBIE));
+  assert.equal(hasRaisableCorpse(gs, necro), true,
+    'sanity: corpse raisable on the authoritative state');
+
+  const mirror      = MirrorState.fromSnapshot(serializeState(gs));
+  const mirrorNecro = mirror.entities.find(e => e.id === necro.id);
+  assert.equal(hasRaisableCorpse(mirror, mirrorNecro), true,
+    'the Raise Dead arc-button gate must see the corpse on the online mirror');
+});

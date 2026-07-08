@@ -1,0 +1,25 @@
+// Brimstone — Day/Night phase cycle (8 rounds per cycle)
+// Source of truth: src/game.js phaseForRound(), CYCLE_LENGTH = 8.
+//   round r = (round-1) % 8:  r0 DAWN | r1-3 DAY | r4 DUSK | r5-7 NIGHT
+digraph phase_cycle {
+  layout=circo;
+  bgcolor="white";
+  graph [fontname="Helvetica", fontsize=11, label=<<b>Phase Cycle — 8 rounds, then repeats</b><br/><font point-size="9">Dawn &amp; Dusk are node-scoring checkpoints. Day favours the Hero; Night favours the Witch.</font>>, labelloc="t"];
+  node  [fontname="Helvetica", shape=circle, style="filled", fixedsize=true, width=1.15, fontsize=10, penwidth=1.5];
+  edge  [fontname="Helvetica", color="#666666", penwidth=1.4, arrowsize=0.8];
+
+  // r0
+  DAWN  [label="DAWN\n(slot 1)\n★ SCORE", fillcolor="#f6e7a8", color="#c8a83a"];
+  // r1-3
+  DAY1  [label="DAY\n(slot 2)", fillcolor="#ffd75e", color="#d6a821"];
+  DAY2  [label="DAY\n(slot 3)", fillcolor="#ffd75e", color="#d6a821"];
+  DAY3  [label="DAY\n(slot 4)", fillcolor="#ffd75e", color="#d6a821"];
+  // r4
+  DUSK  [label="DUSK\n(slot 5)\n★ SCORE", fillcolor="#e8a868", color="#b96f2a"];
+  // r5-7
+  NIGHT1 [label="NIGHT\n(slot 6)", fillcolor="#3a3a6e", fontcolor="white", color="#20203f"];
+  NIGHT2 [label="NIGHT\n(slot 7)", fillcolor="#3a3a6e", fontcolor="white", color="#20203f"];
+  NIGHT3 [label="NIGHT\n(slot 8)", fillcolor="#3a3a6e", fontcolor="white", color="#20203f"];
+
+  DAWN -> DAY1 -> DAY2 -> DAY3 -> DUSK -> NIGHT1 -> NIGHT2 -> NIGHT3 -> DAWN;
+}

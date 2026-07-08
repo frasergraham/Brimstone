@@ -18,6 +18,7 @@ import {
   setAllyLungeEnabled,
   toggleAllyLunge,
 } from '../../src/debug-flags.js';
+import { ICON } from '../../src/icons.js';
 
 // Build a synthetic keydown-like object.
 function ev(key, mods = {}) {
@@ -264,7 +265,7 @@ describe('executeConsoleCommand', () => {
 describe('formatSeedLine + /seed command', () => {
   test('formats a live state seed + size with dimensions', () => {
     const line = formatSeedLine({ mapSeed: 12345, mapSize: 'standard' });
-    assert.equal(line, '🌱 seed: 12345 · size: standard (14×14)');
+    assert.equal(line, `${ICON.seed} seed: 12345 · size: standard (14×14)`);
   });
 
   test('reflects the actual map size dimensions (skirmish 10×10)', () => {

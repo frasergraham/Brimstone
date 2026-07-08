@@ -150,9 +150,15 @@ export class MissionConductor {
     }
 
     // Scripted guidance owns the plan: disable the Clear and Auto-Guard buttons
-    // so the player can't discard the scripted plan or queue stray actions and
-    // break the deterministic flow. Restored in destroy() at the handoff.
-    if (this._mode === 'scripted') this._lockPlanControls(true);
+    // AND the per-action edit affordances (floating UNDO buttons, plan-panel ✕
+    // removes, the X clear-unit key — via ui.tutorialPlanLocked) so the player
+    // can't dismantle a scripted action AFTER its step already advanced, which
+    // would leave a later gated step unreachable. Restored in destroy() at the
+    // handoff.
+    if (this._mode === 'scripted') {
+      this._lockPlanControls(true);
+      if (this.ui) this.ui.tutorialPlanLocked = true;
+    }
   }
 
   /** Enable/disable the plan controls the tutorial must own (Clear, Auto-Guard). */
@@ -262,7 +268,13 @@ export class MissionConductor {
       // suppress the UI's chaining re-select for this one move so the next click
       // selects fresh. A mid-chain MOVE (toCol mismatch above) returns before
       // here, leaving the selection intact so the player keeps moving this unit.
-      if (action.type === PlanActionType.MOVE && this.ui) this.ui._tutorialSuppressReselect = true;
+      // Exception: when the FOLLOW-UP step declares keepSelection (a chained
+      // two-leg move split into one step per leg), the same unit must stay
+      // selected so the next click queues its second leg.
+      const followUp = this._steps[this._step + 1];
+      if (action.type === PlanActionType.MOVE && this.ui && !followUp?.keepSelection) {
+        this.ui._tutorialSuppressReselect = true;
+      }
       this._completeStep();
     }
   }
@@ -337,6 +349,7 @@ export class MissionConductor {
       this.ui.tutorialAllowedHexes = null;
       this.ui.tutorialAllowedActions = null;
       this.ui.tutorialAllowedUnits = null;
+      this.ui.tutorialPlanLocked = false;
     }
     // Detach the shared-button listeners added in the constructor. Without this
     // a destroyed conductor lingers (held alive by the DOM listener) and re-runs
@@ -425,9 +438,27 @@ export class MissionConductor {
       document.getElementById('plan-panel')?.classList.remove('collapsed');
     }
 
-    // Spotlight (+ optional pulsing red circle on the same target)
+    // Spotlight (+ optional pulsing red circle on the same target). Steps that
+    // gate on a specific unit acting (select-then-target: "click the unit, then
+    // click the destination") get a DYNAMIC anchor — the arrow/pulse sit on the
+    // unit until it's selected, then move to the destination hex.
     this._clearSpotlight();
-    if (step.spotlight) this._applySpotlight(step.spotlight, step.pulse === true);
+    if (step.spotlight) {
+      this._applySpotlight(step.spotlight, step.pulse === true,
+        this._isSelectThenTarget(step) ? () => this._selectThenTargetPos(step) : null);
+    }
+
+    // Bring the step's click targets into view. After a resolution the camera
+    // can leave the spotlit hex off-screen or under the plan panel — the pulse
+    // then points at something the player can't click. Only reframe when a
+    // target actually sits outside the clickable area (no surprise camera jumps
+    // when everything is already visible); pan-only once the player has set a
+    // zoom (frameHexes keeps their distance).
+    if (step.spotlight?.type === 'hex' && typeof this.renderer?.frameHexes === 'function') {
+      const hexes = [{ col: step.spotlight.col, row: step.spotlight.row }];
+      for (const h of step.allowHexes ?? []) hexes.push({ col: h.col, row: h.row });
+      if (!this._hexesClickable(hexes)) this.renderer.frameHexes(hexes, { paddingHexes: 2 });
+    }
 
     // Narration
     this._playVoice(step);
@@ -447,9 +478,13 @@ export class MissionConductor {
     // (roundStepMap jumps at planning start). For a step reached by completing a
     // move, the suppress-reselect flag (set in onActionQueued, consumed by the
     // same click handler's post-move re-select) handles deselection — so we must
-    // NOT touch that flag here or we'd clobber it before it's consumed.
+    // NOT touch that flag here or we'd clobber it before it's consumed. A
+    // keepSelection step (second leg of a chained move) skips the clear so the
+    // unit mid-journey stays selected.
     const gated = step.trigger && typeof step.trigger === 'object';
-    if (gated && typeof this.ui._clearSelection === 'function') this.ui._clearSelection();
+    if (gated && !step.keepSelection && typeof this.ui._clearSelection === 'function') {
+      this.ui._clearSelection();
+    }
   }
 
   /** A step's goal was met. Scripted: advance the sequence. Hints: dismiss. */
@@ -513,7 +548,61 @@ export class MissionConductor {
     this.destroy();
   }
 
-  _applySpotlight(target, pulse = false) {
+  /**
+   * True for steps that direct the player to select a unit and then click a
+   * hex with it (a MOVE to a destination or a targeted BATTLE): the copy reads
+   * "click the unit, then click the target", so the spotlight must do the same
+   * — anchor on the UNIT first and only point at the target once it's selected.
+   */
+  _isSelectThenTarget(step) {
+    const t = step.trigger;
+    return step.spotlight?.type === 'hex' &&
+      t?.type === 'action_queued' && t.entityType != null &&
+      (t.actionType === PlanActionType.MOVE || t.actionType === PlanActionType.BATTLE_UNIT);
+  }
+
+  /**
+   * Current anchor hex for a select-then-target step, re-evaluated every frame
+   * by the arrow/pulse RAF loops so it self-heals on select AND deselect:
+   *   unit not selected yet → the acting unit's hex (ghost-projected, so a
+   *     mid-plan unit is spotlit where the player sees it);
+   *   unit selected → the step's destination/target hex.
+   * The acting unit is the one eligible under the step's gates (trigger
+   * entityType + the UI's _tutorialCanSelect allowlists) — Learn-to-Play steps
+   * gate so exactly one unit qualifies. Falls back to the destination if none.
+   */
+  _selectThenTargetPos(step) {
+    const dest = { col: step.spotlight.col, row: step.spotlight.row };
+    const ui = this.ui;
+    const mover = this.state?.entities?.find(e =>
+      e.alive !== false && e.type === step.trigger.entityType &&
+      (typeof ui?._tutorialCanSelect !== 'function' || ui._tutorialCanSelect(e)));
+    if (!mover || ui?._selectedEntity?.id === mover.id) return dest;
+    const pos = (typeof ui?._getProjectedPos === 'function' && ui._getProjectedPos(mover.id)) || mover;
+    return { col: pos.col, row: pos.row };
+  }
+
+  /**
+   * True when every given hex projects into the CLICKABLE viewport — inside
+   * the canvas with a margin, and clear of the plan panel (renderer.insetRight,
+   * published by the UI when the panel is expanded). Conservatively false when
+   * projection isn't available (headless / scene not ready) so callers reframe.
+   */
+  _hexesClickable(hexes) {
+    if (typeof this.renderer?.getHexScreenPosition !== 'function') return false;
+    const rect = this.renderer.canvas?.getBoundingClientRect?.();
+    if (!rect || !rect.width) return false;
+    const insetRight = this.renderer.insetRight ?? 0;
+    const MARGIN = 40;
+    return hexes.every(h => {
+      const p = this.renderer.getHexScreenPosition(h.col, h.row);
+      return p &&
+        p.x >= rect.left + MARGIN && p.x <= rect.right - insetRight - MARGIN &&
+        p.y >= rect.top  + MARGIN && p.y <= rect.bottom - MARGIN;
+    });
+  }
+
+  _applySpotlight(target, pulse = false, posProvider = null) {
     if (target.type === 'hex') {
       // With the pulsing circle + arrow (Learn-to-Play) we deliberately DON'T
       // draw the gold hex disc — three overlapping highlights is too much.
@@ -522,19 +611,21 @@ export class MissionConductor {
         if (this._redraw) this._redraw();
       }
       if (target.arrow && this._arrowEl) {
-        this._startHexArrow(target.col, target.row, target.arrow);
+        this._startHexArrow(target.col, target.row, target.arrow, posProvider);
       }
-      if (pulse && this._pulseEl) this._startHexPulse(target.col, target.row);
+      if (pulse && this._pulseEl) this._startHexPulse(target.col, target.row, posProvider);
     } else if (target.type === 'element') {
       const el = document.querySelector(target.selector);
       if (el) {
-        el.classList.add('tutorial-spotlit');
+        // pulse:true on an ELEMENT target draws the pulsing RED outline on the
+        // element itself (.tutorial-spotlit-red) — the red ring overlay is for
+        // map hexes; centred on a small chip/button it would cover it. Without
+        // pulse, the standard gold glow.
+        el.classList.add(pulse ? 'tutorial-spotlit-red' : 'tutorial-spotlit');
         this._spotlitEl = el;
       }
       // Re-anchor only the ARROW to the element every frame (tracks layout/scroll
-      // and never sticks at 0,0). The pulsing circle is deliberately NOT drawn on
-      // UI elements — a circle centred on a small button (the mobile Submit button)
-      // covers it; the arrow + the gold `.tutorial-spotlit` glow highlight it cleanly.
+      // and never sticks at 0,0).
       if (target.arrow && this._arrowEl) {
         this._startElementAnchor(target.selector, target.arrow, false);
       }
@@ -581,13 +672,18 @@ export class MissionConductor {
     el.style.display = 'block';
   }
 
-  /** Anchor the pulse ring to a map hex, re-projecting every frame (camera pan/zoom). */
-  _startHexPulse(col, row) {
+  /**
+   * Anchor the pulse ring to a map hex, re-projecting every frame (camera
+   * pan/zoom). An optional posProvider re-resolves WHICH hex each frame
+   * (select-then-target steps move the ring from the unit to its destination).
+   */
+  _startHexPulse(col, row, posProvider = null) {
     if (typeof this.renderer?.getHexScreenPosition !== 'function') return;
     if (typeof requestAnimationFrame !== 'function') return;
     this._stopHexPulse();
     const tick = () => {
-      const pos = this.renderer.getHexScreenPosition(col, row);
+      const hex = posProvider ? posProvider() : { col, row };
+      const pos = this.renderer.getHexScreenPosition(hex.col, hex.row);
       if (pos) {
         this._positionPulse({ left: pos.x, top: pos.y, width: 0, height: 0 });
       } else if (this._pulseEl) {
@@ -650,15 +746,18 @@ export class MissionConductor {
    * Anchor the arrow to a map hex, re-projecting every frame so it tracks
    * camera pan/zoom. Requires renderer.getHexScreenPosition (both renderers
    * implement it); silently skips when unavailable (e.g. headless tests).
+   * An optional posProvider re-resolves WHICH hex each frame (select-then-
+   * target steps move the arrow from the unit to its destination).
    */
-  _startHexArrow(col, row, direction) {
+  _startHexArrow(col, row, direction, posProvider = null) {
     if (typeof this.renderer?.getHexScreenPosition !== 'function') return;
     if (typeof requestAnimationFrame !== 'function') return;
     this._stopHexArrow();
 
     const HALF = 26; // approximate on-screen half-extent of a hex at default zoom
     const tick = () => {
-      const pos = this.renderer.getHexScreenPosition(col, row);
+      const hex = posProvider ? posProvider() : { col, row };
+      const pos = this.renderer.getHexScreenPosition(hex.col, hex.row);
       if (pos) {
         this._positionArrow(
           { left: pos.x - HALF, top: pos.y - HALF, right: pos.x + HALF, bottom: pos.y + HALF, width: HALF * 2, height: HALF * 2 },
@@ -681,7 +780,7 @@ export class MissionConductor {
 
   _clearSpotlight() {
     if (this._spotlitEl) {
-      this._spotlitEl.classList.remove('tutorial-spotlit');
+      this._spotlitEl.classList.remove('tutorial-spotlit', 'tutorial-spotlit-red');
       this._spotlitEl = null;
     }
     if (this.renderer) this.renderer.tutorialSpotlightHex = null;

@@ -5939,6 +5939,28 @@ img.plan-step-avatar {
 .wrapup-attr-dmg { color: #ff8a8a; font-weight: 700; }
 .wrapup-attr-note { color: var(--text-dim); font-size: var(--fs-2xs); font-style: italic; }
 /* Score — the bottom score-bar dots/pips, reused. */
+.wrapup-reckoning {
+  margin-top: 0.2rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid rgba(200, 168, 75, 0.25);
+  text-align: center;
+}
+.wrapup-reckoning-title {
+  font-size: var(--fs-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 0.2rem;
+}
+.wrapup-reckoning-result {
+  font-size: var(--fs-sm);
+  color: var(--text);
+  line-height: 1.25;
+}
+/* A scored round emphasises the line in the scoring faction's colour. */
+.wrapup-reckoning.scored .wrapup-reckoning-result { font-weight: bold; }
+.wrapup-reckoning.scored.hero  .wrapup-reckoning-result { color: var(--hero); }
+.wrapup-reckoning.scored.witch .wrapup-reckoning-result { color: var(--witch); }
 .wrapup-score {
   display: flex;
   align-items: center;
@@ -6747,6 +6769,24 @@ body.spectator-mode #game-screen   { display: flex !important; }
   50%       { box-shadow: 0 0 16px 4px rgba(255,200,0,0.65); }
 }
 
+/* Element spotlight, red variant — a step with `pulse: true` on an element
+   target draws this pulsing RED outline on the element itself (the red ring
+   overlay is for map hexes; centred on a small chip it would cover it).
+   Matches the #e74c3c "do this" language of the arrow + pulse ring. */
+.tutorial-spotlit-red {
+  position: relative;
+  z-index: 910;
+  border-radius: 4px;
+  outline: 3px solid rgba(231, 76, 60, 0.95);
+  outline-offset: 3px;
+  animation: tut-spotlight-pulse-red 1.2s ease-in-out infinite;
+}
+
+@keyframes tut-spotlight-pulse-red {
+  0%, 100% { outline-color: rgba(231, 76, 60, 0.35); box-shadow: 0 0 6px 1px rgba(231,76,60,0.25); }
+  50%       { outline-color: rgba(231, 76, 60, 0.95); box-shadow: 0 0 14px 4px rgba(231,76,60,0.60); }
+}
+
 /* Tutorial directional arrow — red pulsing arrow pointing at a UI element */
 .tutorial-arrow {
   position: fixed;
@@ -7366,6 +7406,35 @@ body.spectator-mode #game-screen   { display: flex !important; }
   border-radius: 3px;
   color: #1a1208;
   background: var(--clr-gold, #d4a72c);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+}
+
+/* A survivor recruited on the map THIS mission, badged in the debrief's
+   surviving-roster grid. The wrapper is a real grid cell holding one rich card;
+   the FOUND badge hangs over its corner — a cool teal to read distinctly from
+   the gold NEW badge on granted-reward allies. */
+.found-survivor {
+  position: relative;
+  display: flex;
+}
+.found-survivor .cprog-card {
+  flex: 1 1 auto;
+  width: 100%;
+  border-color: rgba(90,156,168,0.4);
+  background: rgba(90,156,168,0.08);
+}
+.found-badge {
+  position: absolute;
+  top: -6px;
+  right: -4px;
+  z-index: 2;
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  color: #06181c;
+  background: #5a9ca8;
   box-shadow: 0 1px 3px rgba(0,0,0,0.5);
 }
 

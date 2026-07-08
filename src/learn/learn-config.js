@@ -285,13 +285,24 @@ export const LEARN_CONDUCTOR_CONFIG = {
 //
 // Beyond the base conductor fields (id/title/body/trigger/spotlight/tooltipPos),
 // Learn-to-Play steps carry strict-gating fields read by the conductor:
-//   allowHexes   — the ONLY map hexes the player may click this step.
-//   allowActions — the ONLY arc-menu actions offered this step (`[]` shows none).
-//   pulse        — draw the pulsing red circle on the spotlight target.
-// A MOVE trigger may carry `toCol/toRow` to require REACHING a hex (so a two-move
-// advance only completes on the final leg). New trigger 'handoff' releases to
-// free play. Resolution ('auto') steps sit at the top so they never cover the
-// bottom replay controls on mobile.
+//   allowHexes    — the ONLY map hexes the player may click this step.
+//   allowActions  — the ONLY arc-menu actions offered this step (`[]` shows none).
+//   allowUnits    — the ONLY unit types selectable this step (picker + Tab +
+//                   plan panel + lone-unit clicks all respect it).
+//   pulse         — hex target: the pulsing red circle on the spotlight hex;
+//                   element target: a pulsing red outline on the element itself.
+//   keepSelection — entering this step keeps the previous step's selected unit
+//                   (a chained two-leg move) instead of clearing the selection.
+// A MOVE trigger may carry `toCol/toRow` to require REACHING a hex. Every
+// MOVE-gated step must be completable by ONE click on its spotlit hex — a
+// multi-move advance is split into one step per leg, each pulsing the hex the
+// player actually clicks next (players click the pulse; never pulse a hex the
+// unit can't reach this click). Unit-gated hex steps (MOVE / BATTLE_UNIT with
+// an entityType) anchor the arrow + pulse on the acting UNIT until it is
+// selected, then on the destination — matching the "click the unit, then click
+// the target" copy (see MissionConductor._selectThenTargetPos). New trigger
+// 'handoff' releases to free play. Resolution ('auto') steps sit at the top so
+// they never cover the bottom replay controls on mobile.
 
 const HERO = LEARN_HERO_START;
 const CHURCH = LEARN_CHURCH;
@@ -311,8 +322,11 @@ export const LEARN_STEPS = [
   {
     id: 'modes',
     title: 'Plan, Then Resolve',
-    body: 'The game is in one of two modes: planning or resolution. In plan mode you see all your units and what they can see. In PLANNING mode you spend your ACTION BUDGET to plan moves, attacks or exploration. When you\'re happy with your plan you SUBMIT.',
-    trigger: 'click', spotlight: null, tooltipPos: 'center',
+    body: 'The game alternates between two modes: PLANNING and RESOLUTION. In PLANNING you see your units and everything they can see, and you spend your ACTION BUDGET queuing moves, attacks or exploration. When you\'re happy with your plan you SUBMIT it.',
+    trigger: 'click', tooltipPos: 'center',
+    // Pulsing red outline on the Action Budget pips while the copy introduces it.
+    spotlight: { type: 'element', selector: '#turn-info .action-budget', arrow: 'up' },
+    pulse: true,
   },
   {
     id: 'resolution',
@@ -323,7 +337,7 @@ export const LEARN_STEPS = [
   {
     id: 'day_night',
     title: 'The Turning Day',
-    body: 'The day cycle advances every turn, as the sun sets the power dynamics shift. The human factions are stronger when the sun is out, the witch factions stronger by moonlight.',
+    body: 'The day cycle advances every round — as the sun sets, the power dynamics shift. The human factions are stronger when the sun is out, the witch factions stronger by moonlight.',
     trigger: 'click', spotlight: null, tooltipPos: 'center',
   },
   {
@@ -337,20 +351,29 @@ export const LEARN_STEPS = [
   {
     id: 'move_hero',
     title: 'Advance the Hero',
-    body: 'Click your hero, Ishmael, to select him — then plan a move forward across the bridge to the church to try and find the enemy. He reaches it in a single move.',
+    body: 'Click your hero, Ishmael, to select him — then click the church across the river to plan a move and try to find the enemy. The road carries him all the way there in a single move.',
     trigger: { type: 'action_queued', actionType: PlanActionType.MOVE, entityType: EntityType.HERO, toCol: CHURCH.col, toRow: CHURCH.row },
     spotlight: { type: 'hex', col: CHURCH.col, row: CHURCH.row, arrow: 'down' },
     pulse: true, tooltipPos: 'bottom-left',
-    allowHexes: [HERO, CHURCH], allowActions: [],
+    allowHexes: [HERO, CHURCH], allowActions: [], allowUnits: [EntityType.HERO],
   },
   {
     id: 'move_soldier',
+    title: 'Bring Thomas Along',
+    body: 'Now move the townsfolk up too. Thomas starts off the road, further back, so the crossing takes TWO moves. Click Thomas to select him, then click the bridge to plan the first leg.',
+    trigger: { type: 'action_queued', actionType: PlanActionType.MOVE, entityType: EntityType.SURVIVOR, toCol: BRIDGE.col, toRow: BRIDGE.row },
+    spotlight: { type: 'hex', col: BRIDGE.col, row: BRIDGE.row, arrow: 'down' },
+    pulse: true, tooltipPos: 'bottom-left',
+    allowHexes: [LEARN_SOLDIER, BRIDGE], allowActions: [], allowUnits: [EntityType.SURVIVOR],
+  },
+  {
+    id: 'move_soldier_2',
     title: 'Friendly Units Share a Tile',
-    body: 'Now move the townsfolk alongside him. Click Thomas to select him, then move him across — friendly units can share a tile. He is further back, so it takes two moves: click the bridge first, then the church.',
+    body: 'Thomas is still selected, and his ghost on the bridge shows where his first move ends. Click the church to stack a second move — friendly units share a tile, so he joins Ishmael there.',
     trigger: { type: 'action_queued', actionType: PlanActionType.MOVE, entityType: EntityType.SURVIVOR, toCol: CHURCH.col, toRow: CHURCH.row },
     spotlight: { type: 'hex', col: CHURCH.col, row: CHURCH.row, arrow: 'down' },
-    pulse: true, tooltipPos: 'bottom-left',
-    allowHexes: [LEARN_SOLDIER, BRIDGE, CHURCH], allowActions: [],
+    pulse: true, tooltipPos: 'bottom-left', keepSelection: true,
+    allowHexes: [BRIDGE, CHURCH], allowActions: [], allowUnits: [EntityType.SURVIVOR],
   },
   {
     id: 'move_isaac',
@@ -359,7 +382,7 @@ export const LEARN_STEPS = [
     trigger: { type: 'action_queued', actionType: PlanActionType.MOVE, entityType: EntityType.SURVIVOR, toCol: VANTAGE.col, toRow: VANTAGE.row },
     spotlight: { type: 'hex', col: VANTAGE.col, row: VANTAGE.row, arrow: 'down' },
     pulse: true, tooltipPos: 'bottom-left',
-    allowHexes: [LEARN_ISAAC, VANTAGE], allowActions: [],
+    allowHexes: [LEARN_ISAAC, VANTAGE], allowActions: [], allowUnits: [EntityType.SURVIVOR],
   },
   {
     id: 'selection_hint',
@@ -388,7 +411,7 @@ export const LEARN_STEPS = [
   {
     id: 'combat_intro',
     title: 'Strike!',
-    body: 'Now you saw the witch\'s forces enter your field of view. Let\'s attack them. Select the hex with your hero — there are two units there, so choose Ishmael. You can see the % chance to HIT or CRUSH the target next to its icon. Click the zombie to add an ATTACK, then click again to stack two attacks in a row.',
+    body: 'The witch\'s forces have entered your field of view. Let\'s attack. Click the church — two units share it, so choose Ishmael. The % chance to HIT or CRUSH the target shows next to its icon. Click the zombie to plan an ATTACK, then click it a second time to stack another.',
     trigger: { type: 'action_queued', actionType: PlanActionType.BATTLE_UNIT, entityType: EntityType.HERO, count: 2 },
     spotlight: { type: 'hex', col: Z1.col, row: Z1.row, arrow: 'down' },
     pulse: true, tooltipPos: 'bottom-left',
@@ -431,7 +454,7 @@ export const LEARN_STEPS = [
     id: 'fortify_intro',
     title: 'Dig In',
     body: 'You can fortify locations by using resources. On the church, click to select Ishmael — two units share the hex — then click him again to bring up his action menu and choose Fortify.',
-    trigger: { type: 'action_queued', actionType: PlanActionType.FORTIFY },
+    trigger: { type: 'action_queued', actionType: PlanActionType.FORTIFY, entityType: EntityType.HERO },
     spotlight: { type: 'hex', col: CHURCH.col, row: CHURCH.row, arrow: 'down' },
     pulse: true, tooltipPos: 'bottom-left',
     allowHexes: [CHURCH], allowActions: [ActionType.FORTIFY], allowUnits: [EntityType.HERO],
@@ -440,7 +463,7 @@ export const LEARN_STEPS = [
     id: 'guard_intro',
     title: 'Set a Trap',
     body: 'We\'re not going to leave this spot, but we know the witch is coming — so we should be ready. This time select Thomas, click him again to bring up his action menu, and choose Guard: it will prep one opportunity attack if an enemy moves within range. You can stack guards for more reactions.',
-    trigger: { type: 'action_queued', actionType: PlanActionType.GUARD },
+    trigger: { type: 'action_queued', actionType: PlanActionType.GUARD, entityType: EntityType.SURVIVOR },
     spotlight: { type: 'hex', col: CHURCH.col, row: CHURCH.row, arrow: 'down' },
     pulse: true, tooltipPos: 'bottom-left',
     allowHexes: [CHURCH], allowActions: [ActionType.GUARD], allowUnits: [EntityType.SURVIVOR],
@@ -458,7 +481,7 @@ export const LEARN_STEPS = [
   {
     id: 'watch_r2',
     title: 'Into the Trap',
-    body: 'The witch stepped right into your trap, but she still managed to do some damage to you AND your fortifications.',
+    body: 'The witch stepped right into your trap — your guard was ready and struck as she closed in. She won\'t stop there: expect her to keep pressing the attack on your position.',
     trigger: 'auto', spotlight: null, tooltipPos: 'top',
   },
 
@@ -466,7 +489,7 @@ export const LEARN_STEPS = [
   {
     id: 'node_intro',
     title: 'Power Nodes',
-    body: 'Killing the witch is one way to win the battle, but the more tactical path is to control the majority of POWER NODES on the map. The highlighted hexes are controlled by whoever has the most units present.',
+    body: 'Killing the witch is one way to win, but the more tactical path is to control the majority of POWER NODES. A node is a cluster of highlighted hexes — whichever side occupies more of its hexes controls it. Spread out: units stacked on one hex only hold that one hex.',
     trigger: 'click',
     spotlight: null, tooltipPos: 'center',
   },

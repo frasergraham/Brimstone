@@ -733,12 +733,22 @@ export function buildSavedPartyPreview(savedState) {
  * card builder (progressUnitCardHTML). Read-only: no heal/promote/demote controls.
  * @param {object} heroStats  hero snapshot ({ hp, maxHp, attack, defense, level?, xp?, items? })
  * @param {object[]} survivors  roster snapshots (snapshotSurvivor / reconciled)
+ * @param {Set<string>|null} foundNames  names recruited THIS mission → FOUND badge
  * @returns {string} debrief roster HTML
  */
-export function debriefPartyHTML(heroStats, survivors) {
+export function debriefPartyHTML(heroStats, survivors, foundNames = null) {
+  const found = foundNames instanceof Set ? foundNames : new Set();
   const cards = [
     progressUnitCardHTML(heroStatsToUnit(heroStats), { idx: 'leader', isHero: true }),
-    ...survivors.map((s, i) => progressUnitCardHTML(survivorToUnit(s), { idx: i })),
+    ...survivors.map((s, i) => {
+      const card = progressUnitCardHTML(survivorToUnit(s), { idx: i });
+      // Survivors recruited THIS mission (map discoveries) get a FOUND badge so
+      // the debrief answers "who did we find?" — distinct from the gold NEW badge
+      // on granted-reward allies in the Rewards section above.
+      return found.has(s.name)
+        ? `<div class="found-survivor"><span class="found-badge">FOUND</span>${card}</div>`
+        : card;
+    }),
   ].join('');
   return `<div class="cprog-grid debrief-party-grid">${cards}</div>`;
 }

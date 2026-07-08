@@ -16,13 +16,8 @@ import {
 } from '../../src/demo-config.js';
 
 describe('isFactionAvailable', () => {
-  test('blocks the unimplemented champions by default', () => {
-    assert.equal(isFactionAvailable('captain'), false);
-    assert.equal(isFactionAvailable('necromancer'), false);
-  });
-
-  test('allows the shipped champions', () => {
-    for (const id of ['hero', 'rogue', 'witch', 'brute']) {
+  test('allows all six shipped champions (captain/necromancer unlocked 2026-07-07)', () => {
+    for (const id of ['hero', 'rogue', 'captain', 'witch', 'necromancer', 'brute']) {
       assert.equal(isFactionAvailable(id), true, `${id} should be available`);
     }
   });

@@ -16,6 +16,7 @@ import {
   weaponName, weaponStatString, progressSquadCap, fallenSectionHTML,
 } from '../../src/campaign/campaign-ui.js';
 import { xpForLevel } from '../../src/balance.js';
+import { ICON } from '../../src/icons.js';
 import { Campaign } from '../../src/campaign/campaign.js';
 import { getEquippedWeaponIdOf } from '../../src/entities.js';
 
@@ -89,8 +90,8 @@ describe('progressUnitCardHTML', () => {
     );
     assert.match(html, /Lv 3/);
     assert.match(html, /6\/10/);            // hp label
-    assert.match(html, /⚔ 2/);
-    assert.match(html, /🛡 1/);
+    assert.match(html, /ATK <b>2<\/b>/);
+    assert.match(html, /DEF <b>1<\/b>/);
   });
 
   test('renders a heal button only when canHeal', () => {
@@ -130,53 +131,60 @@ describe('weaponName / weaponStatString', () => {
   });
 });
 
-// ── unit card weapons list ───────────────────────────────────────────────────
+// ── unit card weapon slots ───────────────────────────────────────────────────
+// Weapons render as WEAPON_SLOTS (2) squares: filled slots show the carried
+// weapon (equipped first, marked with the check icon) and are click/drag
+// targets via data-from="unit" + data-idx + data-weapon; empty slots are drop
+// targets for arming the unit from the shared armory.
 
-describe('progressUnitCardHTML weapons list', () => {
+describe('progressUnitCardHTML weapon slots', () => {
   const unit = (over = {}) => ({
     name: 'X', color: '#888', hp: 5, maxHp: 10, attack: 2, defense: 1,
     level: 1, xp: 0, items: {}, ...over,
   });
 
-  test('renders one named row per weapon with its stat string + equipped ✓', () => {
+  test('renders one named slot per weapon with its stat string + equipped mark', () => {
     const html = progressUnitCardHTML(unit({ items: items(['sword', true], ['bow', 1]) }), { idx: 0 });
-    assert.equal(occurrences(html, 'cprog-w-glyph'), 2);   // one glyph per weapon row
+    assert.equal(occurrences(html, 'cprog-wslot-glyph'), 2);   // one glyph per filled slot
     assert.match(html, /Sword/);
     assert.match(html, /ATK \+2/);
     assert.match(html, /Bow/);
     assert.match(html, /range 3/);
-    assert.match(html, /cprog-weapon equipped/);           // equipped row styled
-    assert.match(html, /✓ Equipped/);                      // equipped indicator
+    assert.match(html, /cprog-wslot is-equipped/);             // equipped slot styled
+    assert.match(html, /cprog-wslot-eq/);                      // equipped check badge
+    assert.match(html, new RegExp(`cprog-wslot-eq[^>]*>${ICON.check}<`));
   });
 
-  test('non-equipped weapon gets an Equip control carrying idx + weapon id', () => {
+  test('a non-equipped carried weapon is a click-to-equip slot carrying idx + weapon id', () => {
     const html = progressUnitCardHTML(unit({ items: items(['sword', true], ['bow', 1]) }), { idx: 3 });
-    assert.match(html, /cprog-equip-btn[^>]*data-idx="3"[^>]*data-weapon="bow"/);
-    // the equipped weapon itself never gets an Equip control
-    assert.equal(occurrences(html, 'cprog-equip-btn'), 1);
+    assert.match(html, /cprog-wslot"[^>]*data-idx="3"[^>]*data-weapon="bow"[^>]*click to equip/);
+    // the equipped weapon itself never invites a click-to-equip
+    assert.equal(occurrences(html, 'click to equip'), 1);
   });
 
-  test('leader sentinel idx flows onto the Equip control', () => {
+  test('leader sentinel idx flows onto the weapon slot', () => {
     const html = progressUnitCardHTML(unit({ items: items(['sword', true], ['bow', 1]) }), { idx: 'leader' });
-    assert.match(html, /cprog-equip-btn[^>]*data-idx="leader"/);
+    assert.match(html, /cprog-wslot"[^>]*data-idx="leader"[^>]*data-weapon="bow"/);
   });
 
-  test('single weapon → equipped row only, no Equip control; no weapons → no list', () => {
+  test('single weapon → equipped slot + empty slot; no weapons → all slots empty', () => {
     const single = progressUnitCardHTML(unit({ items: items(['sword', true]) }), { idx: 0 });
-    assert.match(single, /✓ Equipped/);
-    assert.doesNotMatch(single, /cprog-equip-btn/);
+    assert.match(single, /cprog-wslot is-equipped/);
+    assert.doesNotMatch(single, /click to equip/);
+    assert.equal(occurrences(single, 'is-empty'), 1);   // the second slot invites a drop
 
     const none = progressUnitCardHTML(unit({ items: {} }), { idx: 0 });
-    assert.doesNotMatch(none, /cprog-weapons/);
+    assert.doesNotMatch(none, /is-equipped/);
+    assert.equal(occurrences(none, 'is-empty'), 2);     // both slots empty drop targets
   });
 
-  test('equipped weapon held in multiples shows its true count (×2), not a single undifferentiated row', () => {
+  test('equipped weapon held in multiples shows its true count (×2), not a single undifferentiated slot', () => {
     // Two swords, one equipped — the spare copy must still be visible. Before the
     // fix the equipped row hardcoded ×1 and the carried filter dropped the
     // same-id spare, so the second sword vanished entirely.
     const html = progressUnitCardHTML(
       unit({ items: { sword: { count: 2, equipped: true } } }), { idx: 0 });
-    assert.match(html, /✓ Equipped/);                 // still clearly the equipped weapon
+    assert.match(html, /cprog-wslot-eq/);             // still clearly the equipped weapon
     assert.match(html, /×2/, 'the quantity of the stacked weapon must be surfaced');
   });
 });
@@ -184,13 +192,14 @@ describe('progressUnitCardHTML weapons list', () => {
 // ── partyPaneHTML ────────────────────────────────────────────────────────────
 
 describe('partyPaneHTML', () => {
-  test('always renders the featured leader + Active Squad + Reserve sections', () => {
+  test('always renders the leader card + Active Squad + Reserve + shared sections', () => {
     const html = partyPaneHTML(HERO, makeRoster(2), [0], 2, { resources: { herbs: 0 } });
     assert.match(html, /Ishmael Charger/);
-    assert.match(html, /Leader/);
+    assert.match(html, /cprog-card hero/);   // the leader card leads the Active Squad
     assert.match(html, /Active Squad/);
     assert.match(html, /Reserve/);
-    assert.match(html, /Shared Inventory/);
+    assert.match(html, /Resources/);         // shared stockpile section
+    assert.match(html, /Equipment/);         // shared armory section
   });
 
   test('empty reserve (hero only, no survivors) still renders all sections', () => {
@@ -221,9 +230,9 @@ describe('partyPaneHTML', () => {
     assert.equal(occurrences(full, 'cprog-promote'), 0, 'no promote when active squad full');
   });
 
-  test('maxActive 0 → "go alone" note, no promote controls', () => {
+  test('maxActive 0 → no promote controls (squad is uneditable, leader still deploys)', () => {
     const html = partyPaneHTML(HERO, makeRoster(2), [], 0, { resources: {} });
-    assert.match(html, /go alone/i);
+    assert.match(html, /Active Squad <span class="cprog-count">0\/0<\/span>/);
     assert.equal(occurrences(html, 'cprog-promote'), 0);
   });
 
@@ -329,9 +338,9 @@ describe('missionListPaneHTML', () => {
     const rows = missionRows(rowsCampaign(['m1']));
     const html = missionListPaneHTML('Chapter 1 — Test', rows);
     assert.match(html, /Chapter 1 — Test/);
-    assert.match(html, /✓/); // completed
-    assert.match(html, /→/); // available
-    assert.match(html, /🔒/); // locked
+    assert.ok(html.includes(ICON.check), 'completed'); // icon-font check glyph
+    assert.match(html, /→/);                           // available
+    assert.ok(html.includes(ICON.lock), 'locked');     // icon-font lock glyph
   });
 
   test('available rows get the .available class (clickable hook)', () => {
@@ -494,36 +503,43 @@ describe('Campaign shared armory (weapons move both ways)', () => {
 
 // ── Shared-armory rendering (campaign-ui.js) ─────────────────────────────────
 
+// Weapons move both ways via drag & drop: a unit's filled weapon slot
+// (data-from="unit") dragged to the shared Equipment grid stows it; a pooled
+// slot (data-from="pool") dragged onto a unit card (data-drop="unit") arms
+// them. The wiring lives in src/menu/ledger.js.
 describe('shared-armory rendering', () => {
-  test('carried weapon rows get a Stow control (return to the shared armory)', () => {
+  test('carried weapon slots are drag sources back to the armory (stow)', () => {
     const u = { name: 'X', color: '#888', hp: 5, maxHp: 10, attack: 2, defense: 1, level: 1, xp: 0, items: items(['sword', true], ['bow', 1]) };
     const html = progressUnitCardHTML(u, { idx: 2 });
-    assert.match(html, /cprog-return-btn[^>]*data-idx="2"[^>]*data-weapon="bow"/);
-    // the equipped weapon row never gets a Stow control
-    assert.equal(occurrences(html, 'cprog-return-btn'), 1);
+    assert.match(html, /data-from="unit"[^>]*data-idx="2"[^>]*data-weapon="bow"/);
+    // the equipped weapon is a drag source too (dragging it to the pool unequips)
+    assert.match(html, /data-from="unit"[^>]*data-idx="2"[^>]*data-weapon="sword"/);
+    // and the whole card is a drop target for arming from the pool
+    assert.match(html, /cprog-card"[^>]*data-idx="2"[^>]*data-drop="unit"/);
   });
 
-  test('the equipped weapon row keeps the ✓ badge and gains an Unequip control', () => {
+  test('the equipped weapon slot keeps the check badge', () => {
     const u = { name: 'X', color: '#888', hp: 5, maxHp: 10, attack: 2, defense: 1, level: 1, xp: 0, items: items(['sword', true], ['bow', 1]) };
     const html = progressUnitCardHTML(u, { idx: 2 });
-    assert.match(html, /✓ Equipped/);                                          // badge stays
-    assert.match(html, /cprog-unequip-btn[^>]*data-idx="2"[^>]*data-weapon="sword"/);
-    // only the one equipped weapon is unequippable (carried rows don't get it)
-    assert.equal(occurrences(html, 'cprog-unequip-btn'), 1);
+    assert.match(html, new RegExp(`cprog-wslot-eq[^>]*>${ICON.check}<`));
+    // exactly one equipped slot
+    assert.equal(occurrences(html, 'is-equipped'), 1);
   });
 
-  test('pooled weapons render in Shared Inventory with a per-unit Equip control', () => {
+  test('pooled weapons render in the shared Equipment grid as draggable slots', () => {
     const html = partyPaneHTML(HERO, makeRoster(1), [0], 1, { resources: {}, weapons: { greatsword: { count: 1 } } });
-    assert.match(html, /Armory/);
+    assert.match(html, /Equipment/);
     assert.match(html, /Great Sword/);
-    // an Equip control for the leader and for the one active unit
-    assert.match(html, /cprog-pool-equip-btn[^>]*data-idx="leader"[^>]*data-weapon="greatsword"/);
-    assert.match(html, /cprog-pool-equip-btn[^>]*data-idx="0"[^>]*data-weapon="greatsword"/);
+    assert.match(html, /cprog-slot is-weapon" data-from="pool" data-weapon="greatsword"/);
+    // the grid itself is a drop target so weapons dragged off a unit land back here
+    assert.match(html, /cprog-inv-grid is-equipment" data-drop="pool"/);
   });
 
-  test('no Armory section when the shared pool is empty', () => {
+  test('empty shared pool → only empty placeholder slots, no weapon slots', () => {
     const html = partyPaneHTML(HERO, makeRoster(1), [0], 1, { resources: { wood: 2 } });
-    assert.doesNotMatch(html, /Armory/);
+    assert.doesNotMatch(html, /is-weapon/);
+    assert.match(html, /cprog-inv-grid is-equipment/);
+    assert.match(html, /cprog-slot is-empty/);
   });
 });
 
@@ -593,7 +609,7 @@ describe('fallenSectionHTML', () => {
       { name: 'Abigail', title: 'Scout', level: 3, diedInMission: 'first_night' },
       { name: 'Bartholomew', title: 'Guard', level: 1, diedInMission: 'dark_ritual' },
     ], resolver);
-    assert.match(html, /⚰ Fallen/);                 // heading
+    assert.match(html, /class="fallen-heading">[^<]*Fallen<\/h3>/); // heading (coffin is an icon-font glyph, not emoji)
     assert.equal(occurrences(html, 'fallen-card'), 2);
     assert.equal(occurrences(html, 'fallen-glyph'), 2);
   });

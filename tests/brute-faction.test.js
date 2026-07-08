@@ -10,7 +10,7 @@ import {
   ActionType, getValidActions, executeMove, executeBattle, executeSummon,
 } from '../src/actions.js';
 import {
-  EntityType, createMinion, createZombie,
+  EntityType, createMinion, createZombie, createCatapult,
 } from '../src/entities.js';
 import { TileType, ResourceType, BuildingType, legacyTileType, decomposeTileType, isBuildingFootprint } from '../src/tiles.js';
 import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
@@ -525,6 +525,52 @@ describe('BruteFaction — splash knocks bystanders outward', () => {
     // should be 2 (one hex further than before).
     assert.equal(hexDistance(bystander.col, bystander.row, target.col, target.row), 2,
       'knockback should push exactly 1 hex outward from target');
+  });
+
+  test('an immobile catapult bystander is splashed but NOT knocked back (immobile means immobile)', () => {
+    const { state, brute } = bruteState(6, 6);
+    // Same open-arena scrub as the knockback test above, so a mobile unit in
+    // the catapult's place WOULD be pushed — the only variable is the tag.
+    state.entities = state.entities.filter(e => e === brute);
+    for (const [, t] of state.tiles) {
+      if (hexDistance(t.col, t.row, brute.col, brute.row) <= 4) {
+        decomposeTileType(t, TileType.GRASS);
+        t.building = null;
+        t.fortifyLevel = 0;
+        clearFootprint(t);
+      }
+    }
+
+    const targetPos = getNeighbors(brute.col, brute.row)[0];
+    const target = createMinion(targetPos.col, targetPos.row);
+    target.owner = 'hero';
+    target.maxHp = 99; target.hp = 99;
+    state.entities.push(target);
+
+    // Catapult on an open neighbour of the target. Neutral owner keeps
+    // gang-up out of the dice math; high HP so it survives the splash.
+    const catPos = getNeighbors(targetPos.col, targetPos.row).find(n => {
+      if (n.col === brute.col && n.row === brute.row) return false;
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      if (!t || legacyTileType(t) === TileType.RIVER || isBuildingFootprint(t)) return false;
+      return state.entities.every(e => !e.alive || e.col !== n.col || e.row !== n.row);
+    });
+    assert.ok(catPos, 'need an open neighbour hex of the target');
+    const cat = createCatapult(catPos.col, catPos.row);
+    cat.owner = null;
+    cat.maxHp = 99; cat.hp = 99;
+    state.entities.push(cat);
+
+    state.setForcedDice(2, 5); // same margin-1 hit as the knockback test above
+
+    const r = executeBattle(state, brute, target);
+    assert.equal(r.success, true);
+    assert.equal(r.hit, true);
+    const hit = r.splashHits.find(h => h.id === cat.id);
+    assert.ok(hit, 'the catapult is still caught in the blast (damage applies)');
+    assert.equal(hit.knockedBack, false, 'immobile: the blast never shoves it');
+    assert.equal(cat.col, catPos.col, 'catapult column unchanged');
+    assert.equal(cat.row, catPos.row, 'catapult row unchanged');
   });
 });
 

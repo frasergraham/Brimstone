@@ -102,8 +102,12 @@ describe('weapons — faction starting loadout', () => {
     assert.equal(n.getRange(), 2);
   });
 
-  test('Captain and Brute start unarmed (preserve melee base stats)', () => {
-    assert.equal(getFaction('captain').createLeader(0, 0, 'p1').getEquippedWeaponId(), null);
+  test('Captain starts with the day-side sword; Brute starts unarmed', () => {
+    // The Captain inherits the paladin's sword but sits well below him in
+    // base stats (70 HP / ATK 1) — his strength is troops, not the blade.
+    const c = getFaction('captain').createLeader(0, 0, 'p1');
+    assert.equal(c.getEquippedWeaponId(), 'sword');
+    assert.equal(c.getRange(), 1);
     assert.equal(getFaction('brute').createLeader(0, 0, 'p1').getEquippedWeaponId(), null);
   });
 });

@@ -323,7 +323,7 @@ export class Renderer {
       // NOTE: this list must mirror the unit order in assets/image-list.json
       // exactly — the stitcher in scripts/generate-assets.js lays sprites into
       // the tilemap in that order, and these rects are read by lookup-key.
-      ['paladin','witch','zombie','minion','wood_golem','iron_golem',
+      ['paladin','witch','zombie','skeleton','minion','wood_golem','iron_golem',
        'rogue','captain','brute','necromancer',
        'survivor_innkeeper','survivor_nurse','survivor_blacksmith',
        'survivor_herbalist','survivor_militia','survivor_priest',
@@ -331,7 +331,7 @@ export class Renderer {
        'survivor_gravedigger','survivor_midwife','survivor_farmhand',
        'survivor_tanner','survivor_chandler','survivor_goodwife',
        'survivor_constable','survivor_weaver','survivor_carpenter',
-       'survivor_apothecary','survivor_fisherman'],
+       'survivor_apothecary','survivor_fisherman','catapult','soldier'],
       ['cycle_dawn','cycle_day','cycle_dusk','cycle_night'],
     ];
 
@@ -3653,7 +3653,9 @@ function entityGlyph(type) {
     case EntityType.BRUTE:       return '▲';   // stub — placeholder glyph
     case EntityType.SURVIVOR:    return ICON.survivor;
     case EntityType.SOLDIER:     return ICON.soldier;
+    case EntityType.CATAPULT:    return ICON.catapult;
     case EntityType.ZOMBIE:      return ICON.zombie;
+    case EntityType.SKELETON:    return ICON.skeleton;
     case EntityType.MINION:      return ICON.minion;
     case EntityType.WOOD_GOLEM:  return ICON.woodGolem;
     case EntityType.IRON_GOLEM:  return ICON.ironGolem;

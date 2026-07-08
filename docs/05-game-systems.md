@@ -14,7 +14,7 @@ Brimstone has two opposing **Sides** — Day and Night — and multiple **Factio
 | day   | rogue        | `ROGUE`            | Mercy Sloane        | distinct (starts with a bow → range 3, +1 sight, no melee weapons, no Sound Horn) |
 | day   | captain      | `CAPTAIN`          | Captain Eli Ward    | stub (inherits Paladin behaviour) |
 | night | witch        | `WITCH`            | The Witch           | primary |
-| night | necromancer  | `NECROMANCER`      | The Necromancer     | stub (inherits Witch behaviour) |
+| night | necromancer  | `NECROMANCER`      | The Necromancer     | distinct (undead-only RAISE DEAD summons, POSSESS, TELEPORT) |
 | night | brute        | `BRUTE`            | The Brute           | distinct (heavy tank, cheap minions, splash blast every hit, knockback, friendly-fire off) |
 
 Stub factions are registered with their own `EntityType`, base stats, and default leader name. They are subclasses of their side's primary faction (`HeroFaction` or `WitchFaction`) and inherit all combat / summon / fortify / discovery / sight behaviour.
@@ -36,7 +36,26 @@ The Brute is also no longer a stub — `BruteFaction` overrides:
 - `splashSparesAllies` — `true`; witch-side units on splash hexes take no damage (and no knockback)
 - `splashKnockback` — `true`; surviving splashed bystanders are pushed one hex outward from the target when the destination is open
 
+The Captain is also no longer a stub — `CaptainFaction` overrides:
+- `canSummon` / `getSummonOptions` — **CALL REINFORCEMENTS**: one action + 2 food spawns **2 Soldiers** on/next to the captain (shares the SUMMON plumbing; `executeSummon` has a soldier branch)
+- `canMarch` — **MARCH** (`PlanActionType.MARCH`): the captain moves and every friendly soldier on his starting hex moves with him for one action; overflow passengers (destination at capacity) stay behind
+- `canBuildSiege` — **BUILD_SIEGE** (`PlanActionType.BUILD_SIEGE`): 4 wood + 1 metal places an immobile **Catapult** (innate `catapult_stone` weapon, range 4) on an adjacent hex
+- `baseBudget` 4 / `actionCap` 8 — bigger action economy (budgets resolve through the live leader's concrete faction, see `budgetFactionFor` in game.js)
+- `survivorFindMultiplier` — 0.4; hidden survivors are much harder for the captain to stumble on (move/explore discovery only — Sound Horn remains a deliberate, full-strength recruit tool)
+- Personally weaker than the paladin (70 HP / base ATK 1 + sword) — he wins through troops.
+
+The **immobile** unit tag (`UNIT_TYPES[type].tags` → `isImmobileType()`) is a general mechanic introduced with the catapult: immobile units never get MOVE (or a March pickup) in `getValidActions`, `executeMove` refuses them, and `validatePlanAction` rejects queued moves.
+
 Splash damage scales with the attacker's roll margin: `clamp(floor(margin / 3), 1, 3) × DAMAGE_SCALE`. Crushing blows additionally apply the **wounded** effect to surviving targets — that's a universal rule (any attacker), not a brute-only one.
+
+The Necromancer is also no longer a stub — `NecromancerFaction` deals exclusively with the undead:
+- `getSummonOptions` — **RAISE DEAD** replaces the witch's summon list entirely: ZOMBIE (raise a corpse) + SKELETON (fresh conjuration); never golems or minions
+- `getMinionCost` — `1` of any resource (brute-style cheap chaff; the all-14-HP roster has no golem top-end to pay for)
+- `innateLeaderAbilities` — `['summon', 'possess', 'teleport']`
+- **Death-location ledger** — every entity death (combat kill, counter kill, splash, DOT tick, night attrition) is recorded to `state.deathLocations` via `state.recordDeathLocation()` (`{ id, type, owner, ownerId, col, row, round }`, serialized by state-sync). A ZOMBIE summon consumes the nearest unconsumed, non-leader corpse within 3 hexes and raises the zombie **at its death hex**; with no corpse in reach it degrades to a skeleton. Leaders are recorded but can never be raised.
+- **Skeleton conjuration** — a SKELETON summon lands on a seeded-random open hex within 2 of the caster (`state.nextDie` over a fixed-order candidate list — sealed-resolution safe).
+- **POSSESS** (`PlanActionType.POSSESS`, `executePossess`) — seize an enemy **non-leader** unit within 2 hexes. Applies the `possessed` effect (duration 2, source = possessor's ownerId): resolving in round N leaves it active through round N+1's planning and resolution, expiring at N+1's end. While possessed, only the possessor may command the unit — the shared gate is `canCommandEntity()` (`src/effects.js`), consulted by `planner.validatePlan`, `resolver.runAction`, and the offline UI's selection path.
+- **TELEPORT** (`PlanActionType.TELEPORT`, `executeTeleport`) — inaccurate warp: the player picks a center hex up to 4 away; the landing clump = center + neighbors filtered to passable/unoccupied (`getTeleportClump`), and resolution picks one member with `state.nextDie`.
 
 `Faction` exposes the hooks (`canEquipWeaponItem`, `modifyLootRoll`, `applyExploreLootBonus`, `onAfterMoveStep`, `getSightRange`, `crushSplashRadius`, `splashesOnEveryHit`, `splashSparesAllies`, `splashKnockback`, `getMinionCost`) on the base class; future factions plug in by overriding only what they need.
 
@@ -96,15 +115,18 @@ See `src/sides.js` for the Side enum and `src/factions.js` for the Faction regis
 |------|----|-----|-----|------|------------|
 | Paladin (default day leader) | 14 | 3 | 2 | day | Game start |
 | Rogue (stub) | 10 | 3 | 1 | day | Game start (when picked) |
-| Captain (stub) | 12 | 2 | 3 | day | Game start (when picked) |
+| Captain | 10 | 1 | 2 | day | Game start (when picked) |
 | Witch (default night leader) | 10 | 2 | 2 | night | Game start |
-| Necromancer (stub) | 10 | 1 | 2 | night | Game start (when picked) |
+| Necromancer | 10 | 1 | 2 | night | Game start (when picked) |
 | Brute        | 18 | 4 | 3 | night | Game start (when picked) |
 | Survivor | 4 | 1 | 1 | day (after recruit) | Exploration / Sound Horn |
-| Zombie | 2 | 2 | 0 | night (after raise) | Exploration / graveyard passive spawn |
+| Zombie | 2 | 2 | 0 | night (after raise) | Exploration / graveyard passive spawn / necromancer RAISE DEAD |
+| Skeleton | 2 | 1 | 1 | night | Necromancer summon (1 any resource; seeded-random hex within 2) |
 | Minion | 2 | 1 | 0 | night | Summon (no resource cost) |
 | Wood Golem | 3 | 2 | 3 | night | Summon (2 wood) |
 | Iron Golem | 5 | 3 | 2 | night | Summon (2 metal) |
+| Soldier | 2 | 1 | 1 | day | Call Reinforcements (2 food → 2 soldiers, captain only) |
+| Catapult | 4 | 2 | 1 | day | Build Siege (4 wood + 1 metal, captain only); immobile, range 4 |
 
 **HP note:** the HP values above are the *logical* base; actual `maxHp` in code
 is each value **× `DAMAGE_SCALE` (7)** (paladin 98, zombie 14…) — see the combat
@@ -286,6 +308,7 @@ The caller then calls `state.spendAction(result.cost)` to deduct from the budget
 ├──────────────┬──────────────────────────────────────────────┤
 │ MOVEMENT     │ MOVE — adjacent hex (1 AP, road discount)    │
 │              │        range 2 with horse                    │
+│              │ MARCH — captain + co-located soldiers (1 AP) │
 ├──────────────┼──────────────────────────────────────────────┤
 │ EXPLORATION  │ EXPLORE — reveal tile contents (1 AP)        │
 │              │ SOUND_HORN — reveal hero, recruit (1 AP+food)│
@@ -293,10 +316,14 @@ The caller then calls `state.spendAction(result.cost)` to deduct from the budget
 │ COMBAT       │ BATTLE — attack adjacent/co-located (1 AP)   │
 │              │ BATTLE_HEX — blind attack in fog (1 AP)      │
 ├──────────────┼──────────────────────────────────────────────┤
+│ NECROMANCER  │ POSSESS — seize enemy unit 1 round (1 AP)    │
+│              │ TELEPORT — inexact warp, center ≤4 (1 AP)    │
+├──────────────┼──────────────────────────────────────────────┤
 │ DEFENSE      │ FORTIFY — build defense (+1-2 DEF) (1 AP)    │
 │              │ GUARD — stance with reactive strikes (1 AP)   │
 ├──────────────┼──────────────────────────────────────────────┤
-│ ECONOMY      │ SUMMON — witch creates unit (1 AP)           │
+│ ECONOMY      │ SUMMON — witch unit / captain soldiers (1 AP)│
+│              │ BUILD_SIEGE — captain catapult (1 AP+res)    │
 │              │ HEAL — use herbs (+2D10 HP) (1 AP)           │
 │              │ USE_ITEM — food/silver/scripture (0 AP)       │
 │              │ EQUIP_WEAPON — from pack (0 AP, 1×/round)    │
