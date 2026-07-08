@@ -157,6 +157,10 @@ export class UIController {
     this.tutorialAllowedActions = null;
     // Restrict which units may be picked from a multi-unit hex (by entity type).
     this.tutorialAllowedUnits   = null;
+    // When true (scripted tutorial), hide/disable every plan-editing affordance
+    // — floating UNDO buttons, plan-panel ✕ removes, the X clear-unit key — so
+    // the player can't dismantle a scripted action after its step advanced.
+    this.tutorialPlanLocked     = false;
     // One-shot: set by the conductor when a MOVE completes a gated step, so the
     // post-move re-select deselects instead of chaining (keeps unit-switching clean).
     this._tutorialSuppressReselect = false;
@@ -1351,7 +1355,10 @@ export class UIController {
     if (!layer) return;
     this._initUndoLayerEvents();
 
-    if (!this._planMode || this._planSubmitted || !this.renderer || !this.canvas) {
+    // tutorialPlanLocked: the scripted tutorial owns the plan — no UNDO buttons,
+    // or a player could remove an action whose step has already advanced.
+    if (!this._planMode || this._planSubmitted || this.tutorialPlanLocked ||
+        !this.renderer || !this.canvas) {
       if ((layer.childNodes?.length ?? 0)) layer.innerHTML = '';
       return;
     }
@@ -1548,7 +1555,9 @@ export class UIController {
 
     stepsEl.innerHTML = buildUnitPlanBlocksHtml(
       this._unitPlans, this._planBudget, foodAvailable,
-      this._planSubmitted, this.state.entities ?? [], initialInv,
+      // tutorialPlanLocked renders as submitted: no per-step ✕ remove buttons —
+      // the scripted tutorial owns the plan (see MissionConductor).
+      this._planSubmitted || this.tutorialPlanLocked, this.state.entities ?? [], initialInv,
       controllable, this._selectedEntity?.id ?? null, portraitMap,
       this._planStatsExpanded,
     );
@@ -1593,6 +1602,9 @@ export class UIController {
         const id = block.dataset.entityId;
         const entity = this.state.entities.find(x => x.id === id && x.alive);
         if (!entity) return;
+        // Strict tutorial gating — the plan panel must not sidestep the step's
+        // click/unit allowlists (same rule as map clicks and Tab-cycling).
+        if (!this._tutorialCanSelect(entity)) return;
         this._selectEntity(entity);
         this._updateSidebar();
         this.onRedraw();
@@ -1832,6 +1844,10 @@ export class UIController {
       }
     } else if (clickedEntities.length === 1) {
       const entity = clickedEntities[0];
+      // Strict tutorial gating: a lone unit outside the step's allowlists can't
+      // be selected — swallow the click instead of silently switching selection
+      // (a multi-unit hex still shows the picker; the pick itself is gated).
+      if (!this._tutorialCanSelect(entity)) return;
       if (entity === this._selectedEntity) {
         // Second tap → show popup; third tap → dismiss popup
         if (this._popupVisible) {
@@ -2026,9 +2042,26 @@ export class UIController {
     return list;
   }
 
+  /**
+   * Strict tutorial gating: may this unit be selected right now? Checks the
+   * conductor-published allowUnits type filter and — using ghost positions
+   * during planning — the allowHexes click allowlist, so Tab-cycling, plan-panel
+   * clicks, and lone-unit map clicks can't sidestep the scripted path (e.g.
+   * silently selecting the hero's ghost projected onto an allowed hex). Null
+   * allowlists (free play / dialog steps) gate nothing.
+   */
+  _tutorialCanSelect(entity) {
+    if (this.tutorialAllowedUnits && !this.tutorialAllowedUnits.has(entity.type)) return false;
+    if (this.tutorialAllowedHexes) {
+      const pos = (this._planMode && this._getProjectedPos(entity.id)) || entity;
+      if (!this.tutorialAllowedHexes.has(`${pos.col},${pos.row}`)) return false;
+    }
+    return true;
+  }
+
   /** Cycle the selected unit forward (+1) or backward (-1) through controllable units. */
   _cycleSelection(dir) {
-    const list = this._getControllableUnits();
+    const list = this._getControllableUnits().filter(e => this._tutorialCanSelect(e));
     if (list.length === 0) return;
     const currentId = this._selectedEntity?.id;
     let idx = list.findIndex(e => e.id === currentId);
@@ -2444,11 +2477,16 @@ export class UIController {
     // Groups: scout, defense, summon, combat, items
     const arcItems = [];
 
+    // Strict tutorial gating: non-whitelisted commands stay VISIBLE but
+    // disabled — the menu keeps its shape so the player learns where every
+    // command lives, without a stray command derailing the scripted plan.
+    // (Move/attack stay available as hex clicks. Null = no restriction.)
+    const _tutLocked = (type) =>
+      !!(this.tutorialAllowedActions && !this.tutorialAllowedActions.has(type));
+
     for (const action of actions) {
-      // Strict tutorial gating: only whitelisted actions appear in the arc menu
-      // (move/attack stay available as hex clicks). Null = no restriction.
-      if (this.tutorialAllowedActions && !this.tutorialAllowedActions.has(action.type)) continue;
-      const dis = !hasAct;
+      const tutorialLocked = _tutLocked(action.type);
+      const dis = !hasAct || tutorialLocked;
       switch (action.type) {
         case ActionType.MOVE:
         case ActionType.BATTLE:
@@ -2573,7 +2611,8 @@ export class UIController {
             label: abilityLabels[action.ability] || 'Ability',
             fullLabel: fullLabels[action.ability] || 'Use Ability',
             desc: ABILITIES[action.ability]?.description ?? '',
-            color: '#88eeff', dis: !isFree && dis, free: isFree, cost: isFree ? 0 : 1,
+            // Free abilities skip the budget gate but never the tutorial gate.
+            color: '#88eeff', dis: (!isFree && dis) || tutorialLocked, free: isFree, cost: isFree ? 0 : 1,
             attrs: `data-action="use_ability" data-ability="${action.ability}"` });
           break;
         }
@@ -2597,7 +2636,7 @@ export class UIController {
           // leader). Free, mirrors USE_ITEM / EQUIP_WEAPON styling.
           arcItems.push({ group: 'items', label: 'Send To…', fullLabel: 'Send To… — hand off to another leader on your faction',
             desc: 'Hand this survivor over to another leader on your faction. Free.',
-            color: '#b0b0b0', dis: false, free: true, cost: 0,
+            color: '#b0b0b0', dis: tutorialLocked, free: true, cost: 0,
             attrs: 'data-action="sent_to"' });
           break;
       }
@@ -2639,7 +2678,7 @@ export class UIController {
       for (const s of ALL_SUMMONS) {
         if (!allowedSummons.has(s.st)) continue;
         arcItems.push({ group: 'summon', label: s.label, fullLabel: s.full,
-          color: '#9b59b6', dis: !s.afford || !hasAct, cost: 1, resCost: s.res,
+          color: '#9b59b6', dis: !s.afford || !hasAct || _tutLocked(ActionType.SUMMON), cost: 1, resCost: s.res,
           attrs: `data-action="summon" data-summon-type="${s.st}"` });
       }
     }
@@ -2654,7 +2693,7 @@ export class UIController {
       arcItems.push({ group: 'summon', label: 'Call Reinforcements',
         fullLabel: `Call Reinforcements — ${CAPTAIN_REINFORCEMENT_COUNT} soldiers muster beside the captain (1 action, ${CAPTAIN_REINFORCEMENT_COST} food)`,
         desc: `${CAPTAIN_REINFORCEMENT_COUNT} soldiers muster on or beside the captain.`,
-        color: '#3f78c4', dis: projFood < CAPTAIN_REINFORCEMENT_COST || !hasAct, cost: 1,
+        color: '#3f78c4', dis: projFood < CAPTAIN_REINFORCEMENT_COST || !hasAct || _tutLocked(ActionType.SUMMON), cost: 1,
         resCost: `${CAPTAIN_REINFORCEMENT_COST} ${coloredResourceLabel(RESOURCE_LABEL[ResourceType.FOOD])}`,
         attrs: `data-action="summon" data-summon-type="${EntityType.SOLDIER}"` });
     }

@@ -506,7 +506,9 @@ class KeybindingManager {
 
   _clearSelectedUnit() {
     const ui = this.ui;
-    if (!ui || ui._planSubmitted) return;
+    // tutorialPlanLocked: the scripted tutorial owns the plan — clearing a
+    // unit's queue after its step advanced would strand the guided sequence.
+    if (!ui || ui._planSubmitted || ui.tutorialPlanLocked) return;
     const sel = ui._selectedEntity;
     if (!sel) return;
     const queue = ui._unitPlans?.get(sel.id);
