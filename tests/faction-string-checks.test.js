@@ -121,6 +121,7 @@ const ALLOWLIST = Object.freeze({
   // Hardcoded tutorial scenarios (2-faction by design).
   'src/tutorial/tutorial-config.js': 1,
   'src/tutorial.js':                 1,
+  'src/learn/learn-config.js':       2,  // learn mission stats payload — hero/witch-keyed like server/game-stats.js
 
   // Debug/admin tooling — cosmetic faction-keyed colour in the combat tester's
   // death-flash (hero gold vs witch purple). Not shipped game logic; low value

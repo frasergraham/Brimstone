@@ -54,6 +54,7 @@ import { nodeController, countHeldNodes } from './game.js';
 import { MissionConductor, areHintsSuppressed, markHintsSeen, resetAllHintsForCampaign } from './mission-conductor.js';
 import {
   buildLearnMap, placeLearnUnits, LEARN_STEPS, LEARN_CONDUCTOR_CONFIG,
+  buildLearnGameStats,
 } from './learn/learn-config.js';
 import { Entity, createMinion, createZombie, createSkeleton, createWoodGolem, createIronGolem, createSurvivor, createSoldier, createCatapult, EntityType, ENTITY_COLOR, applyLevel, getEquippedWeaponIdOf, normalizeItems, flattenItemCounts, addItemInItems } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
@@ -474,9 +475,29 @@ function redraw() {
   if (ui) ui._updateSidebar?.();
 }
 
+/** POST a stats row to the server, buffering to localStorage when unreachable. */
+function _postGameStats(endpoint, storageKey, stats) {
+  fetch(`${window.BRIMSTONE_SERVER || ''}${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(stats),
+  }).catch(() => {
+    // Server not available — store locally for later
+    try {
+      const local = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      local.push(stats);
+      localStorage.setItem(storageKey, JSON.stringify(local));
+    } catch { /* storage full or unavailable — silently discard */ }
+  });
+}
+
 /** Record game stats to server (falls back to localStorage if unavailable). */
 function _recordLocalGameStats() {
   if (!state || !state.gameOver) return;
+  // Learn to Play reports as an EXPLICIT mission (a campaign-game-stats row
+  // under the synthetic learn/learn_to_play ids) — never as a local skirmish,
+  // where tutorial games would skew the balance data.
+  if (state.isLearnToPlay) { _recordLearnGameStats(); return; }
   const stats = {
     id:                crypto.randomUUID(),
     mode:              'local',
@@ -499,18 +520,19 @@ function _recordLocalGameStats() {
     fog_of_war:        state.fogOfWar !== 'none' ? 1 : 0,
     duration_ms:       _gameStartTime ? Date.now() - _gameStartTime : null,
   };
-  fetch(`${window.BRIMSTONE_SERVER || ''}/api/game-stats`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(stats),
-  }).catch(() => {
-    // Server not available — store locally for later
-    try {
-      const local = JSON.parse(localStorage.getItem('brimstone_stats') || '[]');
-      local.push(stats);
-      localStorage.setItem('brimstone_stats', JSON.stringify(local));
-    } catch { /* storage full or unavailable — silently discard */ }
+  _postGameStats('/api/game-stats', 'brimstone_stats', stats);
+}
+
+/** Record a finished Learn to Play game as an explicit mission — same endpoint,
+ *  storage fallback, and schema as campaign missions (see buildLearnGameStats). */
+function _recordLearnGameStats() {
+  if (!state || !state.gameOver) return;
+  const stats = buildLearnGameStats(state, {
+    id:         crypto.randomUUID(),
+    version:    VERSION,
+    durationMs: _gameStartTime ? Date.now() - _gameStartTime : null,
   });
+  _postGameStats('/api/campaign-game-stats', 'brimstone_campaign_stats', stats);
 }
 
 /** Record campaign game stats to server (falls back to localStorage). */
@@ -544,17 +566,7 @@ function _recordCampaignGameStats() {
     game_version:       VERSION,
     duration_ms:        _gameStartTime ? Date.now() - _gameStartTime : null,
   };
-  fetch(`${window.BRIMSTONE_SERVER || ''}/api/campaign-game-stats`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(stats),
-  }).catch(() => {
-    try {
-      const local = JSON.parse(localStorage.getItem('brimstone_campaign_stats') || '[]');
-      local.push(stats);
-      localStorage.setItem('brimstone_campaign_stats', JSON.stringify(local));
-    } catch { /* storage full or unavailable — silently discard */ }
-  });
+  _postGameStats('/api/campaign-game-stats', 'brimstone_campaign_stats', stats);
 }
 
 // ── AI Debug data capture ────────────────────────────────────────────────────
@@ -9769,6 +9781,11 @@ function _startLearnToPlay() {
   const mapData = buildLearnMap();
   state = new GameState(false /* witchIsAI */, false /* heroIsAI */, 'tutorial', null, mapData);
   state.fogOfWar = 'partial';   // so the Witch's forces "appear" as they close in
+  // Mark the state so game-over stats report as the explicit learn_to_play
+  // mission (campaign-game-stats row) instead of a local skirmish. Lives on the
+  // state (not a module flag) so it can't outlive or leak across games; never
+  // serialized — Learn to Play games are not saved or resumed.
+  state.isLearnToPlay = true;
 
   // A melee townsperson who shares the hero's tile + Isaac the archer, plus the
   // Witch's two (fragile) zombies. Shared with the validation test.

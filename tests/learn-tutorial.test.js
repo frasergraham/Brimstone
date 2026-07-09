@@ -20,6 +20,7 @@ import {
   buildLearnMap, placeLearnUnits, LEARN_STEPS, LEARN_CONDUCTOR_CONFIG,
   LEARN_HERO_START, LEARN_CHURCH, LEARN_BRIDGE, LEARN_SOLDIER, LEARN_ISAAC,
   LEARN_ISAAC_VANTAGE, LEARN_ZOMBIES, LEARN_WITCH_APPROACH,
+  LEARN_STATS_IDS, buildLearnGameStats,
 } from '../src/learn/learn-config.js';
 
 // Build the live starting board exactly as the launcher does.
@@ -246,6 +247,49 @@ test('learn steps: each Submit step locks the map (no stray actions while awaiti
       assert.deepEqual(s.allowHexes, [], `submit step ${s.id} must lock the map with allowHexes: []`);
     }
   }
+});
+
+// ── Mission stats: Learn to Play reports as an explicit mission ───────────────
+
+test('learn stats: payload carries the exact campaign_game_stats schema', () => {
+  const { state } = buildBoard();
+  state.winner = 'hero';
+  const stats = buildLearnGameStats(state, { id: 'row-1', version: '9.9.9', durationMs: 1234 });
+  // Field-for-field the columns of the campaign_game_stats insert
+  // (server/db/sqlite/campaign-stats.js) — a drifted key silently drops data.
+  assert.deepEqual(Object.keys(stats).sort(), [
+    'id', 'campaign_id', 'mission_id', 'mission_title',
+    'winner', 'win_reason', 'rounds', 'final_phase',
+    'hero_kills', 'witch_kills',
+    'survivors_deployed', 'survivors_lost', 'enemies_spawned',
+    'has_witch', 'ai_personality', 'map_size',
+    'game_version', 'duration_ms',
+  ].sort());
+});
+
+test('learn stats: reports the synthetic learn mission with real board counts', () => {
+  const { state, soldier, zombies } = buildBoard();
+  state.winner = 'witch';
+  state.winReason = 'The hero has fallen.';
+  state.heroKills = 2;
+  state.witchKills = 1;
+  soldier.hp = 0;   // Thomas fell (alive is derived from hp)
+  const stats = buildLearnGameStats(state, { id: 'row-2', version: '1.11.0', durationMs: 60000 });
+
+  assert.equal(stats.campaign_id,   LEARN_STATS_IDS.campaignId);
+  assert.equal(stats.mission_id,    LEARN_STATS_IDS.missionId);
+  assert.equal(stats.mission_title, 'Learn to Play');
+  assert.equal(stats.winner, 'witch');
+  assert.equal(stats.win_reason, 'The hero has fallen.');
+  assert.equal(stats.hero_kills, 2);
+  assert.equal(stats.witch_kills, 1);
+  assert.equal(stats.survivors_deployed, 2, 'Thomas + Isaac');
+  assert.equal(stats.survivors_lost, 1, 'dead survivors still count as deployed');
+  assert.equal(stats.enemies_spawned, zombies.length + 1, 'two zombies + the Witch');
+  assert.equal(stats.has_witch, 1);
+  assert.equal(stats.map_size, 'tutorial');
+  assert.equal(stats.game_version, '1.11.0');
+  assert.equal(stats.duration_ms, 60000);
 });
 
 test('learn handoff: state.maxWitchSummons hard-caps the witch\'s total summons', () => {

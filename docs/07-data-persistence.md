@@ -356,6 +356,8 @@ recordGameStats({
 
 The `admin-stats.html` dashboard queries these stats via REST endpoints for aggregate analytics (win rates, round distributions, personality performance, etc.).
 
+Campaign missions record to the separate `campaign_game_stats` table instead (via `/api/campaign-game-stats` → `server/campaign-game-stats.js`), keyed by `campaign_id`/`mission_id`, so mission difficulty data never pollutes the skirmish balance data. The standalone **Learn to Play** tutorial also reports there as an explicit mission under the synthetic ids `campaign_id: 'learn'` / `mission_id: 'learn_to_play'` (payload built by `buildLearnGameStats` in `src/learn/learn-config.js`) — it is deliberately **excluded** from the local-skirmish `game_stats` rows.
+
 ---
 
 ## Completed Games & Replay Storage

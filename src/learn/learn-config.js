@@ -216,6 +216,46 @@ export function placeLearnUnits(state) {
   return { soldier, isaac, zombies };
 }
 
+// ── Mission stats ─────────────────────────────────────────────────────────────
+// Learn to Play reports as an EXPLICIT mission: a campaign-game-stats row under
+// these synthetic ids, so tutorial outcomes surface in the mission analytics
+// (admin dashboard byMission/byCampaign) instead of polluting the local-skirmish
+// balance data. The payload builder is pure so tests can pin the exact schema
+// the /api/campaign-game-stats insert expects.
+
+export const LEARN_STATS_IDS = Object.freeze({
+  campaignId: 'learn',
+  missionId:  'learn_to_play',
+  title:      'Learn to Play',
+});
+
+/** Build the campaign-game-stats payload for a finished Learn to Play game.
+ *  Field-for-field the schema of campaign_game_stats — the caller supplies the
+ *  row id, game version, and wall-clock duration (no Date/crypto in here). */
+export function buildLearnGameStats(state, { id, version, durationMs }) {
+  const survivors = state.entities.filter(e => e.owner === 'hero' && e.type === EntityType.SURVIVOR);
+  return {
+    id,
+    campaign_id:        LEARN_STATS_IDS.campaignId,
+    mission_id:         LEARN_STATS_IDS.missionId,
+    mission_title:      LEARN_STATS_IDS.title,
+    winner:             state.winner,
+    win_reason:         state.winReason || '',
+    rounds:             state.round,
+    final_phase:        state.phase,
+    hero_kills:         state.heroKills  || 0,
+    witch_kills:        state.witchKills || 0,
+    survivors_deployed: survivors.length,
+    survivors_lost:     survivors.filter(e => !e.alive).length,
+    enemies_spawned:    state.entities.filter(e => e.owner === 'witch').length,
+    has_witch:          1,
+    ai_personality:     null,   // scripted rounds, then the default witch AI
+    map_size:           state.mapSize || 'tutorial',
+    game_version:       version,
+    duration_ms:        durationMs ?? null,
+  };
+}
+
 // ── Scripted opponent plans + dice ────────────────────────────────────────────
 // Round counter is the conductor's own `_round` (0-based), incremented after
 // each resolution. Rounds 0–2 are guided; round 3+ is AI free-play (handoff).
