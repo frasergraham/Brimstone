@@ -1954,12 +1954,20 @@ export class UIController {
       this._planMode ? this._projectedPosMap() : null);
     // Move is always the default awaiting action — clicking a green hex moves.
     const hasMoveAction = this._validActions.some(a => a.type === ActionType.MOVE);
+    const hasBattleAction = this._validActions.some(a => a.type === ActionType.BATTLE);
     const actionsOk = this._planMode || this.state.actionsAvailable > 0;
     if (hasMoveAction && actionsOk) {
       // Store the real entity in actor: effectiveEntity is a prototype-preserving
       // projection clone (position + projected weapon) used for highlight range,
       // but the live entity is what the rest of the planning flow expects.
       this._awaitingTarget = { actionType: ActionType.MOVE, actor: entity, isDefault: true };
+    } else if (hasBattleAction && actionsOk) {
+      // A unit that CAN'T move but can attack (e.g. the immobile catapult) still
+      // needs a default target-click handler — otherwise clicking a highlighted
+      // enemy falls through to plain selection and just re-selects the enemy.
+      // Default to BATTLE so a click on a highlighted target queues the attack;
+      // a click off any target falls through to selection (see _handleTargetClick).
+      this._awaitingTarget = { actionType: ActionType.BATTLE, actor: entity, isDefault: true };
     } else {
       this._awaitingTarget = null;
     }
@@ -2342,7 +2350,13 @@ export class UIController {
       const battleAction = this._validActions.find(a => a.type === ActionType.BATTLE);
       // All valid targets on the clicked hex
       const targetsAtHex = battleAction?.targets.filter(t => t.col === hex.col && t.row === hex.row) || [];
-      if (!targetsAtHex.length) return;
+      if (!targetsAtHex.length) {
+        // A DEFAULT battle-awaiting (an immobile unit selected with no move) must
+        // still let a click off any target re-select whatever is there or deselect
+        // — mirror the MOVE branch's fall-through rather than swallowing the click.
+        if (this._awaitingTarget.isDefault) { this._handleSelection(hex); return; }
+        return;
+      }
 
       this._awaitingTarget = null;
       this.renderer.clearOverlaysByLayer('highlight-disc');
