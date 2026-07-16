@@ -43,8 +43,8 @@ import { triggerSurvivorEncounter } from './survivor-discovery.js';
 
 export const ActionType = Object.freeze({
   MOVE:         'move',
-  // Captain-only: move the leader and carry every friendly soldier on his
-  // starting hex along to the destination in the same single action.
+  // Captain-only: move the leader and carry every friendly soldier within 1
+  // hex along, keeping formation, in the same single action.
   MARCH:        'march',
   // Captain-only: spend 4 wood + 1 metal to place an immobile Catapult on
   // an adjacent hex.
@@ -457,14 +457,14 @@ export function getValidActions(state, actor) {
   const moveTargets = immobile ? [] : getReachableHexes(state, actor, hasHorse ? 2 : 1, null, visibleHexes);
   if (moveTargets.length) actions.push({ type: ActionType.MOVE, targets: moveTargets });
 
-  // March — captain-only: move and carry every friendly (mobile) soldier on
-  // the starting hex along. Same destinations as MOVE; surfaced only when
-  // at least one soldier shares the tile.
+  // March — captain-only: move and carry every friendly (mobile) soldier
+  // WITHIN 1 hex of the captain along, keeping formation. Same destinations as
+  // MOVE; surfaced only when at least one soldier is near enough to march.
   if (moveTargets.length && concreteFactionOf(actor).canMarch()) {
     const passengers = state.entities.filter(e =>
       e.alive && e.id !== actor.id && e.owner === actor.owner &&
       e.type === EntityType.SOLDIER && !isImmobileType(e.type) &&
-      e.col === actor.col && e.row === actor.row
+      hexDistance(e.col, e.row, actor.col, actor.row) <= 1
     ).length;
     if (passengers > 0) {
       actions.push({ type: ActionType.MARCH, targets: moveTargets, passengers });
@@ -2192,36 +2192,139 @@ export function executeTeleport(state, actor, targetCol, targetRow) {
   };
 }
 
+// ── MARCH placement logic (shared) ───────────────────────────────────────────
+// Decide where every nearby soldier lands when the captain marches from
+// (startCol,startRow) to (endCol,endRow). Pure + deterministic (reads only
+// `state`, never wall-clock/random) so the authoritative resolver
+// (executeMarch), the plan-mode ghost (planner.js `computeGhostState`), and the
+// hero AI's sim projection (hero-ai-engine.js `applyMarch`) all share ONE rule
+// and can't drift — offline/online parity and AI-vs-resolution agreement depend
+// on it.
+//
+// Passenger set: every friendly, mobile SOLDIER within 1 hex of the captain's
+// START hex (co-located OR adjacent). Each soldier's destination, in order:
+//   1. FORMATION SHIFT — translate the soldier by the captain's move vector (in
+//      axial space, so "same direction" is exact regardless of the odd-r offset
+//      shove). Keeps the whole block's shape. Taken when that hex is a legal
+//      landing with a free slot.
+//   2. CONVERGE — else, a single legal step that gets strictly closer to the
+//      captain's END hex.
+//   3. HOLD — else the soldier stays put (toCol/toRow == fromCol/fromRow).
+// Capacity is honoured live, in entity order, so soldiers never overfill a hex
+// (the captain claims his destination slot first).
+//
+// `posMap` (optional Map<id,{col,row}>) overrides each entity's live position —
+// the planner passes its projected-positions map so a MARCH queued after other
+// moves reads the right board. Callers filter holders (from == to) when they
+// only want the soldiers that actually moved.
+export function computeMarchPlacements(state, captain, startCol, startRow, endCol, endRow, posMap = null) {
+  const owner = captain.owner;
+  const posOf = (e) => {
+    const p = posMap?.get(e.id);
+    return p ? { col: p.col, row: p.row } : { col: e.col, row: e.row };
+  };
+
+  const passengers = state.entities.filter(e => {
+    if (!e.alive || e.id === captain.id || e.owner !== owner) return false;
+    if (e.type !== EntityType.SOLDIER || isImmobileType(e.type)) return false;
+    const p = posOf(e);
+    return hexDistance(p.col, p.row, startCol, startRow) <= 1;
+  });
+  if (passengers.length === 0) return [];
+
+  // Live occupancy: every alive unit EXCEPT the captain and the passengers we
+  // are about to relocate. The captain is placed at END manually, so this works
+  // whether `state` still has him at START (planner/AI projection) or already
+  // at END (executeMarch, post-move).
+  const moving = new Set(passengers.map(p => p.id));
+  moving.add(captain.id);
+  const occ = new Map();
+  const bump = (col, row) => {
+    const k = hexKey(col, row);
+    occ.set(k, (occ.get(k) ?? 0) + 1);
+  };
+  for (const e of state.entities) {
+    if (!e.alive || moving.has(e.id)) continue;
+    const p = posOf(e);
+    bump(p.col, p.row);
+  }
+  bump(endCol, endRow); // captain claims a slot at the destination first
+
+  // Captain move vector in axial space.
+  const aStart = offsetToAxial(startCol, startRow);
+  const aEnd   = offsetToAxial(endCol, endRow);
+  const dq = aEnd.q - aStart.q, dr = aEnd.r - aStart.r;
+
+  // Can a soldier legally END on (col,row)? Mirrors the movement-destination
+  // rules (on-map, not river, not a fort wall the owner can't cross, no enemy)
+  // plus a live capacity check against everything already placed.
+  const canLand = (col, row) => {
+    const t = tile(state, col, row);
+    if (!t || isRiver(t)) return false;
+    if (isFortBlocking(t, owner)) return false;
+    if (hasEnemy(state, captain, col, row)) return false;
+    return tileCapacityRemaining(t, occ.get(hexKey(col, row)) ?? 0) > 0;
+  };
+
+  const placements = [];
+  for (const p of passengers) {
+    const from = posOf(p);
+    let toCol = from.col, toRow = from.row;   // default: HOLD
+
+    // 1. Formation shift — same axial translation as the captain.
+    const a = offsetToAxial(from.col, from.row);
+    const shifted = axialToOffset(a.q + dq, a.r + dr);
+    if ((shifted.col !== from.col || shifted.row !== from.row) && canLand(shifted.col, shifted.row)) {
+      toCol = shifted.col; toRow = shifted.row;
+    } else {
+      // 2. Converge — the legal neighbour that gets strictly closer to END.
+      let best = null, bestD = hexDistance(from.col, from.row, endCol, endRow);
+      for (const n of getNeighbors(from.col, from.row)) {
+        const d = hexDistance(n.col, n.row, endCol, endRow);
+        if (d < bestD && canLand(n.col, n.row)) { best = n; bestD = d; }
+      }
+      if (best) { toCol = best.col; toRow = best.row; }
+      // 3. else HOLD (toCol/toRow unchanged).
+    }
+
+    bump(toCol, toRow); // claim the slot so later passengers respect capacity
+    placements.push({ id: p.id, fromCol: from.col, fromRow: from.row, toCol, toRow });
+  }
+  return placements;
+}
+
 // ── MARCH (Captain) ─────────────────────────────────────────────────────────
 // One action: the captain moves (full executeMove semantics — pathing, roads,
-// blockers, encounters) and every friendly soldier standing on his STARTING
-// hex is carried along to wherever he actually stops (which may be short of
-// the target if blocked). Overflow rule: passengers relocate one at a time in
-// entity order; any soldier the destination hex can no longer hold (capacity
-// exhausted) simply stays behind on the starting hex — never dropped mid-path.
+// blockers, encounters) and every friendly soldier within 1 hex of his STARTING
+// hex marches along, keeping formation. Each soldier shifts by the captain's
+// move vector; a soldier that can't take its shifted hex steps toward the
+// captain's destination instead, and one that can do neither holds position.
+// See computeMarchPlacements for the full placement rule.
 export function executeMarch(state, actor, targetCol, targetRow) {
   if (!concreteFactionOf(actor).canMarch()) {
     return { success: false, log: [`${actor.displayName} cannot march troops.`] };
   }
   const startCol = actor.col, startRow = actor.row;
-  const passengers = state.entities.filter(e =>
-    e.alive && e.id !== actor.id && e.owner === actor.owner &&
-    e.type === EntityType.SOLDIER && !isImmobileType(e.type) &&
-    e.col === startCol && e.row === startRow
-  );
 
   const moveRes = executeMove(state, actor, targetCol, targetRow);
   if (!moveRes.success) return moveRes;
 
+  // Placement reads the captain's ACTUAL stop (executeMove may fall short of the
+  // requested target if a blocker appeared). Passengers haven't moved yet, so
+  // they're still on their START hexes for discovery.
+  const placements = computeMarchPlacements(state, actor, startCol, startRow, actor.col, actor.row);
+
   const marchPassengers = [];
   const marchLeftBehind = [];
-  for (const p of passengers) {
-    if (isTileFullForMove(state, p, actor.col, actor.row)) {
+  for (const pl of placements) {
+    const p = state.entities.find(e => e.id === pl.id);
+    if (!p || !p.alive) continue;
+    if (pl.toCol === pl.fromCol && pl.toRow === pl.fromRow) {
       marchLeftBehind.push(p.id);
       continue;
     }
-    p.col = actor.col;
-    p.row = actor.row;
+    p.col = pl.toCol;
+    p.row = pl.toRow;
     p.guarding = 0; // marching breaks guard, same as moving
     assignSlotOnTile(state, p);
     marchPassengers.push({ id: p.id, col: p.col, row: p.row, slot: p.slot });
@@ -2232,7 +2335,7 @@ export function executeMarch(state, actor, targetCol, targetRow) {
     log.push(`${actor.displayName} marches with ${marchPassengers.length} soldier${marchPassengers.length === 1 ? '' : 's'}.`);
   }
   if (marchLeftBehind.length > 0) {
-    log.push(`${marchLeftBehind.length} soldier${marchLeftBehind.length === 1 ? ' holds' : 's hold'} position — no room ahead.`);
+    log.push(`${marchLeftBehind.length} soldier${marchLeftBehind.length === 1 ? ' holds' : 's hold'} position.`);
   }
   return { ...moveRes, log, marchPassengers, marchLeftBehind };
 }

@@ -14,11 +14,11 @@ import { EnginePlanSimState, BaseAIEngine, allocateBudget, assemblePlan, clamp01
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
 import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf, rangeOf, getEquippedWeaponIdOf, SurvivorAbility, getItemCountOf, removeItemInItems } from './entities.js';
-import { ResourceType, hasBuilding, isRiver, isBuildingFootprint, tileCapacityRemaining } from './tiles.js';
+import { ResourceType, hasBuilding, isRiver, isBuildingFootprint } from './tiles.js';
 import { ITEMS } from './items.js';
 import { concreteFactionOf, SIEGE_WOOD_COST, SIEGE_METAL_COST } from './factions.js';
 import { isImmobileType, UNIT_TYPES } from './unit-types.js';
-import { computeLineOfSight, findSiegeSpawnHex } from './actions.js';
+import { computeLineOfSight, findSiegeSpawnHex, computeMarchPlacements } from './actions.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
 import { DAMAGE_SCALE } from './balance.js';
 
@@ -120,22 +120,25 @@ export class HeroEnginePlanSimState extends EnginePlanSimState {
     this.resourceLedger = JSON.parse(JSON.stringify(this.inventory.hero || {}));
   }
 
-  // MARCH projection: the leader steps to (toCol,toRow) and up to `maxCarried`
-  // co-located soldiers ride along — ONE budget slot moves the whole stack.
-  // Mirrors executeMarch's passenger rule (soldiers standing on the leader's
-  // STARTING hex; overflow stays behind) so actions generated later in the
-  // same plan see the correct projected positions. Returns the carried ids.
-  applyMarch(leaderId, toCol, toRow, maxCarried = Infinity) {
+  // MARCH projection: the leader steps to (toCol,toRow) and every friendly
+  // mobile soldier WITHIN 1 hex marches along, keeping formation — ONE budget
+  // slot moves the whole block. Delegates placement to the shared
+  // computeMarchPlacements() so the sim mirrors executeMarch exactly (formation
+  // shift → converge → hold), keeping later actions in the same plan on the
+  // right projected board. Returns the ids that actually moved.
+  applyMarch(leaderId, toCol, toRow) {
     const leader = this.entities.find(e => e.id === leaderId);
     if (!leader) { this.actionsLeft--; return []; }
-    const passengers = this.entities.filter(e =>
-      e.alive && e.id !== leader.id && e.owner === leader.owner &&
-      e.type === EntityType.SOLDIER &&
-      e.col === leader.col && e.row === leader.row
-    ).slice(0, maxCarried);
+    const startCol = leader.col, startRow = leader.row;
     this.applyMove(leaderId, toCol, toRow);  // leader move + departedHexes + 1 budget slot
-    for (const p of passengers) { p.col = toCol; p.row = toRow; }
-    return passengers.map(p => p.id);
+    const placements = computeMarchPlacements(this, leader, startCol, startRow, toCol, toRow);
+    const carried = [];
+    for (const pl of placements) {
+      if (pl.toCol === pl.fromCol && pl.toRow === pl.fromRow) continue;
+      const p = this.entities.find(e => e.id === pl.id);
+      if (p) { p.col = pl.toCol; p.row = pl.toRow; carried.push(p.id); }
+    }
+    return carried;
   }
 }
 
@@ -493,8 +496,9 @@ function _nearestUnexploredBuilding(sim, actor) {
 // replaces the captain's move + ≥2 soldier moves).
 export const MARCH_MIN_CARRIED = 2;
 
-// Soldiers standing on the leader's CURRENT (projected) hex — the stack a
-// MARCH would carry. Matches executeMarch's passenger enumeration.
+// Soldiers standing on the leader's CURRENT (projected) hex — the co-located
+// stack. Used only by the node-duty promotion below (a soldier ON the captain's
+// hex should be absorbed into his march rather than peeled off alone).
 function _marchStack(sim, leader) {
   return sim.entities.filter(e =>
     e.alive && e.id !== leader.id && e.owner === leader.owner &&
@@ -505,34 +509,28 @@ function _marchStack(sim, leader) {
 
 /**
  * Queue one step of leader movement, March-aware. For a faction whose leader
- * can MARCH (captain), when ≥ MARCH_MIN_CARRIED co-located soldiers would
- * actually be carried, emit ONE MARCH that moves the whole stack instead of
- * N individual moves. Destination hex capacity is respected up front
- * (executeMarch leaves overflow behind, so a nearly-full hex makes the march
- * not worth the special action — fall back to a plain MOVE). Carried
- * passengers are committed so later generators don't re-order units the
- * march already repositioned. For every other leader (paladin/rogue) this
- * emits exactly the MOVE it replaces — byte-identical plans.
+ * can MARCH (captain), when the march would actually move ≥ MARCH_MIN_CARRIED
+ * nearby soldiers, emit ONE MARCH that advances the whole formation instead of
+ * N individual moves. The shared computeMarchPlacements() decides who moves
+ * (formation shift → converge → hold) and honours destination capacity, so a
+ * march that can't carry enough soldiers falls back to a plain MOVE. Carried
+ * passengers are committed so later generators don't re-order units the march
+ * already repositioned. For every other leader (paladin/rogue) this emits
+ * exactly the MOVE it replaces — byte-identical plans.
  */
 export function queueLeaderStep(actions, sim, leader, toCol, toRow, priority = undefined, goal = undefined) {
   if (concreteFactionOf(leader).canMarch()) {
-    const stack = _marchStack(sim, leader);
-    if (stack.length >= MARCH_MIN_CARRIED) {
-      // Slots left on the destination once the leader has stepped in.
-      const t = sim.tiles.get(hexKey(toCol, toRow));
-      const occupants = sim.entities.filter(e =>
-        e.alive && e.id !== leader.id && e.col === toCol && e.row === toRow
-      ).length;
-      const carriable = t ? Math.max(0, tileCapacityRemaining(t, occupants) - 1) : 0;
-      if (Math.min(stack.length, carriable) >= MARCH_MIN_CARRIED) {
-        const action = { type: PlanActionType.MARCH, entityId: leader.id, toCol, toRow };
-        if (priority !== undefined) action._priority = priority;
-        if (goal !== undefined) action._goal = goal;
-        actions.push(action);
-        const carried = sim.applyMarch(leader.id, toCol, toRow, carriable);
-        for (const id of carried) sim.unitCommitments.set(id, goal ?? 'march');
-        return action;
-      }
+    // Dry-run the placement to count soldiers that would actually move.
+    const placements = computeMarchPlacements(sim, leader, leader.col, leader.row, toCol, toRow);
+    const movers = placements.filter(pl => pl.toCol !== pl.fromCol || pl.toRow !== pl.fromRow);
+    if (movers.length >= MARCH_MIN_CARRIED) {
+      const action = { type: PlanActionType.MARCH, entityId: leader.id, toCol, toRow };
+      if (priority !== undefined) action._priority = priority;
+      if (goal !== undefined) action._goal = goal;
+      actions.push(action);
+      const carried = sim.applyMarch(leader.id, toCol, toRow);
+      for (const id of carried) sim.unitCommitments.set(id, goal ?? 'march');
+      return action;
     }
   }
   const action = { type: PlanActionType.MOVE, entityId: leader.id, toCol, toRow };

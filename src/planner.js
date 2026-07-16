@@ -1,8 +1,8 @@
 // Simultaneous-turn planning: action types, ghost-state projection, and entity snap.
 import { hexKey, getNeighbors, hexDistance } from './hex.js';
 import { concreteFactionOf } from './factions.js';
-import { getReachableHexes, getVisiblePositions, POSSESS_RANGE, TELEPORT_RANGE } from './actions.js';
-import { ResourceType, isRiver, tileCapacityRemaining } from './tiles.js';
+import { getReachableHexes, getVisiblePositions, computeMarchPlacements, POSSESS_RANGE, TELEPORT_RANGE } from './actions.js';
+import { ResourceType, isRiver } from './tiles.js';
 import { EntityType, normalizeItems, getItemCountOf, removeItemInItems, getEquippedWeaponIdOf } from './entities.js';
 import { isImmobileType } from './unit-types.js';
 import { ITEMS } from './items.js';
@@ -216,47 +216,39 @@ export function computeGhostState(state, plan) {
           toCol:    action.toCol,
           toRow:    action.toRow,
         };
-        // Advance the leader's projected position FIRST — during resolution
-        // the captain arrives (executeMove) before any passenger relocates,
-        // so he claims a destination slot ahead of them.
-        positions.set(action.entityId, { col: action.toCol, row: action.toRow });
-        // MARCH: soldiers standing on the captain's projected START hex are
-        // carried along — advance their projected positions too, or a later
-        // MARCH/attack planned from the destination would project passengers
-        // still standing on the origin (breaks multi-step planning). Each
-        // carried soldier gets its own plan arrow (marchArrows). Passengers
-        // relocate in entity order until the destination's slot capacity is
-        // exhausted — the same overflow rule as executeMarch — and a
-        // projected stay-behind keeps its position and gets NO arrow.
-        // (Capacity here is a planning projection: tile slots minus units
-        // already projected onto the hex; the resolver re-checks it
-        // authoritatively via isTileFullForMove.)
+        // MARCH: every friendly mobile soldier within 1 hex of the captain's
+        // projected START hex marches along, keeping formation. The shared
+        // computeMarchPlacements() rule (formation shift → converge → hold) is
+        // the SAME code the resolver runs, so the ghost matches resolution
+        // exactly. Each moved soldier advances its projected position (so a
+        // later action planned from the destination reads the right board) and
+        // gets its own plan arrow to the hex it actually lands on; a projected
+        // stay-behind keeps its position and gets NO arrow. The `positions`
+        // map is passed as the position override so a MARCH queued after other
+        // moves reads the projected board, not live state.
         if (action.type === PlanActionType.MARCH) {
-          const marchOwner = state.entities.find(e => e.id === action.entityId)?.owner ?? 'hero';
-          const destTile = state.tiles?.get?.(hexKey(action.toCol, action.toRow));
-          let occupied = 0;
-          for (const p of positions.values()) {
-            if (p.col === action.toCol && p.row === action.toRow) occupied++;
-          }
-          marchArrows = [];
-          for (const e of state.entities) {
-            if (!e.alive || e.id === action.entityId) continue;
-            if (e.type !== EntityType.SOLDIER || e.owner !== marchOwner) continue;
-            if (isImmobileType(e.type)) continue;   // mirrors the executeMarch passenger filter
-            const pPos = positions.get(e.id);
-            if (!pPos || pPos.col !== startCol || pPos.row !== startRow) continue;
-            if (destTile && tileCapacityRemaining(destTile, occupied) <= 0) continue; // stays behind
-            occupied++;
-            positions.set(e.id, { col: action.toCol, row: action.toRow });
-            marchArrows.push({
-              entityId: e.id,
-              fromCol:  startCol,
-              fromRow:  startRow,
-              toCol:    action.toCol,
-              toRow:    action.toRow,
-            });
+          const captain = state.entities.find(e => e.id === action.entityId);
+          if (captain) {
+            const placements = computeMarchPlacements(
+              state, captain, startCol, startRow, action.toCol, action.toRow, positions);
+            marchArrows = [];
+            for (const pl of placements) {
+              if (pl.toCol === pl.fromCol && pl.toRow === pl.fromRow) continue; // holder — no arrow
+              positions.set(pl.id, { col: pl.toCol, row: pl.toRow });
+              marchArrows.push({
+                entityId: pl.id,
+                fromCol:  pl.fromCol,
+                fromRow:  pl.fromRow,
+                toCol:    pl.toCol,
+                toRow:    pl.toRow,
+              });
+            }
           }
         }
+        // Advance the leader's projected position. Placement above was computed
+        // from the pre-move projection (the captain claims his destination slot
+        // inside computeMarchPlacements), so this comes after.
+        positions.set(action.entityId, { col: action.toCol, row: action.toRow });
       }
     } else if (action.type === PlanActionType.BATTLE_UNIT) {
       const fromPos = positions.get(action.entityId);

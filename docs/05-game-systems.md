@@ -38,7 +38,7 @@ The Brute is also no longer a stub — `BruteFaction` overrides:
 
 The Captain is also no longer a stub — `CaptainFaction` overrides:
 - `canSummon` / `getSummonOptions` — **CALL REINFORCEMENTS**: one action + 2 food spawns **2 Soldiers** on/next to the captain (shares the SUMMON plumbing; `executeSummon` has a soldier branch)
-- `canMarch` — **MARCH** (`PlanActionType.MARCH`): the captain moves and every friendly soldier on his starting hex moves with him for one action; overflow passengers (destination at capacity) stay behind
+- `canMarch` — **MARCH** (`PlanActionType.MARCH`): the captain moves and every friendly mobile soldier **within 1 hex** marches with him for one action, keeping formation. Placement (shared `computeMarchPlacements()`, run identically by the resolver, the plan-mode ghost, and the hero AI's sim): each soldier translates by the captain's move vector (formation shift); a soldier whose shifted hex is blocked steps toward the captain's destination instead (converge); one that can do neither holds position
 - `canBuildSiege` — **BUILD_SIEGE** (`PlanActionType.BUILD_SIEGE`): 4 wood + 1 metal places an immobile **Catapult** (innate `catapult_stone` weapon, range 4) on an adjacent hex
 - `baseBudget` 4 / `actionCap` 8 — bigger action economy (budgets resolve through the live leader's concrete faction, see `budgetFactionFor` in game.js)
 - `survivorFindMultiplier` — 0.4; hidden survivors are much harder for the captain to stumble on (move/explore discovery only — Sound Horn remains a deliberate, full-strength recruit tool)
@@ -308,7 +308,7 @@ The caller then calls `state.spendAction(result.cost)` to deduct from the budget
 ├──────────────┬──────────────────────────────────────────────┤
 │ MOVEMENT     │ MOVE — adjacent hex (1 AP, road discount)    │
 │              │        range 2 with horse                    │
-│              │ MARCH — captain + co-located soldiers (1 AP) │
+│              │ MARCH — captain + nearby soldiers (1 AP)     │
 ├──────────────┼──────────────────────────────────────────────┤
 │ EXPLORATION  │ EXPLORE — reveal tile contents (1 AP)        │
 │              │ SOUND_HORN — reveal hero, recruit (1 AP+food)│

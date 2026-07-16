@@ -2245,6 +2245,20 @@ export class UIController {
       // Highlight all adjacent non-river hexes as potential targets
       this._setTargetOverlay('battle-hex-targets', 'rgba(220,120,40,0.50)',
         this._awaitingTarget.hexTargets ?? []);
+    } else if (actionType === ActionType.MARCH) {
+      // Re-establish the march overlays on every redraw: the soldiers that will
+      // march (within 1 hex of the captain) plus the reachable destinations.
+      const actor = this._awaitingTarget.actor ?? this._selectedEntity;
+      if (actor) {
+        const unitHexes = this.state.entities.filter(e =>
+          e.alive && e.id !== actor.id && e.owner === actor.owner &&
+          e.type === EntityType.SOLDIER &&
+          hexDistance(e.col, e.row, actor.col, actor.row) <= 1
+        ).map(e => ({ col: e.col, row: e.row }));
+        this._setTargetOverlay('march-units', 'rgba(126,204,214,0.24)', unitHexes);
+      }
+      const a = this._validActions.find(a => a.type === ActionType.MARCH);
+      if (a) this._setTargetOverlay('march-targets', 'rgba(126,204,214,0.50)', a.targets);
     } else if (actionType === ActionType.POSSESS) {
       this._setTargetOverlay('possess-targets', 'rgba(176,110,224,0.55)',
         (this._awaitingTarget.possessTargets ?? []).map(t => ({ col: t.col, row: t.row })));
@@ -2494,8 +2508,8 @@ export class UIController {
         case ActionType.MARCH: {
           const n = action.passengers ?? 0;
           arcItems.push({ group: 'scout', label: 'March',
-            fullLabel: `March — move and bring ${n} soldier${n === 1 ? '' : 's'} on this hex along (1 action)`,
-            desc: 'Move; every soldier on this hex marches to the destination with the captain. Overflow soldiers hold position.',
+            fullLabel: `March — advance the Captain with ${n} nearby soldier${n === 1 ? '' : 's'} (1 action)`,
+            desc: 'The Captain moves and every friendly soldier within 1 hex marches along, keeping formation. A soldier that cannot follow holds position.',
             color: '#7eccd6', dis, cost: 1, attrs: 'data-action="march"' });
           break;
         }
@@ -3464,7 +3478,7 @@ export class UIController {
       const labels = {
         [ActionType.BATTLE]:     'Tap an enemy to attack',
         [ActionType.BATTLE_HEX]: 'Tap a hex to attack (skips if empty)',
-        [ActionType.MARCH]:      'Tap a destination — soldiers here march along',
+        [ActionType.MARCH]:      'Tap a destination — nearby soldiers march along',
       };
       hint.textContent = labels[this._awaitingTarget.actionType] ?? '';
     }
@@ -3683,13 +3697,22 @@ export class UIController {
       case 'march': {
         // Destination picker — mirrors attack_hex: highlight the march
         // targets and wait for a hex click (_handleTargetClick MARCH branch).
+        // Also highlight the soldiers that will march (everyone within 1 hex),
+        // so the player sees who moves before picking the destination; the plan
+        // ghost then draws each one's arrow to where it actually lands.
         delayedHide();
         const marchAction = this._validActions.find(a => a.type === ActionType.MARCH);
         const marchTargets = marchAction?.targets ?? [];
+        const marchUnitHexes = state.entities.filter(e =>
+          e.alive && e.id !== entity.id && e.owner === entity.owner &&
+          e.type === EntityType.SOLDIER &&
+          hexDistance(e.col, e.row, entity.col, entity.row) <= 1
+        ).map(e => ({ col: e.col, row: e.row }));
         this._awaitingTarget = { actionType: ActionType.MARCH, actor: entity };
         this._clearTargetOverlays();
+        this._setTargetOverlay('march-units', 'rgba(126,204,214,0.24)', marchUnitHexes);
         this._setTargetOverlay('march-targets', 'rgba(126,204,214,0.50)', marchTargets);
-        state.addLog('Click a destination — soldiers on this hex march along.');
+        state.addLog('Click a destination — nearby soldiers march along in formation.');
         this._updateSidebar();
         this.onRedraw();
         break;

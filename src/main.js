@@ -2486,8 +2486,10 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
       if (visible) (deferIds.has(action.entityId) ? deferredMoveAnims : moveAnims).push({ ev, preSnap, path });
 
-      // MARCH: walk each carried soldier along the captain's path too, as a
-      // synthesized move anim (passenger id + its destination slot).
+      // MARCH: each carried soldier keeps formation, so it walks to its OWN
+      // landing hex (mp.col,mp.row) — not the captain's — as a synthesized move
+      // anim (passenger id + its destination slot). A single-hop path to the
+      // soldier's final hex is enough for the slide animation.
       if (action.type === PlanActionType.MARCH && visible) {
         for (const mp of result?.marchPassengers ?? []) {
           const pSnap = step.entitySnapshot?.find(e => e.id === mp.id);
@@ -2495,11 +2497,11 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
           moveAnims.push({
             ev: {
               ...ev,
-              action: { ...action, entityId: mp.id },
-              result: { ...result, slot: mp.slot ?? 0, encounterLog: [], encounterSurvivor: null },
+              action: { ...action, entityId: mp.id, toCol: mp.col, toRow: mp.row },
+              result: { ...result, path: null, slot: mp.slot ?? 0, encounterLog: [], encounterSurvivor: null },
             },
             preSnap: pSnap,
-            path,
+            path: [{ col: mp.col, row: mp.row }],
           });
         }
       }

@@ -15257,12 +15257,12 @@ export class Renderer3D {
         meta: { stepIndex: stepNumber, badge: String(stepNumber), entityId },
       }));
       // MARCH passengers: one arrow per soldier the march actually carries
-      // (computeGhostState already applied the capacity-overflow rule, so a
-      // stay-behind soldier has no entry here). Every passenger arrow shares
-      // the captain's from→to hexes, so each rides in its own lane — offset
-      // by the soldier's current tile slot (where its standee stands) — and
-      // renders path-only (variant 'march': no waypoint puck, no badge; the
-      // captain's arrow carries the step number for the whole column).
+      // (computeGhostState applied the formation-shift → converge → hold rule,
+      // so a stay-behind soldier has no entry here). Each arrow runs from the
+      // soldier's own hex to the hex it actually lands on, offset into its own
+      // lane by the soldier's tile slot (where its standee stands), and renders
+      // path-only (variant 'march': no waypoint puck, no badge; the captain's
+      // arrow carries the step number for the whole column).
       if (step.marchArrows?.length) {
         for (const ma of step.marchArrows) {
           const pent = this.state?.entities?.find?.(e => e.id === ma.entityId);

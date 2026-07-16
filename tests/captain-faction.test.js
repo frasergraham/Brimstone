@@ -1,6 +1,7 @@
 // Captain faction — troop commander on the day side.
-// Covers: CALL REINFORCEMENTS (SUMMON of soldier pairs), MARCH (leader +
-// co-located soldiers move as one action), BUILD_SIEGE (catapult), the
+// Covers: CALL REINFORCEMENTS (SUMMON of soldier pairs), MARCH (leader + every
+// soldier within 1 hex move as one action, keeping formation), BUILD_SIEGE
+// (catapult), the
 // survivor-discovery penalty, the bigger action economy, the immobile-unit
 // mechanic, and serialization round-trips for the new entity types.
 
@@ -11,7 +12,7 @@ import {
   executeMove, executeMarch, executeSummon, executeBuildSiege, executeBattle,
   executeSoundHorn,
   findSiegeSpawnHex, survivorFindMultiplier, getValidActions, getReachableHexes,
-  ActionType,
+  computeMarchPlacements, ActionType,
 } from '../src/actions.js';
 import {
   HeroEnginePlanSimState, assessHeroBoard, genExplore, fillGapsHero,
@@ -27,7 +28,7 @@ import {
 } from '../src/factions.js';
 import { PlanActionType, computeGhostState, validatePlanAction, computeProjectedInventory } from '../src/planner.js';
 import { ResourceType, TileType, legacyTileType, isBuildingFootprint, tileCapacityRemaining } from '../src/tiles.js';
-import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
+import { hexKey, getNeighbors, hexDistance, offsetToAxial, axialToOffset } from '../src/hex.js';
 import { ITEMS } from '../src/items.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 
@@ -284,18 +285,75 @@ describe('MARCH (executeMarch)', () => {
     assert.deepEqual(r.marchLeftBehind, []);
   });
 
-  test('soldiers on other hexes are not picked up', () => {
-    const { state, cap, s1 } = marchFixture();
+  // A passable, entity-free tile normalized to full capacity (no footprint /
+  // trees / hidden survivor). Returns the tile, or null if the hex is a river
+  // or off-map.
+  function normalizeHex(state, col, row) {
+    const t = state.tiles.get(hexKey(col, row));
+    if (!t || legacyTileType(t) === TileType.RIVER || isBuildingFootprint(t)) return null;
+    clearFootprint(t);
+    t.blockedSlots = [];
+    t.hiddenSurvivor = false;
+    return t;
+  }
+
+  test('soldiers ADJACENT to the captain march too (within 1 hex), keeping formation', () => {
+    const { state, cap, s1, s2 } = marchFixture(); // s1, s2 co-located on the captain
     const dest = clearNeighbor(state, cap);
     assert.ok(dest);
-    // Move s1 off the captain's hex before the march.
-    const elsewhere = getNeighbors(cap.col, cap.row).find(n => n.col !== dest.col || n.row !== dest.row);
-    s1.col = elsewhere.col; s1.row = elsewhere.row;
+    // Pick an adjacent hex (not the captain's, not dest) whose formation-shift
+    // target is also a real, passable tile; normalize both so the shift lands
+    // deterministically (map geometry is random, so search every neighbour).
+    const V = {
+      q: offsetToAxial(dest.col, dest.row).q - offsetToAxial(cap.col, cap.row).q,
+      r: offsetToAxial(dest.col, dest.row).r - offsetToAxial(cap.col, cap.row).r,
+    };
+    let adj = null, shiftHex = null;
+    for (const n of getNeighbors(cap.col, cap.row)) {
+      if (n.col === dest.col && n.row === dest.row) continue;
+      if (state.entities.some(e => e.alive && e.col === n.col && e.row === n.row)) continue;
+      const a = offsetToAxial(n.col, n.row);
+      const sh = axialToOffset(a.q + V.q, a.r + V.r);
+      if (!normalizeHex(state, n.col, n.row) || !normalizeHex(state, sh.col, sh.row)) continue;
+      adj = n; shiftHex = sh; break;
+    }
+    assert.ok(adj, 'fixture needs an adjacent hex with a passable shift target');
+    s1.col = adj.col; s1.row = adj.row;
 
     const r = executeMarch(state, cap, dest.col, dest.row);
     assert.equal(r.success, true);
-    assert.equal(r.marchPassengers.length, 1, 'only the co-located soldier marches');
-    assert.equal(s1.col, elsewhere.col, 'distant soldier holds position');
+    const p1 = r.marchPassengers.find(p => p.id === s1.id);
+    assert.ok(p1, 'the adjacent soldier marches');
+    assert.deepEqual({ col: p1.col, row: p1.row }, { col: shiftHex.col, row: shiftHex.row },
+      'the adjacent soldier keeps formation (shifts by the captain vector)');
+    assert.ok(r.marchPassengers.some(p => p.id === s2.id), 'the co-located soldier marches too');
+  });
+
+  test('soldiers 2+ hexes from the captain are NOT carried', () => {
+    const { state, cap, s1, s2 } = marchFixture();
+    const dest = clearNeighbor(state, cap);
+    assert.ok(dest);
+    // Park s1 two hexes away — scan the whole 2-ring for a real tile that isn't
+    // the destination (single-neighbour scans flake near the map edge).
+    let far = null;
+    for (const n1 of getNeighbors(cap.col, cap.row)) {
+      for (const n2 of getNeighbors(n1.col, n1.row)) {
+        if (hexDistance(n2.col, n2.row, cap.col, cap.row) === 2 &&
+            state.tiles.get(hexKey(n2.col, n2.row)) &&
+            !(n2.col === dest.col && n2.row === dest.row)) { far = n2; break; }
+      }
+      if (far) break;
+    }
+    assert.ok(far, 'fixture needs a hex two away');
+    s1.col = far.col; s1.row = far.row;
+
+    const r = executeMarch(state, cap, dest.col, dest.row);
+    assert.equal(r.success, true);
+    assert.ok(!r.marchPassengers.some(p => p.id === s1.id), 'the far soldier is not a passenger');
+    assert.equal(s1.col, far.col, 'the far soldier holds position');
+    assert.equal(s1.row, far.row);
+    // s2 (still co-located) does march.
+    assert.ok(r.marchPassengers.some(p => p.id === s2.id));
   });
 
   test('overflow passengers stay behind when the destination hex fills up', () => {
@@ -407,6 +465,86 @@ describe('MARCH (executeMarch)', () => {
     assert.equal(ok.valid, true);
     const far = validatePlanAction(state, { type: PlanActionType.MARCH, entityId: cap.id, toCol: cap.col + 9, toRow: cap.row + 9 });
     assert.equal(far.valid, false);
+  });
+});
+
+// ── MARCH placement rule (computeMarchPlacements) ────────────────────────────
+// The shared, deterministic rule the resolver, plan ghost, and AI all run:
+// formation shift → converge → hold. Tested on a synthetic all-grass board (a
+// plain {col,row} object is a full-capacity grass tile).
+
+describe('computeMarchPlacements — formation, convergence, hold', () => {
+  function grid(cols = 9, rows = 9) {
+    const tiles = new Map();
+    for (let r = 0; r < rows; r++)
+      for (let c = 0; c < cols; c++) tiles.set(hexKey(c, r), { col: c, row: r });
+    return { tiles, entities: [] };
+  }
+  let _n = 0;
+  function put(state, over) {
+    const e = { id: `e${_n++}`, alive: true, owner: 'captain', type: EntityType.SOLDIER, col: 0, row: 0, ...over };
+    state.entities.push(e);
+    return e;
+  }
+  const shiftOf = (col, row, C, D) => {
+    const a = offsetToAxial(col, row);
+    const c = offsetToAxial(C.col, C.row), d = offsetToAxial(D.col, D.row);
+    return axialToOffset(a.q + (d.q - c.q), a.r + (d.r - c.r));
+  };
+
+  test('every nearby soldier shifts by the captain move vector (formation preserved)', () => {
+    const state = grid();
+    const C = { col: 4, row: 4 }, D = { col: 5, row: 4 };
+    const cap = put(state, { id: 'cap', type: EntityType.CAPTAIN, col: C.col, row: C.row });
+    const soldiers = [put(state, { col: C.col, row: C.row })]; // co-located
+    for (const n of getNeighbors(C.col, C.row)) {
+      if (n.col === D.col && n.row === D.row) continue;         // dest stays the captain's
+      soldiers.push(put(state, { col: n.col, row: n.row }));    // adjacent on every side
+    }
+    const farSoldier = put(state, { col: C.col + 3, row: C.row }); // 3 hexes away — excluded
+    const placements = computeMarchPlacements(state, cap, C.col, C.row, D.col, D.row);
+    for (const s of soldiers) {
+      const pl = placements.find(p => p.id === s.id);
+      const want = shiftOf(s.col, s.row, C, D);
+      assert.deepEqual({ col: pl.toCol, row: pl.toRow }, { col: want.col, row: want.row },
+        `${s.id} keeps formation (translates by the captain's move vector)`);
+    }
+    assert.ok(!placements.some(p => p.id === farSoldier.id),
+      'a soldier more than 1 hex away is not a passenger');
+  });
+
+  test('a soldier whose shifted hex is blocked converges toward the destination', () => {
+    const state = grid();
+    const C = { col: 4, row: 4 }, D = { col: 5, row: 4 };
+    const cap = put(state, { id: 'cap', type: EntityType.CAPTAIN, col: C.col, row: C.row });
+    // A neighbour of C that is also adjacent to D (a shared neighbour).
+    const A = getNeighbors(C.col, C.row).find(n =>
+      !(n.col === D.col && n.row === D.row) && hexDistance(n.col, n.row, D.col, D.row) === 1);
+    assert.ok(A, 'grid geometry provides a shared neighbour');
+    put(state, { id: 'sA', col: A.col, row: A.row });
+    // Block the formation-shift target so the shift is illegal.
+    const want = shiftOf(A.col, A.row, C, D);
+    put(state, { id: 'enemy', owner: 'witch', type: EntityType.ZOMBIE, col: want.col, row: want.row });
+
+    const pl = computeMarchPlacements(state, cap, C.col, C.row, D.col, D.row).find(p => p.id === 'sA');
+    assert.ok(!(pl.toCol === want.col && pl.toRow === want.row), 'the blocked shift is not taken');
+    assert.ok(pl.toCol !== A.col || pl.toRow !== A.row, 'the soldier converges rather than holding');
+    assert.ok(hexDistance(pl.toCol, pl.toRow, D.col, D.row) < hexDistance(A.col, A.row, D.col, D.row),
+      'the converge step gets strictly closer to the destination');
+  });
+
+  test('a soldier that can neither shift nor converge holds position', () => {
+    const state = grid();
+    const C = { col: 4, row: 4 }, D = { col: 5, row: 4 };
+    const cap = put(state, { id: 'cap', type: EntityType.CAPTAIN, col: C.col, row: C.row });
+    const s = put(state, { id: 'sC', col: C.col, row: C.row }); // co-located
+    // Fill D: TILE_CAPACITY (7) − captain (1) = 6 non-soldier fillers → no room.
+    // A co-located soldier's only closer hex is D itself, so it can't converge.
+    for (let i = 0; i < 6; i++) put(state, { id: `f${i}`, type: EntityType.SURVIVOR, col: D.col, row: D.row });
+
+    const pl = computeMarchPlacements(state, cap, C.col, C.row, D.col, D.row).find(p => p.id === s.id);
+    assert.deepEqual({ col: pl.toCol, row: pl.toRow }, { col: C.col, row: C.row },
+      'the soldier holds on its start hex');
   });
 });
 
