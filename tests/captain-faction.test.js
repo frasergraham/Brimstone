@@ -400,6 +400,47 @@ describe('MARCH (executeMarch)', () => {
     assert.equal(alone.find(a => a.type === ActionType.MARCH), undefined);
   });
 
+  test('MARCH stays offered after the captain has marched AWAY from his soldiers (projected posMap)', () => {
+    // Regression: chaining a second march (or marching away from adjacent
+    // soldiers) must keep MARCH available. getValidActions measures passenger
+    // distance from the captain's PROJECTED hex; the soldiers marched with him,
+    // so their projected hexes are beside him even though their LIVE hexes are
+    // where the round started. Without the projection map the bug hid MARCH.
+    const { state, cap, s1, s2 } = marchFixture();
+    // Two neighbours of the captain that are 2 hexes apart (opposite sides):
+    // soldiers live on one (adj), the captain's projection sits on the other.
+    const opens = getNeighbors(cap.col, cap.row).filter(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && legacyTileType(t) !== TileType.RIVER && !isBuildingFootprint(t);
+    });
+    let adj = null, opp = null;
+    outer: for (const a of opens) for (const b of opens) {
+      if (hexDistance(a.col, a.row, b.col, b.row) === 2) { adj = a; opp = b; break outer; }
+    }
+    assert.ok(adj && opp, 'fixture needs two opposite open neighbours');
+    s1.col = adj.col; s1.row = adj.row;   // soldiers live adjacent to the captain
+    s2.col = adj.col; s2.row = adj.row;
+
+    // Projection after a queued march: captain and both soldiers moved to `opp`.
+    const posMap = new Map([
+      [cap.id, { col: opp.col, row: opp.row }],
+      [s1.id,  { col: opp.col, row: opp.row }],
+      [s2.id,  { col: opp.col, row: opp.row }],
+    ]);
+    const capProj = Object.setPrototypeOf(
+      { ...cap, col: opp.col, row: opp.row }, Object.getPrototypeOf(cap));
+
+    // WITH the projection map → soldiers are beside the projected captain → MARCH.
+    const withMap = getValidActions(state, capProj, posMap);
+    assert.ok(withMap.some(a => a.type === ActionType.MARCH),
+      'MARCH offered from the projected hex — the soldiers marched along');
+
+    // WITHOUT it (the old behaviour) → live soldiers are 2 hexes away → no MARCH.
+    const withoutMap = getValidActions(state, capProj, null);
+    assert.ok(!withoutMap.some(a => a.type === ActionType.MARCH),
+      'live positions alone hide MARCH — this was the bug');
+  });
+
   test('computeGhostState advances the passengers with the captain (multi-step planning)', () => {
     const { state, cap, s1, s2 } = marchFixture();
     const dest = clearNeighbor(state, cap);

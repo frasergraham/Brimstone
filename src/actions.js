@@ -442,7 +442,13 @@ export function getVisiblePositions(state, viewerFactionId) {
 
 // ── Validation ─────────────────────────────────────────────────────────────
 
-export function getValidActions(state, actor) {
+// `posMap` (optional Map<id,{col,row}>) overrides entity positions — the UI
+// passes its projected-positions map during planning so a captain who has
+// already queued moves/marches sees MARCH offered from where the plan LEAVES
+// him and his soldiers (they march with him), not their live hexes. Only the
+// MARCH passenger check reads it; the actor's own projected position is already
+// baked into `actor` by the caller.
+export function getValidActions(state, actor, posMap = null) {
   const actions = [];
   const t = tile(state, actor.col, actor.row);
   const faction = getFaction(actor.owner);
@@ -461,11 +467,17 @@ export function getValidActions(state, actor) {
   // WITHIN 1 hex of the captain along, keeping formation. Same destinations as
   // MOVE; surfaced only when at least one soldier is near enough to march.
   if (moveTargets.length && concreteFactionOf(actor).canMarch()) {
-    const passengers = state.entities.filter(e =>
-      e.alive && e.id !== actor.id && e.owner === actor.owner &&
-      e.type === EntityType.SOLDIER && !isImmobileType(e.type) &&
-      hexDistance(e.col, e.row, actor.col, actor.row) <= 1
-    ).length;
+    // Passenger distance is measured from PROJECTED positions when a posMap is
+    // supplied, so a captain with queued marches still sees the soldiers that
+    // marched with him as within-1-hex (they're clustered at his projected
+    // hex). Falls back to live positions with no posMap (resolution / AI).
+    const ap = posMap?.get(actor.id) ?? actor;
+    const passengers = state.entities.filter(e => {
+      if (!e.alive || e.id === actor.id || e.owner !== actor.owner) return false;
+      if (e.type !== EntityType.SOLDIER || isImmobileType(e.type)) return false;
+      const p = posMap?.get(e.id) ?? e;
+      return hexDistance(p.col, p.row, ap.col, ap.row) <= 1;
+    }).length;
     if (passengers > 0) {
       actions.push({ type: ActionType.MARCH, targets: moveTargets, passengers });
     }

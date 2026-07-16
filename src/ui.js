@@ -1950,7 +1950,8 @@ export class UIController {
       entityId: entity.id,
       hex: { col: effectiveEntity.col, row: effectiveEntity.row },
     });
-    this._validActions = getValidActions(this.state, effectiveEntity);
+    this._validActions = getValidActions(this.state, effectiveEntity,
+      this._planMode ? this._projectedPosMap() : null);
     // Move is always the default awaiting action — clicking a green hex moves.
     const hasMoveAction = this._validActions.some(a => a.type === ActionType.MOVE);
     const actionsOk = this._planMode || this.state.actionsAvailable > 0;
@@ -1996,6 +1997,30 @@ export class UIController {
     const steps = this.renderer?.planGhostSteps;
     if (!steps || steps.length === 0) return null;
     return steps[steps.length - 1].positions.get(entityId) ?? null;
+  }
+
+  /** The full projected-positions map after the current plan runs (entityId →
+   *  {col,row}), or null if no ghost steps exist. Passed to getValidActions so
+   *  the captain's MARCH passenger check reads where his soldiers will BE after
+   *  earlier queued marches (they move with him), not their live hexes. */
+  _projectedPosMap() {
+    const steps = this.renderer?.planGhostSteps;
+    if (!steps || steps.length === 0) return null;
+    return steps[steps.length - 1].positions ?? null;
+  }
+
+  /** Hexes of the soldiers a MARCH by `actor` would carry — every friendly
+   *  soldier within 1 hex of the captain's PROJECTED position, at their own
+   *  projected positions (so a chained march highlights where they'll be, matching
+   *  the arrows). Used for the march mover-highlight overlay. */
+  _marchMoverHexes(actor) {
+    const posMap = this._planMode ? this._projectedPosMap() : null;
+    const ap = posMap?.get(actor.id) ?? { col: actor.col, row: actor.row };
+    return this.state.entities
+      .filter(e => e.alive && e.id !== actor.id && e.owner === actor.owner &&
+        e.type === EntityType.SOLDIER)
+      .map(e => posMap?.get(e.id) ?? { col: e.col, row: e.row })
+      .filter(p => hexDistance(p.col, p.row, ap.col, ap.row) <= 1);
   }
 
   /** Return the equipped weapon id projected for an entity after its plan runs
@@ -2247,15 +2272,11 @@ export class UIController {
         this._awaitingTarget.hexTargets ?? []);
     } else if (actionType === ActionType.MARCH) {
       // Re-establish the march overlays on every redraw: the soldiers that will
-      // march (within 1 hex of the captain) plus the reachable destinations.
+      // march (within 1 hex of the captain's projected hex) plus the reachable
+      // destinations.
       const actor = this._awaitingTarget.actor ?? this._selectedEntity;
       if (actor) {
-        const unitHexes = this.state.entities.filter(e =>
-          e.alive && e.id !== actor.id && e.owner === actor.owner &&
-          e.type === EntityType.SOLDIER &&
-          hexDistance(e.col, e.row, actor.col, actor.row) <= 1
-        ).map(e => ({ col: e.col, row: e.row }));
-        this._setTargetOverlay('march-units', 'rgba(126,204,214,0.24)', unitHexes);
+        this._setTargetOverlay('march-units', 'rgba(126,204,214,0.24)', this._marchMoverHexes(actor));
       }
       const a = this._validActions.find(a => a.type === ActionType.MARCH);
       if (a) this._setTargetOverlay('march-targets', 'rgba(126,204,214,0.50)', a.targets);
@@ -2470,7 +2491,8 @@ export class UIController {
         Object.getPrototypeOf(entity)
       );
     }
-    const actions = getValidActions(state, effectiveEntity);
+    const actions = getValidActions(state, effectiveEntity,
+      this._planMode ? this._projectedPosMap() : null);
 
     // In planning mode, compute projected inventory after all queued steps so we can
     // disable resource-dependent actions the player can no longer afford.
@@ -3703,11 +3725,7 @@ export class UIController {
         delayedHide();
         const marchAction = this._validActions.find(a => a.type === ActionType.MARCH);
         const marchTargets = marchAction?.targets ?? [];
-        const marchUnitHexes = state.entities.filter(e =>
-          e.alive && e.id !== entity.id && e.owner === entity.owner &&
-          e.type === EntityType.SOLDIER &&
-          hexDistance(e.col, e.row, entity.col, entity.row) <= 1
-        ).map(e => ({ col: e.col, row: e.row }));
+        const marchUnitHexes = this._marchMoverHexes(entity);
         this._awaitingTarget = { actionType: ActionType.MARCH, actor: entity };
         this._clearTargetOverlays();
         this._setTargetOverlay('march-units', 'rgba(126,204,214,0.24)', marchUnitHexes);
